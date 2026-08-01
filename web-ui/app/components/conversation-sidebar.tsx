@@ -28,7 +28,6 @@ import {
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 
-import Logo from "~/components/logo";
 import { InfiniteScrollArea } from "~/components/extended/infinite-scroll-area";
 import { AvatarCropper } from "~/components/avatar-cropper";
 import { RenameConversationDialog } from "~/components/rename-conversation-dialog";
@@ -851,13 +850,78 @@ export const ConversationSidebar = React.memo(
     return (
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
-          {/* NewMax 品牌行(R6):Logo+应用名居左,折叠钮居右;用户资料移至底部 */}
-          <div className="flex h-10 items-center justify-between pl-1.5 pr-0.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <Logo className="size-6 shrink-0 text-primary" />
-              <span className="truncate text-sm font-semibold text-[var(--ds-text-primary)]">RikkaHub</span>
-            </div>
-            <SidebarTrigger className="shrink-0 text-muted-foreground hover:text-foreground" />
+          {/* 用户资料行 + 折叠钮(F1:按用户要求回归顶部,不学 NewMax 的用户归底) */}
+          <div className="flex items-start gap-1">
+          <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+            <DialogTrigger asChild>
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-sidebar-accent"
+              >
+                <UIAvatar
+                  size="default"
+                  name={localProfile.name}
+                  avatar={localProfile.avatar}
+                  className="ring-1 ring-sidebar-border/70"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium leading-none">
+                    {localProfile.name}
+                  </div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {t("conversation_sidebar.welcome_back")}
+                  </div>
+                </div>
+              </button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{t("conversation_sidebar.edit_profile", "Edit profile")}</DialogTitle>
+                <DialogDescription>
+                  {t(
+                    "conversation_sidebar.edit_profile_description",
+                    "This is saved by the local PC backend and used in every chat.",
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <AvatarCropper
+                    size="default"
+                    fallbackName={profileName || userName}
+                    value={profileAvatar}
+                    onChange={async (avatar) => {
+                      setProfileAvatar(avatar);
+                      await saveProfile(profileName, avatar);
+                    }}
+                  />
+                  <div className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    {profileName || userName}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="profile-name">
+                    {t("conversation_sidebar.profile_name", "Name")}
+                  </label>
+                  <Input
+                    id="profile-name"
+                    value={profileName}
+                    onChange={(event) => setProfileName(event.target.value)}
+                    placeholder={t("conversation_sidebar.profile_name_placeholder", "Your name")}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setProfileOpen(false)}>
+                  {t("common:cancel", "Cancel")}
+                </Button>
+                <Button onClick={() => void handleProfileSave()} disabled={profileSaving}>
+                  {profileSaving ? t("common:saving", "Saving") : t("common:save", "Save")}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <SidebarTrigger className="mt-2 shrink-0 text-muted-foreground hover:text-foreground" />
           </div>
         </SidebarHeader>
         <SidebarContent className="min-h-0">
@@ -1254,79 +1318,17 @@ export const ConversationSidebar = React.memo(
 
             <ThemeModeToggle />
 
+            <a
+              href="https://rikkahub-desktop.pages.dev/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto truncate whitespace-nowrap text-xs font-normal text-foreground/80 hover:text-foreground transition-colors"
+              title="RikkaHub"
+            >
+              RikkaHub
+            </a>
           </div>
 
-          {/* 用户资料行(R6:NewMax 用户归底部)——点击打开资料编辑 */}
-          <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
-            <DialogTrigger asChild>
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-sidebar-accent"
-              >
-                <UIAvatar
-                  size="default"
-                  name={localProfile.name}
-                  avatar={localProfile.avatar}
-                  className="ring-1 ring-sidebar-border/70"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium leading-none">
-                    {localProfile.name}
-                  </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {t("conversation_sidebar.welcome_back")}
-                  </div>
-                </div>
-              </button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>{t("conversation_sidebar.edit_profile", "Edit profile")}</DialogTitle>
-                <DialogDescription>
-                  {t(
-                    "conversation_sidebar.edit_profile_description",
-                    "This is saved by the local PC backend and used in every chat.",
-                  )}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <AvatarCropper
-                    size="default"
-                    fallbackName={profileName || userName}
-                    value={profileAvatar}
-                    onChange={async (avatar) => {
-                      setProfileAvatar(avatar);
-                      await saveProfile(profileName, avatar);
-                    }}
-                  />
-                  <div className="min-w-0 flex-1 text-sm text-muted-foreground">
-                    {profileName || userName}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium" htmlFor="profile-name">
-                    {t("conversation_sidebar.profile_name", "Name")}
-                  </label>
-                  <Input
-                    id="profile-name"
-                    value={profileName}
-                    onChange={(event) => setProfileName(event.target.value)}
-                    placeholder={t("conversation_sidebar.profile_name_placeholder", "Your name")}
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setProfileOpen(false)}>
-                  {t("common:cancel", "Cancel")}
-                </Button>
-                <Button onClick={() => void handleProfileSave()} disabled={profileSaving}>
-                  {profileSaving ? t("common:saving", "Saving") : t("common:save", "Save")}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        
         </SidebarFooter>
       </Sidebar>
     );
