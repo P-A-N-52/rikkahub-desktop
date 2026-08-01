@@ -23,6 +23,7 @@ import { Input } from "~/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useContainerTabsStore } from "~/stores/container-tabs-store";
+import { useConversationStore } from "~/stores/conversation-store";
 import type { ConversationListDto } from "~/types";
 
 // 二层会话标签(工作区 M2-1;前端重构A1 复刻 NewMax):白色内容面板的顶缘胶囊行,
@@ -33,6 +34,39 @@ import type { ConversationListDto } from "~/types";
 // G5:悬停用自定义 Tooltip 展示完整标题(替代原生 title)。
 
 const EMPTY_TABS: string[] = [];
+
+/** 悬停卡内容(H4):标题 + 本会话累计缓存命中率(专题11-P1-3 的口径:已加载消息窗口内
+    选中分支的 cached/prompt 总和;本地估算 usage 无缓存信息,计入会稀释命中率,跳过;
+    厂商不回报命中数据时整行隐藏)。独立组件 = Tooltip 打开才挂载、才订阅 store。 */
+function TabTooltipBody({ conversationId, title }: { conversationId: string; title: string }) {
+  const { t } = useTranslation("page");
+  const hitRate = useConversationStore((state) => {
+    const nodes = state.entries[conversationId]?.detail?.messages;
+    if (!nodes) return null;
+    let promptTotal = 0;
+    let cachedTotal = 0;
+    for (const node of nodes) {
+      const msg = node.messages[node.selectIndex] ?? node.messages[0];
+      const usage = msg?.usage as Record<string, unknown> | null | undefined;
+      if (!usage || typeof usage !== "object") continue;
+      if (usage.estimated === true) continue;
+      promptTotal += Number(usage.promptTokens ?? 0) || 0;
+      cachedTotal += Number(usage.cachedTokens ?? 0) || 0;
+    }
+    if (promptTotal <= 0 || cachedTotal <= 0) return null;
+    return Math.min(100, (cachedTotal / promptTotal) * 100).toFixed(2);
+  });
+  return (
+    <>
+      <div className="font-medium">{title}</div>
+      {hitRate !== null ? (
+        <div className="mt-0.5 font-normal text-[var(--ds-text-secondary)]">
+          {t("workspace.tabs.cache_hit_rate", { rate: hitRate })}
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 export function ConversationTabStrip({
   conversations,
@@ -140,7 +174,7 @@ export function ConversationTabStrip({
                 </ContextMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom" align="start" className="max-w-[380px]">
-                {title}
+                <TabTooltipBody conversationId={conversationId} title={title} />
               </TooltipContent>
             </Tooltip>
             <ContextMenuContent className="min-w-44">

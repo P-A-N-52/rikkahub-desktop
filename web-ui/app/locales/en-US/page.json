@@ -115,7 +115,8 @@
       "ctx_close_all": "Close All",
       "rename_title": "Rename Conversation",
       "rename_placeholder": "Enter a new title…",
-      "rename_failed": "Rename failed"
+      "rename_failed": "Rename failed",
+      "cache_hit_rate": "Session cache hit rate: {{rate}}%"
     },
     "create": {
       "managed": "Default workspace",

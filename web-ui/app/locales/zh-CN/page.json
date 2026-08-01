@@ -115,7 +115,8 @@
       "ctx_close_all": "关闭全部",
       "rename_title": "重命名会话",
       "rename_placeholder": "输入新标题…",
-      "rename_failed": "重命名失败"
+      "rename_failed": "重命名失败",
+      "cache_hit_rate": "会话缓存命中率：{{rate}}%"
     },
     "create": {
       "managed": "默认工作区",

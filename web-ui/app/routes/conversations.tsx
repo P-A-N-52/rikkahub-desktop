@@ -1339,29 +1339,8 @@ function ConversationsPageInner() {
   const hasDetail = useConversationStore((state) =>
     activeId ? state.entries[activeId]?.detail != null : false,
   );
-  // 专题11-P1-3:本会话累计缓存命中率(已加载消息窗口内 cached/prompt 总和,取选中分支)。
-  // selector 直接归约成整数百分比:流式 chunk 不改 usage 时结果不变,顶层零重渲染;
-  // 无任何命中数据(厂商不回报)时返回 null,副标题该段隐藏。
-  const conversationCacheHitRate = useConversationStore((state) => {
-    const nodes = activeId ? state.entries[activeId]?.detail?.messages : undefined;
-    if (!nodes) return null;
-    let promptTotal = 0;
-    let cachedTotal = 0;
-    for (const node of nodes) {
-      const msg = node.messages[node.selectIndex] ?? node.messages[0];
-      const usage = msg?.usage as Record<string, unknown> | null | undefined;
-      if (!usage || typeof usage !== "object") continue;
-      // 本地估算的 usage 无缓存信息(cached 恒 0),计入会稀释命中率
-      if (usage.estimated === true) continue;
-      promptTotal += Number(usage.promptTokens ?? 0) || 0;
-      cachedTotal += Number(usage.cachedTokens ?? 0) || 0;
-    }
-    if (promptTotal <= 0 || cachedTotal <= 0) return null;
-    return Math.min(100, Math.round((cachedTotal / promptTotal) * 100));
-  });
-  // 停显留码(前端重构A1,用户指示):主副标题卡已删,命中率的新展示位待定,
-  // 上方选择器保留待复用;void 引用避免未使用告警。
-  void conversationCacheHitRate;
+  // 会话缓存命中率的展示位已定(H4):二级标签悬停卡,见 conversation-tab-strip.tsx
+  // 的 TabTooltipBody。此处 A1 时代的停显留码选择器使命完成,已删。
   // 节点增删才变(流式 chunk 只改节点内部),导出/压缩入口的可用性开关
   const hasMessages = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.detail?.messages.length ?? 0) > 0 : false,
