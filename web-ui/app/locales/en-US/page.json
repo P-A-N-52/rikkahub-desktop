@@ -125,6 +125,13 @@
       "decline": "Not now",
       "confirm": "Trust and continue",
       "failed": "Operation failed"
+    },
+    "empty": {
+      "managed_intro": "Files here are maintained by you and the AI together — let it read, write and run commands to turn ideas into results",
+      "folder_intro": "The AI can read, write and run commands in this directory. Start with a single sentence",
+      "example_1": "Look around this directory and give me a structural overview",
+      "example_2": "Create a TODO.md and break my upcoming tasks into a checklist",
+      "example_3": "Organize what I paste next into a note and save it as a file"
     }
   }
 }

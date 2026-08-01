@@ -66,6 +66,8 @@ import {
 } from "~/stores/conversation-stream";
 import { WorkbenchHost } from "~/components/workbench/workbench-host";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
+import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
+import { useWorkspaceStore } from "~/stores/workspace-store";
 import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-store";
 import {
   useWorkbench,
@@ -1425,6 +1427,10 @@ function ConversationsPageInner() {
     useContainerTabsStore.getState().openConversation(workspaceId ?? CHAT_CONTAINER, activeId);
   }, [activeId, activeConversation, detailWorkspaceId]);
   const activeContainer = useContainerTabsStore((state) => state.activeTab);
+  // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)
+  const activeWorkspace = useWorkspaceStore((state) =>
+    activeContainer === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeContainer),
+  );
   const hasConversationTabs = useContainerTabsStore(
     (state) => (state.conversationTabs[state.activeTab]?.length ?? 0) > 0,
   );
@@ -1953,7 +1959,9 @@ function ConversationsPageInner() {
       )}
 
       <div>
-        {isNewChat && (
+        {isNewChat && (activeWorkspace ? (
+          <WorkspaceEmptyState workspace={activeWorkspace} onPrompt={handleClickSuggestion} />
+        ) : (
           <div className="mb-4 text-center">
             <div className="mb-4 flex justify-center">
               <div className="[animation:rikkahub-breathe_4s_ease-in-out_infinite] [&>svg]:size-16">
@@ -1964,7 +1972,7 @@ function ConversationsPageInner() {
               {t("conversations.welcome_prompt")}
             </p>
           </div>
-        )}
+        ))}
         {/* Floating chunked-TTS play bar — pops in only while a message is being read out
             via the per-chunk pipeline (TtsController), shows the dual ring + transport. */}
         <TtsPlayBar />
