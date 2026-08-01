@@ -34,6 +34,7 @@ import {
 } from "../app-config/prompts";
 import { getConversation, persistConversation, selectedConversationMessages } from "./index";
 import { findAssistant, summaryAsText } from "./helpers";
+import { agentSummaryAsText, buildAgentCompactionContext, extractAgentActivity } from "../workspace/compaction";
 
 export function cleanAuxiliaryText(text: string, fallback = "") {
   const cleaned = text.replace(/^["“”'‘’]+|["“”'‘’]+$/g, "").trim();
@@ -399,6 +400,11 @@ export async function compressConversation(conversation: Conversation, additiona
     return [...splitMessages(messages.slice(0, mid)), ...splitMessages(messages.slice(mid))];
   };
 
+  // Agent 分化(§9.8):入口/管线/提示词同一套,仅输入构建按会话类型变——工具 part 折为
+  // 摘要行进压缩输入,工作区活动清单经 {additional_context} 结构化注入(pi CompactionDetails
+  // 思想)。chat 会话(workspaceId 空)走原路径,逐字节不变。
+  const isAgent = Boolean(conversation.workspaceId);
+  const summarize = isAgent ? (msg: Message) => agentSummaryAsText(msg, summaryAsText(msg)) : summaryAsText;
   const chunks = splitMessages(messagesToCompress);
   const summaries: string[] = [];
   try {
@@ -411,10 +417,14 @@ export async function compressConversation(conversation: Conversation, additiona
       conversation.chatSuggestions = [`正在压缩对话历史... ${summaries.length + 1}/${chunks.length}`];
       conversation.updateAt = Date.now();
       broadcastConversation(conversation);
+      const contextSections = [
+        additionalPrompt.trim() ? `Additional instructions from user: ${additionalPrompt.trim()}` : "",
+        isAgent ? buildAgentCompactionContext(extractAgentActivity(chunk)) : "",
+      ].filter(Boolean);
       const prompt = applyPlaceholders(state.settings.compressPrompt || DEFAULT_COMPRESS_PROMPT, {
-        content: chunk.map(summaryAsText).join("\n\n"),
+        content: chunk.map(summarize).join("\n\n"),
         target_tokens: String(targetTokens),
-        additional_context: additionalPrompt.trim() ? `Additional instructions from user: ${additionalPrompt.trim()}` : "",
+        additional_context: contextSections.join("\n\n"),
         locale: localeDisplayName(),
       });
       summaries.push(cleanAuxiliaryText(await fetchAuxiliaryText(state.settings.compressModelId || state.settings.chatModelId, prompt, "compression", {

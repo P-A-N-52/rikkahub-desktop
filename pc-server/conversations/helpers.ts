@@ -133,10 +133,30 @@ export function appendTextPart(msg: Message, text: string) {
 export function summaryAsText(msg: Message) {
   return `[${msg.role}]: ${textFromParts(msg.parts)}`;
 }
+/** 工具 part 的文本量(入参 JSON + 输出 text/error 条目)——工具往返在后续轮次全量进
+ *  提示词,不计=agent/MCP 重度会话严重低估(影响压缩触发与用量显示,§9.8)。 */
+function toolPartsTextVolume(parts: MessagePart[]) {
+  let volume = "";
+  for (const part of parts) {
+    if (!isRecord(part) || part.type !== "tool") continue;
+    volume += String(part.input ?? "");
+    if (!Array.isArray(part.output)) continue;
+    for (const entry of part.output) {
+      if (!isRecord(entry)) continue;
+      const errorText = (entry as { error?: unknown }).error;
+      if (entry.type === "text") volume += String(entry.text ?? "");
+      else if (typeof errorText === "string") volume += errorText;
+    }
+  }
+  return volume;
+}
+
 export function estimatePromptTokensForConversation(conversation: Conversation) {
-  return selectedConversationMessages(conversation)
-    .filter((msg) => msg.role !== "ASSISTANT")
-    .reduce((sum, msg) => sum + estimateTokens(textFromParts(msg.parts)), 0);
+  return selectedConversationMessages(conversation).reduce((sum, msg) => {
+    // 原口径保留:助手回答文本不计(历史近似),但挂在助手消息里的工具往返必须计。
+    const textTokens = msg.role !== "ASSISTANT" ? estimateTokens(textFromParts(msg.parts)) : 0;
+    return sum + textTokens + estimateTokens(toolPartsTextVolume(msg.parts));
+  }, 0);
 }
 
 export function ensureUsage(msg: Message, conversation?: Conversation) {
