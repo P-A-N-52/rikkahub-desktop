@@ -66,11 +66,15 @@ export function WorkspacePermissionPicker({ className }: { className?: string })
           type="button"
           variant="ghost"
           size="sm"
-          className={cn("h-8 gap-1 rounded-full px-2.5 text-muted-foreground hover:text-foreground", className)}
+          // NewMax 权限模式胶囊:pill-bg 底 + 品牌色文字(skill-pill 类提供 hover 加深)
+          className={cn(
+            "skill-pill h-8 gap-1.5 whitespace-nowrap rounded-full bg-[var(--ds-pill-bg)] px-2.5 !text-[var(--ds-brand-primary)]",
+            className,
+          )}
           title={t("workspace_permission.title")}
         >
           <CurrentIcon className="size-4" strokeWidth={1.75} />
-          <span className="max-w-24 truncate text-xs">{t(`workspace_permission.${current.value}`)}</span>
+          <span className="max-w-24 truncate text-xs font-medium">{t(`workspace_permission.${current.value}`)}</span>
           <ChevronDown className="size-3 opacity-60" />
         </Button>
       </DropdownMenuTrigger>

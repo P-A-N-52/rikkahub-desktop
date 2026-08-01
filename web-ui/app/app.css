@@ -1762,6 +1762,26 @@
   display: flex;
   animation: cpd-icon-in var(--ds-motion-soft) both;
 }
+/* 录音态跳动声纹条(NewMax .cpd-voice-bars 原样移植) */
+.cpd-voice-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+}
+.cpd-voice-bars > span {
+  width: 1.5px;
+  border-radius: 1px;
+  background-color: #fff;
+  animation: cpd-bar-bounce 0.8s ease-in-out infinite;
+}
+.cpd-voice-bars > span:nth-child(1) { height: 8px; animation-delay: 0s; }
+.cpd-voice-bars > span:nth-child(2) { height: 14px; animation-delay: 0.2s; }
+.cpd-voice-bars > span:nth-child(3) { height: 8px; animation-delay: 0.4s; }
+@keyframes cpd-bar-bounce {
+  0%, 100% { transform: scaleY(0.5); }
+  50% { transform: scaleY(1); }
+}
 
 /* 白内衬浮层:面板悬浮材质(NewMax .ds-inset-overlay) */
 .ds-inset-overlay {

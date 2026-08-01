@@ -706,7 +706,7 @@ function ChatInputInner({
         >
           <div className="h-1 w-10 rounded-full bg-border/70 transition-colors hover:bg-primary/50" />
         </div>
-        <div className="relative flex flex-col gap-2 rounded-[var(--ds-chat-composer-radius)] bg-card p-3 shadow-[var(--ds-chat-composer-shadow)] transition-shadow focus-within:shadow-[var(--ds-chat-composer-shadow-focus)]">
+        <div className="chat-input-box relative flex flex-col gap-2 rounded-[var(--ds-chat-composer-radius)] bg-[var(--ds-surface-input)] p-3">
           {/* 待确认记忆提醒角标:浮在输入框右上角外沿,像消息提醒。仅有待确认项时渲染。 */}
           <div className="absolute -top-4 right-2 z-10">
             <MemoryBadge />
@@ -724,26 +724,6 @@ function ChatInputInner({
               >
                 {t("chat.cancel_edit")}
               </Button>
-            </div>
-          ) : null}
-
-          {suggestions.length > 0 ? (
-            <div className="flex gap-2 overflow-x-auto rounded-lg px-1 py-1">
-              {suggestions.map((suggestion, index) => (
-                <button
-                  key={`${suggestion}-${index}`}
-                  type="button"
-                  disabled={!canUseQuickMessage}
-                  className={cn(
-                    "shrink-0 rounded-lg border bg-background px-3 py-1 text-xs text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
-                  )}
-                  onClick={() => {
-                    handleSuggestionSelect(suggestion);
-                  }}
-                >
-                  {suggestion}
-                </button>
-              ))}
             </div>
           ) : null}
 
@@ -845,7 +825,7 @@ function ChatInputInner({
                     variant="ghost"
                     size="icon"
                     disabled={!canUpload}
-                    className="size-8 rounded-full text-muted-foreground hover:text-foreground"
+                    className="toolbar-btn size-8 rounded-full text-[var(--ds-icon)] hover:text-foreground"
                   >
                     <Plus
                       className={cn("size-4 transition-transform", uploadMenuOpen && "rotate-45")}
@@ -901,16 +881,15 @@ function ChatInputInner({
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <ModelList disabled={!canSwitchModel} className="max-w-64" />
-              <SearchPickerButton disabled={!canSwitchModel} />
-              <ExtensionPickerButton disabled={!canSwitchModel} />
-              <WorkspacePermissionPicker />
-              <WorkspaceFilesButton />
               <QuickMessageButton
                 quickMessages={quickMessages}
                 disabled={!canUseQuickMessage}
                 onSelect={handleQuickMessageSelect}
               />
+              <SearchPickerButton disabled={!canSwitchModel} />
+              <ExtensionPickerButton disabled={!canSwitchModel} />
+              <WorkspaceFilesButton />
+              <WorkspacePermissionPicker />
             </div>
             <div className="relative flex items-center gap-1.5">
               {/* 优化较慢提示:浮在按钮组上方,绝对定位不挤占布局(原方案放底部会把整个输入区往下顶)。 */}
@@ -952,48 +931,83 @@ function ChatInputInner({
                   {t("optimize.undo")}
                 </Button>
               ) : null}
+              <ModelList disabled={!canSwitchModel} className="max-w-56" />
+              {/* NewMax cpd-action-btn:语音/发送合一——空文本=麦克风(常驻底色),有文本=
+                  品牌色上箭头,录音=红底声纹条,生成中=红底停止。状态切换带宽度/配色过渡。 */}
               <Button
                 type="button"
-                variant={asrListening ? "secondary" : "ghost"}
+                variant="ghost"
                 size="icon"
-                disabled={!canUseAsr && !asrListening}
-                className={cn(
-                  "size-8 rounded-full text-muted-foreground hover:text-foreground",
-                  asrListening && "text-primary shadow-sm",
-                )}
-                title={asrListening ? t("asr.stop") : t("asr.start")}
-                onClick={toggleAsr}
-              >
-                {asrListening ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Mic className="size-4" />
-                )}
-              </Button>
-              <Button
+                disabled={
+                  isGenerating || !isEmpty ? actionDisabled : !canUseAsr && !asrListening
+                }
+                title={
+                  isGenerating
+                    ? t("chat.stop_generating")
+                    : asrListening
+                      ? t("asr.stop")
+                      : isEmpty
+                        ? t("asr.start")
+                        : undefined
+                }
                 onClick={() => {
-                  void handlePrimaryAction();
+                  if (isGenerating || !isEmpty) void handlePrimaryAction();
+                  else toggleAsr();
                 }}
-                disabled={actionDisabled}
-                size="icon"
                 className={cn(
-                  "size-9 rounded-full shadow-sm",
-                  isGenerating && !submitting
-                    ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90",
+                  "cpd-action-btn size-8 rounded-full",
+                  isGenerating
+                    ? "cpd-action-btn--send !bg-destructive !text-white"
+                    : asrListening
+                      ? "cpd-action-btn--recording"
+                      : isEmpty
+                        ? "cpd-action-btn--idle toolbar-btn text-[var(--ds-icon)] hover:text-foreground"
+                        : "cpd-action-btn--send",
                 )}
               >
                 {submitting || uploading ? (
                   <LoaderCircle className="size-4 animate-spin" />
                 ) : isGenerating ? (
-                  <Square className="size-4" />
+                  <span className="cpd-icon-enter" key="stop">
+                    <Square className="size-4" />
+                  </span>
+                ) : asrListening ? (
+                  <span className="cpd-voice-bars" key="bars">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) : isEmpty ? (
+                  <span className="cpd-icon-enter" key="mic">
+                    <Mic className="size-4" />
+                  </span>
                 ) : (
-                  <ArrowUp className="size-4" />
+                  <span className="cpd-icon-enter" key="send">
+                    <ArrowUp className="size-4" />
+                  </span>
                 )}
               </Button>
             </div>
           </div>
         </div>
+        {/* 建议问题 chips:置于输入卡下方(NewMax 形态),pill-bg 胶囊 + 品牌色 */}
+        {suggestions.length > 0 ? (
+          <div className="flex gap-1.5 overflow-x-auto px-1 pt-2">
+            {suggestions.map((suggestion, index) => (
+              <button
+                key={`${suggestion}-${index}`}
+                type="button"
+                disabled={!canUseQuickMessage}
+                className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--ds-pill-bg)] px-2.5 text-[12px] font-medium text-[var(--ds-brand-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => {
+                  handleSuggestionSelect(suggestion);
+                }}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <p className="mt-2 text-center text-xs text-muted-foreground">{sendHint}</p>
         {error ? <p className="mt-1 text-center text-xs text-destructive">{error}</p> : null}
       </div>
@@ -1032,7 +1046,7 @@ function QuickMessageButton({
           variant="ghost"
           size="icon"
           disabled={disabled}
-          className="size-8 rounded-full text-muted-foreground hover:text-foreground"
+          className="toolbar-btn size-8 rounded-full text-[var(--ds-icon)] hover:text-foreground"
         >
           <Zap className="size-4" />
         </Button>

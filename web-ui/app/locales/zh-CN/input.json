@@ -113,7 +113,8 @@
     "parsing_progress": "解析中 {{done}}/{{total}} 页",
     "parsing": "解析中",
     "extraction_failed": "解析失败：发送时将无法附带此文件的正文",
-    "extraction_empty": "未能提取出文本（可能是扫描件或不支持的格式）"
+    "extraction_empty": "未能提取出文本（可能是扫描件或不支持的格式）",
+    "stop_generating": "停止生成"
   },
   "resize_handle": "拖动调整输入框大小",
   "compress_history": "压缩对话历史",

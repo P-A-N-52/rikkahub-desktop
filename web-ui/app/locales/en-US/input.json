@@ -113,7 +113,8 @@
     "parsing_progress": "Parsing page {{done}}/{{total}}",
     "parsing": "Parsing",
     "extraction_failed": "Parsing failed: this file's text can't be attached when sending",
-    "extraction_empty": "No text could be extracted (scanned or unsupported file)"
+    "extraction_empty": "No text could be extracted (scanned or unsupported file)",
+    "stop_generating": "Stop generating"
   },
   "resize_handle": "Drag to resize the input box",
   "compress_history": "Compress conversation history",
