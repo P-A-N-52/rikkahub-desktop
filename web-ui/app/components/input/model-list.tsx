@@ -1,29 +1,32 @@
 import * as React from "react";
 
-import type { TFunction } from "i18next";
-import { Check, ChevronDown, CircleDollarSign, Heart, LoaderCircle, Search } from "lucide-react";
+import { Check, ChevronDown, Heart, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
-import { ReasoningInlineSection, useCurrentReasoningLabel } from "~/components/input/reasoning-picker";
+import { ReasoningSubmenu, useCurrentReasoningLabel } from "~/components/input/reasoning-picker";
 import { getModelDisplayName } from "~/lib/display";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
-import type { ModelAbility, ProviderModel } from "~/types";
+import type { ProviderModel } from "~/types";
 import { AIIcon } from "~/components/ui/ai-icon";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "~/components/ui/popover";
-import { Input } from "~/components/ui/input";
-import { ScrollArea } from "~/components/ui/scroll-area";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
+
+// 模型选择(前端重构R2,复刻 NewMax ModelSelector):推翻 A2 的大弹层(供应商 chips+
+// 模型卡列表+滑杆,会被推理区撑出窗口),改为紧凑级联菜单——供应商为父项、模型列表
+// 是子菜单,末尾分割线+思考强度子菜单。Radix DropdownMenuSub 原生做碰撞翻转与
+// 高度收敛,弹层溢出 bug 就此消除。收藏组置顶(NewMax 无此功能,保留我们的)。
 
 export interface ModelListProps {
   disabled?: boolean;
@@ -35,63 +38,18 @@ interface ModelSection {
   providerId: string;
   providerName: string;
   models: ProviderModel[];
-  balanceEnabled: boolean;
 }
 
-const FAVORITE_SECTION_ID = "__favorites__";
-
-function normalizeKeyword(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function formatModality(model: ProviderModel): string {
-  const input = (model.inputModalities ?? []).join("+") || "TEXT";
-  const output = (model.outputModalities ?? []).join("+") || "TEXT";
-  return `${input} -> ${output}`;
-}
-
-function getAbilityLabel(ability: ModelAbility, t: TFunction): string {
-  if (ability === "TOOL") {
-    return t("model_list.ability_tool");
-  }
-
-  return t("model_list.ability_reasoning");
-}
-
-function isBalanceEnabled(provider: Record<string, unknown>): boolean {
-  const option = provider.balanceOption;
-  return Boolean(
-    option &&
-    typeof option === "object" &&
-    !Array.isArray(option) &&
-    (option as { enabled?: unknown }).enabled === true,
+/** ds-menu-item 的左侧勾选槽(NewMax DsMenuItem 的 active 形态,18px 定宽)。 */
+function CheckSlot({ active }: { active: boolean }) {
+  return (
+    <span className="flex w-[18px] shrink-0 items-center justify-center">
+      {active ? <Check className="size-4 !text-current" /> : null}
+    </span>
   );
 }
 
-function balanceText(value: BalanceState | undefined): string {
-  if (!value) return "-";
-  if (value.status === "loading") return "查询中";
-  if (value.status === "ok") return value.value;
-  return "-";
-}
-
-type BalanceState =
-  | { status: "loading" }
-  | { status: "ok"; value: string; endpoint?: string }
-  | { status: "error"; message: string };
-
-interface ModelOptionRowProps {
-  model: ProviderModel;
-  selected: boolean;
-  updating: boolean;
-  favorite: boolean;
-  disabled: boolean;
-  onSelect: (model: ProviderModel) => void | Promise<void>;
-  onToggleFavorite: (model: ProviderModel) => void | Promise<void>;
-  t: TFunction;
-}
-
-function ModelOptionRow({
+function ModelMenuItem({
   model,
   selected,
   updating,
@@ -99,101 +57,74 @@ function ModelOptionRow({
   disabled,
   onSelect,
   onToggleFavorite,
-  t,
-}: ModelOptionRowProps) {
-  const abilities = model.abilities ?? [];
-
+}: {
+  model: ProviderModel;
+  selected: boolean;
+  updating: boolean;
+  favorite: boolean;
+  disabled: boolean;
+  onSelect: (model: ProviderModel) => void | Promise<void>;
+  onToggleFavorite: (model: ProviderModel) => void | Promise<void>;
+}) {
   return (
-    <div
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-disabled={disabled}
-      className={cn(
-        "hover:bg-muted flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition",
-        disabled && "pointer-events-none opacity-60",
-        selected && "border-primary bg-primary/5",
-      )}
-      onClick={() => {
-        if (disabled) {
-          return;
-        }
-
-        void onSelect(model);
-      }}
-      onKeyDown={(event) => {
-        if (disabled) {
-          return;
-        }
-
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          void onSelect(model);
-        }
-      }}
+    <DropdownMenuItem
+      data-active={selected || undefined}
+      disabled={disabled}
+      className="group/model"
+      onSelect={() => void onSelect(model)}
     >
-      <AIIcon name={model.modelId} size={24} />
-
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-xs font-medium leading-tight">
-          {getModelDisplayName(model.displayName, model.modelId)}
-        </div>
-        <div className="text-muted-foreground truncate text-[0.6875rem] leading-tight">
-          {model.modelId}
-        </div>
-        <div className="mt-0.5 flex flex-wrap gap-1">
-          <Badge variant="outline" className="px-1 py-0 text-[0.5625rem]">
-            {formatModality(model)}
-          </Badge>
-          {abilities.map((ability) => (
-            <Badge key={ability} variant="secondary" className="px-1 py-0 text-[0.5625rem]">
-              {getAbilityLabel(ability, t)}
-            </Badge>
-          ))}
-        </div>
-      </div>
-
+      <CheckSlot active={selected} />
+      <AIIcon name={model.modelId} size={16} className="bg-transparent" imageClassName="h-full w-full" />
+      <span className="min-w-0 flex-1 truncate">
+        {getModelDisplayName(model.displayName, model.modelId)}
+      </span>
       {updating ? (
-        <LoaderCircle className="text-muted-foreground size-3.5 animate-spin" />
-      ) : selected ? (
-        <Check className="text-primary size-3.5" />
+        <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
       ) : (
-        <button
-          type="button"
-          className={favorite ? "text-primary" : "text-muted-foreground hover:text-primary"}
+        <span
+          role="button"
+          aria-pressed={favorite}
+          className={cn(
+            "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full transition-opacity",
+            favorite
+              ? "!text-[var(--ds-brand-primary)]"
+              : "opacity-0 group-hover/model:opacity-60 hover:!opacity-100",
+          )}
+          onPointerDown={(event) => {
+            // 阻断 Radix 的 item 选中,收藏切换不关闭菜单、不切模型。
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           onClick={(event) => {
+            event.preventDefault();
             event.stopPropagation();
             void onToggleFavorite(model);
           }}
         >
           <Heart className={cn("size-3.5", favorite && "fill-current")} />
-        </button>
+        </span>
       )}
-    </div>
+    </DropdownMenuItem>
   );
 }
 
 export function ModelListImpl({ disabled = false, className, onChanged }: ModelListProps) {
   const { t } = useTranslation("input");
   const { settings, currentAssistant } = useCurrentAssistant();
-  // 模型与思考强度合一(前端重构A2):胶囊尾缀展示当前强度,弹层底部内联调节。
+  // 模型胶囊尾缀展示当前思考强度(NewMax 形态);菜单末尾是思考强度子菜单。
   const reasoningLabel = useCurrentReasoningLabel();
 
-  const [open, setOpen] = React.useState(false);
-  const [searchKeywords, setSearchKeywords] = React.useState("");
-  const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null);
   const [updatingModelId, setUpdatingModelId] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [balances, setBalances] = React.useState<Record<string, BalanceState>>({});
 
   const currentModelId = currentAssistant?.chatModelId ?? settings?.chatModelId ?? null;
-  const favoriteModelIds = settings?.favoriteModels ?? [];
+  const favoriteModelIds = React.useMemo(
+    () => settings?.favoriteModels ?? [],
+    [settings?.favoriteModels],
+  );
   const favoriteModelIdSet = React.useMemo(() => new Set(favoriteModelIds), [favoriteModelIds]);
 
   const allModels = React.useMemo(() => {
-    if (!settings) {
-      return [];
-    }
-
+    if (!settings) return [];
     return settings.providers
       .filter((provider) => provider.enabled)
       .flatMap((provider) => provider.models)
@@ -201,177 +132,45 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
   }, [settings]);
 
   const sections = React.useMemo<ModelSection[]>(() => {
-    if (!settings) {
-      return [];
-    }
-
-    const keyword = normalizeKeyword(searchKeywords);
-
+    if (!settings) return [];
     return settings.providers
       .filter((provider) => provider.enabled)
-      .map((provider) => {
-        const models = provider.models.filter((model) => {
-          if (model.type !== "CHAT") {
-            return false;
-          }
-
-          if (keyword.length === 0) {
-            return true;
-          }
-
-          const displayName = getModelDisplayName(model.displayName, model.modelId).toLowerCase();
-          const modelId = model.modelId.toLowerCase();
-          return displayName.includes(keyword) || modelId.includes(keyword);
-        });
-
-        return {
-          providerId: provider.id,
-          providerName: provider.name,
-          balanceEnabled: isBalanceEnabled(provider as unknown as Record<string, unknown>),
-          models,
-        };
-      })
+      .map((provider) => ({
+        providerId: provider.id,
+        providerName: provider.name,
+        models: provider.models.filter((model) => model.type === "CHAT"),
+      }))
       .filter((section) => section.models.length > 0);
-  }, [searchKeywords, settings]);
+  }, [settings]);
 
-  const selectedSection = React.useMemo(() => {
-    if (sections.length === 0) {
-      return null;
-    }
-
-    return sections.find((section) => section.providerId === selectedProviderId) ?? sections[0];
-  }, [sections, selectedProviderId]);
-  const filteredModels = React.useMemo(
-    () => sections.flatMap((section) => section.models),
-    [sections],
+  const favoriteModels = React.useMemo(
+    () =>
+      favoriteModelIds
+        .map((id) => allModels.find((model) => model.id === id))
+        .filter((model): model is ProviderModel => model !== undefined),
+    [favoriteModelIds, allModels],
   );
-
-  const favoriteModels = React.useMemo(() => {
-    return favoriteModelIds
-      .map((id) => filteredModels.find((model) => model.id === id))
-      .filter((model): model is ProviderModel => model !== undefined);
-  }, [favoriteModelIds, filteredModels]);
-  const isFavoriteSectionSelected = selectedProviderId === FAVORITE_SECTION_ID;
-  const displayedModels = isFavoriteSectionSelected
-    ? favoriteModels
-    : (selectedSection?.models ?? []);
-  const selectedBalanceState = selectedSection ? balances[selectedSection.providerId] : undefined;
-  const selectedBalanceText = selectedSection?.balanceEnabled
-    ? balanceText(selectedBalanceState)
-    : "-";
 
   const currentModel = React.useMemo(
     () => allModels.find((model) => model.id === currentModelId) ?? null,
     [allModels, currentModelId],
+  );
+  const currentProviderId = React.useMemo(
+    () =>
+      sections.find((section) => section.models.some((model) => model.id === currentModelId))
+        ?.providerId ?? null,
+    [sections, currentModelId],
   );
 
   const currentModelLabel = currentModel
     ? getModelDisplayName(currentModel.displayName, currentModel.modelId)
     : t("model_list.select_model");
 
-  React.useEffect(() => {
-    if (!open) {
-      setSearchKeywords("");
-      setError(null);
-    }
-  }, [open]);
-
-  React.useEffect(() => {
-    if (!open || !settings) return;
-    const providersToQuery = settings.providers.filter(
-      (provider) =>
-        provider.enabled &&
-        isBalanceEnabled(provider as unknown as Record<string, unknown>) &&
-        !balances[provider.id],
-    );
-    if (providersToQuery.length === 0) return;
-    setBalances((current) => ({
-      ...current,
-      ...Object.fromEntries(
-        providersToQuery.map((provider) => [provider.id, { status: "loading" as const }]),
-      ),
-    }));
-    providersToQuery.forEach((provider) => {
-      void api
-        .post<{ value: string; endpoint: string }>(
-          "settings/provider/balance",
-          { providerId: provider.id },
-          { timeout: false },
-        )
-        .then((result) => {
-          setBalances((current) => ({
-            ...current,
-            [provider.id]: { status: "ok", value: result.value, endpoint: result.endpoint },
-          }));
-        })
-        .catch((balanceError) => {
-          setBalances((current) => ({
-            ...current,
-            [provider.id]: {
-              status: "error",
-              message:
-                balanceError instanceof Error
-                  ? balanceError.message
-                  : t("model_list.balance_failed", "余额查询失败"),
-            },
-          }));
-        });
-    });
-  }, [balances, open, settings, t]);
-
-  React.useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    if (sections.length === 0 && favoriteModels.length === 0) {
-      setSelectedProviderId(null);
-      return;
-    }
-
-    if (selectedProviderId === FAVORITE_SECTION_ID && favoriteModels.length > 0) {
-      return;
-    }
-
-    if (
-      selectedProviderId &&
-      sections.some((section) => section.providerId === selectedProviderId)
-    ) {
-      return;
-    }
-
-    const currentModelSection =
-      currentModelId == null
-        ? null
-        : sections.find((section) => section.models.some((model) => model.id === currentModelId));
-    setSelectedProviderId(
-      currentModelSection?.providerId ??
-        (favoriteModels.length > 0 ? FAVORITE_SECTION_ID : (sections[0]?.providerId ?? null)),
-    );
-  }, [currentModelId, favoriteModels.length, open, sections, selectedProviderId]);
-
-  React.useEffect(() => {
-    if (!disabled) {
-      return;
-    }
-
-    setOpen(false);
-  }, [disabled]);
-
   const handleSelectModel = React.useCallback(
     async (model: ProviderModel) => {
-      if (disabled || !currentAssistant) {
-        return;
-      }
-
-      if (model.id === currentModelId) {
-        setOpen(false);
-        return;
-      }
+      if (disabled || !currentAssistant || model.id === currentModelId) return;
 
       setUpdatingModelId(model.id);
-      setError(null);
-
       try {
         await api.post<{ status: string }>("settings/assistant/model", {
           assistantId: currentAssistant.id,
@@ -379,11 +178,10 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
         });
         await refreshSettingsStore();
         onChanged?.(model);
-        setOpen(false);
       } catch (changeError) {
-        const message =
-          changeError instanceof Error ? changeError.message : t("model_list.switch_model_failed");
-        setError(message);
+        toast.error(
+          changeError instanceof Error ? changeError.message : t("model_list.switch_model_failed"),
+        );
       } finally {
         setUpdatingModelId(null);
       }
@@ -393,17 +191,12 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
 
   const handleToggleFavorite = React.useCallback(
     async (model: ProviderModel) => {
-      if (disabled || !settings) {
-        return;
-      }
+      if (disabled || !settings) return;
 
       const isFavorite = favoriteModelIds.includes(model.id);
       const newFavoriteModels = isFavorite
         ? favoriteModelIds.filter((id) => id !== model.id)
         : [...favoriteModelIds, model.id];
-
-      setUpdatingModelId(model.id);
-      setError(null);
 
       try {
         await api.post<{ status: string }>("settings/favorite-models", {
@@ -411,37 +204,39 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
         });
         await refreshSettingsStore();
       } catch (changeError) {
-        const message =
+        toast.error(
           changeError instanceof Error
             ? changeError.message
-            : t("model_list.update_favorites_failed");
-        setError(message);
-      } finally {
-        setUpdatingModelId(null);
+            : t("model_list.update_favorites_failed"),
+        );
       }
     },
     [disabled, favoriteModelIds, settings, t],
   );
 
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (disabled || !currentAssistant) {
-          setOpen(false);
-          return;
-        }
+  const renderModelItems = (models: ProviderModel[]) =>
+    models.map((model) => (
+      <ModelMenuItem
+        key={model.id}
+        model={model}
+        selected={model.id === currentModelId}
+        updating={model.id === updatingModelId}
+        favorite={favoriteModelIdSet.has(model.id)}
+        disabled={disabled || updatingModelId !== null}
+        onSelect={handleSelectModel}
+        onToggleFavorite={handleToggleFavorite}
+      />
+    ));
 
-        setOpen(nextOpen);
-      }}
-    >
-      <PopoverTrigger asChild>
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className={cn(
-            "rounded-full px-0 text-muted-foreground hover:text-foreground sm:h-8 sm:max-w-64 sm:justify-start sm:gap-2 sm:px-2",
+            "ds-icon-inherit rounded-full px-0 text-[13px] font-medium text-[var(--ds-icon)] hover:text-foreground sm:h-8 sm:max-w-64 sm:justify-start sm:gap-1.5 sm:px-2.5",
             className,
           )}
           disabled={disabled || !currentAssistant}
@@ -456,140 +251,48 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
             {currentModelLabel}
           </span>
           {reasoningLabel ? (
-            <span className="hidden shrink-0 text-xs text-muted-foreground/80 sm:block">
+            <span className="hidden shrink-0 font-normal text-[var(--ds-text-tertiary)] sm:block">
               {reasoningLabel}
             </span>
           ) : null}
-          <ChevronDown className="hidden size-3.5 shrink-0 sm:block" />
+          <ChevronDown className="hidden size-3 shrink-0 sm:block" />
         </Button>
-      </PopoverTrigger>
+      </DropdownMenuTrigger>
 
-      <PopoverContent align="end" className="w-[min(96vw,30rem)] gap-0 p-0">
-        <PopoverHeader className="border-b px-4 py-3">
-          <PopoverTitle className="text-sm">{t("model_list.title")}</PopoverTitle>
-          <PopoverDescription className="text-xs">{t("model_list.description")}</PopoverDescription>
-        </PopoverHeader>
-
-        <div className="space-y-2 px-3 py-3">
-          <div className="relative">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-            <Input
-              value={searchKeywords}
-              onChange={(event) => {
-                setSearchKeywords(event.target.value);
-              }}
-              placeholder={t("model_list.search_placeholder")}
-              className="h-8 pl-7 text-xs"
-            />
+      <DropdownMenuContent align="end" className="min-w-[200px]">
+        {sections.length === 0 ? (
+          <div className="px-[10px] py-2 text-[13px] text-[var(--ds-text-tertiary)]">
+            {t("model_list.empty")}
           </div>
-
-          {error ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[0.6875rem] text-destructive">
-              {error}
-            </div>
-          ) : null}
-
-          <div className="h-[24rem]">
-            {sections.length === 0 && favoriteModels.length === 0 ? (
-              <div className="rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
-                {t("model_list.empty")}
-              </div>
-            ) : (
-              <div className="flex h-full min-h-0 flex-col gap-2">
-                <ScrollArea className="max-h-20 w-full">
-                  <div className="flex flex-wrap items-center gap-1.5 pb-1">
-                    {favoriteModels.length > 0 && (
-                      <button
-                        type="button"
-                        className={cn(
-                          "bg-muted/60 hover:bg-muted inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition",
-                          isFavoriteSectionSelected && "border-primary bg-primary/10 text-primary",
-                        )}
-                        onClick={() => {
-                          setSelectedProviderId(FAVORITE_SECTION_ID);
-                        }}
-                      >
-                        <Heart
-                          className={cn("size-3", isFavoriteSectionSelected && "fill-current")}
-                        />
-                        <span>{t("model_list.favorites")}</span>
-                      </button>
-                    )}
-
-                    {sections.map((section) => {
-                      const selected = section.providerId === selectedProviderId;
-                      return (
-                        <button
-                          key={section.providerId}
-                          type="button"
-                          className={cn(
-                            "bg-muted/60 hover:bg-muted inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition",
-                            selected && "border-primary bg-primary/10 text-primary",
-                          )}
-                          onClick={() => {
-                            setSelectedProviderId(section.providerId);
-                          }}
-                        >
-                          <AIIcon
-                            name={section.providerName}
-                            size={12}
-                            className="bg-transparent"
-                            imageClassName="h-full w-full"
-                          />
-                          <span className="truncate">{section.providerName}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </ScrollArea>
-
-                <ScrollArea className="min-h-0 flex-1 rounded-md border">
-                  <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-2.5 py-1.5 text-xs backdrop-blur">
-                    <span className="truncate text-muted-foreground">
-                      {isFavoriteSectionSelected
-                        ? t("model_list.favorites")
-                        : selectedSection?.providerName}
-                    </span>
-                    <span
-                      className="inline-flex max-w-48 items-center gap-1 truncate rounded-full bg-muted px-2 py-0.5 text-muted-foreground"
-                      title={
-                        selectedBalanceState?.status === "error"
-                          ? selectedBalanceState.message
-                          : undefined
-                      }
-                    >
-                      {selectedBalanceState?.status === "loading" ? (
-                        <LoaderCircle className="size-3 animate-spin" />
-                      ) : (
-                        <CircleDollarSign className="size-3" />
-                      )}
-                      <span className="truncate">{selectedBalanceText}</span>
-                    </span>
-                  </div>
-                  <div className="space-y-1 p-1.5">
-                    {displayedModels.map((model) => (
-                      <ModelOptionRow
-                        key={model.id}
-                        model={model}
-                        selected={model.id === currentModelId}
-                        updating={model.id === updatingModelId}
-                        favorite={favoriteModelIdSet.has(model.id)}
-                        disabled={disabled || updatingModelId !== null}
-                        onSelect={handleSelectModel}
-                        onToggleFavorite={handleToggleFavorite}
-                        t={t}
-                      />
-                    ))}
-                  </div>
-                </ScrollArea>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <ReasoningInlineSection disabled={disabled} />
-      </PopoverContent>
-    </Popover>
+        ) : (
+          <>
+            {favoriteModels.length > 0 ? (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Heart className="size-4" />
+                  <span className="flex-1">{t("model_list.favorites")}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="min-w-[240px] max-w-[420px]">
+                  {renderModelItems(favoriteModels)}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ) : null}
+            {sections.map((section) => (
+              <DropdownMenuSub key={section.providerId}>
+                <DropdownMenuSubTrigger data-active={section.providerId === currentProviderId || undefined}>
+                  <CheckSlot active={section.providerId === currentProviderId} />
+                  <span className="min-w-0 flex-1 truncate">{section.providerName}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="min-w-[240px] max-w-[420px]">
+                  {renderModelItems(section.models)}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ))}
+          </>
+        )}
+        <ReasoningSubmenu disabled={disabled} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
