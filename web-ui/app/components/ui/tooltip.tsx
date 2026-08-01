@@ -42,13 +42,13 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          "bg-foreground text-background animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-3 data-[side=left]:slide-in-from-right-3 data-[side=right]:slide-in-from-left-3 data-[side=top]:slide-in-from-bottom-3 z-50 w-fit origin-(--radix-tooltip-content-transform-origin) rounded-md px-3 py-1.5 text-xs text-balance shadow-elevated",
+          // NewMax Tooltip 材质:浅色 surface-100 卡片 + elevation-200,弹性入场,无箭头
+          "animate-in fade-in-0 zoom-in-[0.96] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.96] z-50 w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) rounded-[10px] bg-[var(--ds-surface-100)] px-3 py-2 text-xs font-medium text-balance text-[var(--ds-text-primary)] shadow-[var(--ds-elevation-200)] duration-200",
           className
         )}
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="bg-foreground fill-foreground z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px]" />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )
