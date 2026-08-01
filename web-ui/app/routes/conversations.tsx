@@ -64,6 +64,7 @@ import {
 } from "~/stores/conversation-stream";
 import { WorkbenchHost } from "~/components/workbench/workbench-host";
 import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
+import { WindowControlsBar } from "~/components/window-controls";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
 import { useWorkspaceStore } from "~/stores/workspace-store";
@@ -1996,11 +1997,15 @@ function ConversationsPageInner() {
         webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
       <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pt-1.5 pr-2 pb-2 pl-2">
+        {/* I1 窗控带:与画布同色(透明露底),右缘窗控钮,高度与侧栏品牌行平齐
+            (pt-1.5 + 34px = 40px = 侧栏 p-2 顶 8px + 品牌行 h-8),内容整体下压。
+            浏览器预览下组件返回 null,布局退回原状。 */}
+        <WindowControlsBar />
         {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
             下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
             pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。 */}
         <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
-          {/* 一级容器标签行:原生标题栏回归后窗控/拖拽都由系统负责,本行纯交互。 */}
+          {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。 */}
           <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
             <CollapsedSidebarTrigger />
             <div className="relative flex h-full min-w-0 flex-1 items-end">

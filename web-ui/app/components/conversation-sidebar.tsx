@@ -80,6 +80,7 @@ import { ConversationSearchButton } from "~/components/conversation-search-butto
 import { CustomThemeDialog } from "~/components/custom-theme-dialog";
 import { getAssistantDisplayName } from "~/lib/display";
 import { cn } from "~/lib/utils";
+import { windowDragRegionProps } from "~/components/window-controls";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { clearWebAuthToken } from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
@@ -850,8 +851,9 @@ export const ConversationSidebar = React.memo(
     return (
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
-          {/* 品牌行(G8):Logo+应用名居左,折叠钮居右 */}
-          <div className="flex h-8 items-center justify-between pl-2 pr-0.5">
+          {/* 品牌行(G8):Logo+应用名居左,折叠钮居右;I1:与右侧窗控带同属
+              顶部窗控行,空白处可拖拽窗口(折叠钮是 button,拖拽闸门放行点击)。 */}
+          <div className="flex h-8 items-center justify-between pl-2 pr-0.5" {...windowDragRegionProps()}>
             <div className="flex min-w-0 items-center gap-2">
               <Logo className="size-5 shrink-0 text-primary" />
               <span className="truncate text-sm font-semibold text-[var(--ds-text-primary)]">RikkaHub</span>

@@ -167,5 +167,11 @@
       "name_label": "Workspace Name",
       "path_label": "Path"
     }
+  },
+  "window_controls": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
   }
 }

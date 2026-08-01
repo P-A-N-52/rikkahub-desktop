@@ -20,7 +20,7 @@
         "height": 840,
         "minWidth": 880,
         "minHeight": 560,
-        "decorations": true,
+        "decorations": false,
         "transparent": false,
         "shadow": true,
         "center": true,

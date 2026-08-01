@@ -4,6 +4,8 @@ import { ArrowLeft, ImagePlus, Loader2, Plus, Trash2, WandSparkles, X } from "lu
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+
+import { WindowControlsBar } from "~/components/window-controls";
 import { motion } from "motion/react";
 
 import { AIIcon } from "~/components/ui/ai-icon";
@@ -209,7 +211,10 @@ export default function ImagesPage() {
   ]);
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* I1:无边框窗口下每个全屏路由都需要拖拽区 + 窗控钮 */}
+      <WindowControlsBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-4 md:block">
         <div className="flex items-center justify-between">
           <Button asChild size="icon-sm" variant="ghost">
@@ -472,6 +477,7 @@ export default function ImagesPage() {
           </div>
         </ScrollArea>
       </main>
+      </div>
     </div>
   );
 }

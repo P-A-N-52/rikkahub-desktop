@@ -4,6 +4,8 @@ import i18n from "~/i18n";
 
 import { ArrowLeft, Bot, CheckCircle2, CopyPlus, Database, FileClock, Globe, Heart, KeyRound, Loader2, Mic, Search, Settings2, UserRound, Brain } from "lucide-react";
 import { Link } from "react-router";
+
+import { WindowControlsBar } from "~/components/window-controls";
 import { MemorySection } from "~/components/memory/memory-section";
 import { toast } from "sonner";
 
@@ -132,9 +134,12 @@ export default function SettingsPage() {
 
   if (!settings) {
     return (
-      <div className="flex h-svh items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" />
-        {t("settings:providers.loading")}
+      <div className="flex h-svh flex-col overflow-hidden bg-background">
+        <WindowControlsBar />
+        <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
+          <Loader2 className="mr-2 size-4 animate-spin" />
+          {t("settings:providers.loading")}
+        </div>
       </div>
     );
   }
@@ -145,7 +150,10 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="flex h-svh overflow-hidden bg-background">
+    <div className="flex h-svh flex-col overflow-hidden bg-background">
+      {/* I1:无边框窗口下每个全屏路由都需要拖拽区 + 窗控钮 */}
+      <WindowControlsBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       <aside
         className={cn(
           "w-full flex-col border-r border-divider bg-sidebar text-sidebar-foreground md:w-64",
@@ -248,6 +256,7 @@ export default function SettingsPage() {
           </div>
         </ScrollArea>
       </main>
+      </div>
     </div>
   );
 }

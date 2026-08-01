@@ -167,5 +167,11 @@
       "name_label": "工作区名称",
       "path_label": "路径"
     }
+  },
+  "window_controls": {
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原",
+    "close": "关闭"
   }
 }
