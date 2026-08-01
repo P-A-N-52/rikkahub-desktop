@@ -153,6 +153,19 @@ export function validateFolderRoot(rawRoot: unknown): string {
   return root;
 }
 
+/** 新建 managed 工作区的默认名:首个用"默认工作区",此后取最小空号"工作区 N"——
+    避免多个互不相同的工作区顶着同一个名字让人误以为是同一个(G6)。 */
+function nextManagedWorkspaceName(): string {
+  const names = new Set(
+    (db().prepare("SELECT name FROM pc_workspace").all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!names.has("默认工作区")) return "默认工作区";
+  for (let n = 2; ; n += 1) {
+    const candidate = `工作区 ${n}`;
+    if (!names.has(candidate)) return candidate;
+  }
+}
+
 export function createWorkspace(input: { type: WorkspaceType; name?: unknown; root?: unknown }): Workspace {
   const now = Date.now();
   const workspaceId = newId();
@@ -166,7 +179,7 @@ export function createWorkspace(input: { type: WorkspaceType; name?: unknown; ro
   // 上次切到"完全访问"的用户,新建工作区也从"完全访问"起步。folder 型的风险由信任门把守。
   // state 在启动装载前为 undefined(单测常见),此时按无记忆处理(normalizePreset 回退 balanced)。
   const preset: WorkspacePermissionPreset = normalizePreset(String(state?.settings?.workspaceLastPermissionPreset ?? ""));
-  const fallbackName = input.type === "folder" ? root.split(sep).filter(Boolean).pop() ?? "工作区" : "默认工作区";
+  const fallbackName = input.type === "folder" ? root.split(sep).filter(Boolean).pop() ?? "工作区" : nextManagedWorkspaceName();
   const name = sanitizeName(input.name, fallbackName);
 
   mkdirSync(workspaceTmpDir(workspaceId), { recursive: true });
