@@ -8,6 +8,7 @@ import {
   CheckSquare,
   Images,
   Languages,
+  Moon,
   MoreHorizontal,
   MoveRight,
   Palette,
@@ -20,6 +21,7 @@ import {
   LogOut,
   Settings,
   Square,
+  Sun,
   Trash2,
   X,
 } from "lucide-react";
@@ -64,6 +66,7 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "~/components/ui/sidebar";
 import { UIAvatar } from "~/components/ui/ui-avatar";
 import {
@@ -513,7 +516,38 @@ function resolveLanguage(language: string): (typeof LANGUAGE_OPTIONS)[number]["v
   return language.startsWith("zh") ? "zh-CN" : "en-US";
 }
 
-function LanguageSwitcher() {
+// 明暗切换(前端重构A1):自主副标题卡迁入侧栏底部,与主题色入口相邻。
+function ThemeModeToggle() {
+  const { theme, setTheme } = useTheme();
+  const { t } = useTranslation("page");
+  // "system" 先落成具体明暗,保证点击总是切到相反模式。
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" &&
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className="text-muted-foreground hover:text-foreground"
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      aria-label={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
+      title={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
+    >
+      {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
+    </Button>
+  );
+}
+
+// 入口暂撤(前端重构A1,用户指示):Language 切换按钮不再挂在侧栏底部,组件与切换
+// 功能完整保留,计划未来落位设置页;export 避免未使用告警并供届时复用。
+export function LanguageSwitcher() {
   const { i18n } = useTranslation();
   const currentLanguage = resolveLanguage(i18n.resolvedLanguage ?? i18n.language);
   const currentOption =
@@ -816,11 +850,13 @@ export const ConversationSidebar = React.memo(
     return (
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
+          {/* 头像行 + 侧栏折叠按钮(前端重构A1:折叠入口自主副标题卡迁到头像右侧) */}
+          <div className="flex items-start gap-1">
           <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
             <DialogTrigger asChild>
               <button
                 type="button"
-                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-sidebar-accent"
+                className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-sidebar-accent"
               >
                 <UIAvatar
                   size="default"
@@ -885,6 +921,8 @@ export const ConversationSidebar = React.memo(
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          <SidebarTrigger className="mt-2 shrink-0 text-muted-foreground hover:text-foreground" />
+          </div>
         </SidebarHeader>
         <SidebarContent className="min-h-0">
           <SidebarGroup>
@@ -1184,8 +1222,6 @@ export const ConversationSidebar = React.memo(
               </Link>
             </Button>
 
-            <LanguageSwitcher />
-
             <DropdownMenu open={themeMenuOpen} onOpenChange={setThemeMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -1279,6 +1315,8 @@ export const ConversationSidebar = React.memo(
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            <ThemeModeToggle />
 
             <a
               href="https://rikkahub-desktop.pages.dev/"

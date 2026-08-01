@@ -2,7 +2,6 @@ import * as React from "react";
 import { Minus, Square, Copy, X } from "lucide-react";
 
 import { cn } from "~/lib/utils";
-import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
 
 // Detect Tauri at runtime so the same component is harmless when the dev preview
 // runs in a normal browser (it returns null in that case).
@@ -75,9 +74,9 @@ export function TitleBar({ className }: { className?: string }) {
     };
   }, []);
 
-  // M2-1 起标题栏常驻:它同时是一层容器标签栏的宿主,浏览器开发预览也需要同样的
-  // 顶部让位(app.css 以 :has([data-tauri-drag-region]) 为门,本组件渲染即生效)。
-  // 窗口控制按钮与拖拽仍只在 Tauri 下有意义(runWindowAction 在浏览器里静默为空)。
+  // 标题栏常驻(浏览器开发预览也渲染):app.css 以 :has([data-tauri-drag-region])
+  // 为门的侧栏顶部让位依赖本组件存在。窗口控制按钮与拖拽只在 Tauri 下有意义
+  // (runWindowAction 在浏览器里静默为空)。
 
   const runWindowAction = (fn: (api: WindowApi) => Promise<void>) => {
     const api = apiRef.current;
@@ -114,26 +113,15 @@ export function TitleBar({ className }: { className?: string }) {
       onMouseDown={handleDragMouseDown}
       onDoubleClick={handleDragDoubleClick}
       className={cn(
-        // 沉浸式:不画背景、不留边框。窗口按钮和"Rikkahub"文字只是浮在透明拖拽区上,
-        // 让 Mica 云母背景(或纯背景色)从窗口顶到底连续不断,没有灰条和接缝。
-        // 内容区由 app.css 的 padding-top:2.25rem 往下让出 36px,所以这里下面是空的,
-        // 无需毛玻璃(原来 bg-background/70 + backdrop-blur 就是制造"磨砂条"观感的元凶)。
-        "fixed inset-x-0 top-0 z-50 flex h-9 select-none items-center justify-between",
+        // 沉浸式:透明全宽拖拽层 + 右上窗控,不画背景不留边框(前端重构A1)。
+        // 一级容器标签已迁往正文列顶行(conversations.tsx):标签行 wrapper 关闭
+        // pointer-events,空白处的鼠标事件穿透到本层完成窗口拖拽;标签本体以
+        // z-50 浮在本层(z-40)之上恢复交互。settings 等无顶行内容的页面,
+        // 整条 36px 都是拖拽区。
+        "fixed inset-x-0 top-0 z-40 flex h-9 select-none items-center justify-end",
         className,
       )}
     >
-      {/* 中央区 = 一层容器标签栏(工作区 M2-1)。标签是 button,上面的 mousedown
-          处理器会跳过 button 目标,拖拽窗口与点击标签互不干扰;标签间空白仍可拖拽。 */}
-      <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2 pl-3">
-        <img
-          src="/app-icon.png"
-          alt=""
-          data-tauri-drag-region
-          className="size-4 shrink-0 rounded-sm opacity-90 pointer-events-none"
-        />
-        <ContainerTabBar />
-      </div>
-
       {tauri ? (
         <div className="flex h-full items-stretch">
           <TitleBarButton

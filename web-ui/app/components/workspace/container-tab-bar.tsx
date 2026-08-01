@@ -24,10 +24,10 @@ import {
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
-// 一层容器标签栏(工作区 M2-1,方案 §4.1):软圆角胶囊标签,激活白底浮起;
-// 图标区分容器类型;中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚+右端渐隐。
-// 在 Tauri 里嵌入沉浸式标题栏的中央拖拽区(标签是 button,标题栏 mousedown 处理器
-// 会跳过 button 目标,拖拽窗口与点击标签互不干扰)。
+// 一层容器标签栏(工作区 M2-1;前端重构A1 复刻 NewMax 浏览器式页签):
+// 激活标签白底(bg-card)上圆角,与下方白色内容面板连成一体;非激活为画布上的
+// 幽灵态。中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚+右端渐隐。
+// 所在行落在沉浸标题栏高度带内,空白处穿透给 TitleBar 拖拽层(见 conversations.tsx)。
 
 /** 点击/循环切换容器:激活并导航到该容器上次停留的会话(无则回"新对话"首页)。 */
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {
@@ -124,11 +124,8 @@ export function ContainerTabBar() {
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-1 items-center gap-1">
-      <div
-        className="flex min-w-0 items-center gap-1 overflow-x-auto py-1 [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]"
-        data-tauri-drag-region
-      >
+    <div className="flex h-full min-w-0 flex-1 items-end gap-1">
+      <div className="flex h-full min-w-0 items-end gap-1 overflow-x-auto [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
         {openTabs.map((key, index) => (
           <ContainerTab
             key={key}
@@ -155,7 +152,7 @@ export function ContainerTabBar() {
           <button
             type="button"
             aria-label={t("workspace.tabs.new_container")}
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+            className="mb-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-[var(--ds-on-surface)] hover:text-foreground"
           >
             <Plus className="size-3.5" strokeWidth={1.75} />
           </button>
@@ -262,10 +259,11 @@ function ContainerTab({
         onDragOverTab();
       }}
       className={cn(
-        "group flex h-7 max-w-40 shrink-0 select-none items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors duration-150",
+        "group flex max-w-44 shrink-0 select-none items-center gap-1.5 px-3 text-xs transition-colors duration-150",
         active
-          ? "bg-background text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.06),inset_0_0_0_1px_var(--divider,rgba(0,0,0,0.04))]"
-          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+          ? // 激活页签与下方白面板同色连体:上圆角、无下圆角,负空间由面板补全
+            "h-8 rounded-t-[10px] bg-card text-foreground"
+          : "mb-1 h-7 rounded-lg text-muted-foreground hover:bg-[var(--ds-on-surface)] hover:text-foreground",
         dragging && "opacity-60",
       )}
     >
@@ -280,7 +278,7 @@ function ContainerTab({
             onClose();
           }}
           className={cn(
-            "flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity duration-150 hover:bg-muted",
+            "flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity duration-150 hover:bg-[var(--ds-on-surface-active)]",
             active
               ? "opacity-60 hover:opacity-100"
               : "opacity-0 group-hover:opacity-60 hover:group-hover:opacity-100",

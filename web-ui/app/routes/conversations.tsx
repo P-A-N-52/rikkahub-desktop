@@ -8,7 +8,6 @@ import {
   type ConversationQuickJumpItem,
 } from "~/components/conversation-quick-jump";
 import { ConversationSidebar } from "~/components/conversation-sidebar";
-import { useTheme } from "~/components/theme-provider";
 import { ConversationEmptyState } from "~/components/extended/conversation";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChatInput } from "~/components/input/chat-input";
@@ -37,13 +36,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "~/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "~/components/ui/sidebar";
 import { useIsMobile } from "~/hooks/use-mobile";
 import { useConversationList } from "~/hooks/use-conversation-list";
 import { onHotkeyAction, type HotkeyBusAction } from "~/lib/hotkey-events";
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
-import { useCurrentModel } from "~/hooks/use-current-model";
-import { getAssistantDisplayName, getModelDisplayName } from "~/lib/display";
 import {
   convertConversationToMarkdown,
   downloadMarkdown,
@@ -66,6 +63,7 @@ import {
   useConversationSubscription,
 } from "~/stores/conversation-stream";
 import { WorkbenchHost } from "~/components/workbench/workbench-host";
+import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
 import { useWorkspaceStore } from "~/stores/workspace-store";
@@ -82,17 +80,7 @@ import {
   type Settings,
   type UIMessagePart,
 } from "~/types";
-import {
-  ArrowDown,
-  Check,
-  ListChecks,
-  Loader2,
-  MessageSquare,
-  Moon,
-  Pencil,
-  Sun,
-  X,
-} from "lucide-react";
+import { ArrowDown, Check, ListChecks, Loader2, MessageSquare, Pencil, X } from "lucide-react";
 import Logo from "~/components/logo";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useTranslation } from "react-i18next";
@@ -216,31 +204,12 @@ interface EditingSession {
   textPartIndex: number | null;
 }
 
-function ThemeToggleButton() {
-  const { theme, setTheme } = useTheme();
-  const { t } = useTranslation("page");
-  // Resolve "system" to a concrete light/dark, so the toggle always lands on the opposite mode.
-  const isDark =
-    theme === "dark" ||
-    (theme === "system" &&
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-color-scheme: dark)").matches);
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={
-        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
-      }
-      title={
-        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
-      }
-    >
-      {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
-    </Button>
-  );
+// 侧栏收起(offcanvas 全隐)或移动端时,正文列顶行需要一个展开入口;
+// 常态下折叠按钮在侧栏头部(前端重构A1,明暗切换同步迁往侧栏底部)。
+function CollapsedSidebarTrigger() {
+  const { isMobile, state } = useSidebar();
+  if (!isMobile && state !== "collapsed") return null;
+  return <SidebarTrigger className="pointer-events-auto relative z-50 mb-1" />;
 }
 
 function createHomeDraftId() {
@@ -1331,7 +1300,6 @@ function ConversationsPageInner() {
   const { panel, closePanel } = useWorkbench();
 
   const { settings, assistants, currentAssistantId, currentAssistant } = useCurrentAssistant();
-  const { currentModel, currentProvider } = useCurrentModel();
   const { conversations, activeId, setActiveId, loading, error, hasMore, loadMore, refreshList } =
     useConversationList({ currentAssistantId, routeId, autoSelectFirst: !isHomeRoute });
 
@@ -1391,6 +1359,9 @@ function ConversationsPageInner() {
     if (promptTotal <= 0 || cachedTotal <= 0) return null;
     return Math.min(100, Math.round((cachedTotal / promptTotal) * 100));
   });
+  // 停显留码(前端重构A1,用户指示):主副标题卡已删,命中率的新展示位待定,
+  // 上方选择器保留待复用;void 引用避免未使用告警。
+  void conversationCacheHitRate;
   // 节点增删才变(流式 chunk 只改节点内部),导出/压缩入口的可用性开关
   const hasMessages = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.detail?.messages.length ?? 0) > 0 : false,
@@ -1438,9 +1409,6 @@ function ConversationsPageInner() {
   // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)
   const activeWorkspace = useWorkspaceStore((state) =>
     activeContainer === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeContainer),
-  );
-  const hasConversationTabs = useContainerTabsStore(
-    (state) => (state.conversationTabs[state.activeTab]?.length ?? 0) > 0,
   );
   // 侧栏语义随容器切换(方案 §3.1):只列当前容器的会话;完整列表仍用于标题查找等。
   const containerConversations = React.useMemo(
@@ -2056,53 +2024,38 @@ function ConversationsPageInner() {
         webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
       <SidebarInset className="flex min-h-svh flex-col overflow-hidden">
-        {/* pt-9 (36px) 让出沉浸式标题栏的高度,避免 SidebarTrigger / 标题被透明标题栏盖住。
-            背景色仍由 SidebarInset 继承(--background),顶到窗口顶,和透明标题栏无缝衔接。
-            border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。
-            有二层会话标签时(M2-1)让位职责上移到标签条,头部退回常规内边距。 */}
-        {hasConversationTabs ? (
-          <div className="pt-9">
-            <ConversationTabStrip conversations={conversations} />
+        {/* 一级容器标签行(前端重构A1,复刻 NewMax):落在沉浸标题栏 36px 高度带内。
+            wrapper 关闭 pointer-events,空白处的鼠标事件穿透到 TitleBar 拖拽层(z-40)
+            完成窗口拖拽;标签本体以 z-50 恢复交互。右端 pr-36 让出窗控按钮区。
+            原主副标题卡已删:折叠按钮迁至侧栏头部(收起态由 CollapsedSidebarTrigger
+            兜底),明暗切换迁至侧栏底部,缓存命中率停显留码(见 conversationCacheHitRate),
+            会话级自定义提示词铅笔迁至二级标签条行尾。 */}
+        <div className="pointer-events-none flex h-9 shrink-0 items-end gap-1 pl-1.5 pr-36">
+          <CollapsedSidebarTrigger />
+          <div className="pointer-events-auto relative z-50 flex h-8 min-w-0 flex-1 items-end">
+            <ContainerTabBar />
           </div>
-        ) : null}
-        <div
-          className={cn(
-            "sticky top-0 z-10 flex items-center gap-2 border-b border-divider bg-background/95 px-4 pb-3 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/60",
-            hasConversationTabs ? "pt-3" : "pt-9",
-          )}
-        >
-          <SidebarTrigger />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-muted-foreground">
-              {activeConversation
-                ? activeConversation.title
-                : t("conversations.header.select_conversation")}
-            </div>
-            {currentModel && currentProvider ? (
-              <div className="truncate text-xs text-muted-foreground/70">
-                {`${getAssistantDisplayName(currentAssistant?.name)} / ${getModelDisplayName(currentModel.displayName, currentModel.modelId)} (${currentProvider.name})${
-                  conversationCacheHitRate !== null
-                    ? ` / ${t("conversations.header.cache_hit_rate", { rate: conversationCacheHitRate })}`
-                    : ""
-                }`}
-              </div>
-            ) : null}
-          </div>
-          {canOverrideConversationSystemPrompt ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setSystemPromptDialogOpen(true)}
-              disabled={!hasDetail}
-              aria-label={t("conversations.custom_prompt.edit_aria")}
-              title={t("conversations.custom_prompt.edit_aria")}
-            >
-              <Pencil className="size-4" />
-            </Button>
-          ) : null}
-          <ThemeToggleButton />
         </div>
+        {/* 白色圆角内容面板:奶油画布上的浮起主体,二级会话标签条是面板顶缘 */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl border border-b-0 border-divider bg-card">
+        <ConversationTabStrip
+          conversations={conversations}
+          trailing={
+            canOverrideConversationSystemPrompt ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setSystemPromptDialogOpen(true)}
+                disabled={!hasDetail}
+                aria-label={t("conversations.custom_prompt.edit_aria")}
+                title={t("conversations.custom_prompt.edit_aria")}
+              >
+                <Pencil className="size-4" />
+              </Button>
+            ) : null
+          }
+        />
 
         {!isMobile ? (
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
@@ -2149,6 +2102,7 @@ function ConversationsPageInner() {
             </DrawerContent>
           </Drawer>
         ) : null}
+        </div>
       </SidebarInset>
 
       <Dialog

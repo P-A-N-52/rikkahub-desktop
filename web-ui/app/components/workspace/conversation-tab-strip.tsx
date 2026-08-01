@@ -7,13 +7,20 @@ import { cn } from "~/lib/utils";
 import { useContainerTabsStore } from "~/stores/container-tabs-store";
 import type { ConversationListDto } from "~/types";
 
-// 二层会话标签(工作区 M2-1,方案 §4.2):比一层容器胶囊降一级——纯文字+关闭×,
-// 高度更矮,底部 2px 激活指示条。标签题目用会话自动标题;"＋"回到本容器的"新对话"态。
-// 状态在 container-tabs-store,路由 /c/:id 是权威,这里只发导航,由路由同步效应回写状态。
+// 二层会话标签(工作区 M2-1;前端重构A1 复刻 NewMax):白色内容面板的顶缘胶囊行,
+// 激活项奶油底胶囊,非激活幽灵态。标签题目用会话自动标题;"＋"回到本容器的"新对话"态。
+// trailing 是行尾动作位(如会话级自定义提示词入口)。状态在 container-tabs-store,
+// 路由 /c/:id 是权威,这里只发导航,由路由同步效应回写状态。
 
 const EMPTY_TABS: string[] = [];
 
-export function ConversationTabStrip({ conversations }: { conversations: ConversationListDto[] }) {
+export function ConversationTabStrip({
+  conversations,
+  trailing,
+}: {
+  conversations: ConversationListDto[];
+  trailing?: React.ReactNode;
+}) {
   const { t } = useTranslation("page");
   const navigate = useNavigate();
   const activeTab = useContainerTabsStore((state) => state.activeTab);
@@ -38,7 +45,8 @@ export function ConversationTabStrip({ conversations }: { conversations: Convers
   };
 
   return (
-    <div className="flex h-8 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-divider px-2 [scrollbar-width:none]">
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-divider px-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
       {tabs.map((conversationId) => {
         const active = conversationId === activeConversation;
         const title = titleById.get(conversationId)?.trim() || t("workspace.tabs.untitled");
@@ -46,8 +54,10 @@ export function ConversationTabStrip({ conversations }: { conversations: Convers
           <div
             key={conversationId}
             className={cn(
-              "group relative flex h-full max-w-44 shrink-0 cursor-pointer select-none items-center gap-1 px-2.5 text-xs transition-colors duration-150",
-              active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              "group relative flex h-7 max-w-44 shrink-0 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-xs transition-colors duration-150",
+              active
+                ? "bg-secondary text-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground",
             )}
             title={title}
             onClick={() => {
@@ -66,15 +76,12 @@ export function ConversationTabStrip({ conversations }: { conversations: Convers
                 handleClose(conversationId);
               }}
               className={cn(
-                "flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity duration-150 hover:bg-muted",
+                "flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity duration-150 hover:bg-[var(--ds-on-surface-active)]",
                 active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60",
               )}
             >
               <X className="size-3" strokeWidth={1.75} />
             </span>
-            {active ? (
-              <span className="absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-primary" />
-            ) : null}
           </div>
         );
       })}
@@ -85,10 +92,12 @@ export function ConversationTabStrip({ conversations }: { conversations: Convers
           useContainerTabsStore.getState().clearActiveConversation(activeTab);
           navigate("/");
         }}
-        className="mb-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
       >
         <Plus className="size-3.5" strokeWidth={1.75} />
       </button>
+      </div>
+      {trailing ? <div className="flex shrink-0 items-center">{trailing}</div> : null}
     </div>
   );
 }
