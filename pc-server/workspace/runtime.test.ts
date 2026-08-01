@@ -179,6 +179,60 @@ describe("审批矩阵经 tools/approval 联动", () => {
   });
 });
 
+describe("shell runner 硬化(M1-5)", () => {
+  test("timeout 夹取:缺省/超限 → 30min 硬上限;合法值透传", () => {
+    expect(runtime.clampBashTimeoutSeconds(undefined)).toBe(runtime.BASH_HARD_TIMEOUT_SECONDS);
+    expect(runtime.clampBashTimeoutSeconds(999_999)).toBe(runtime.BASH_HARD_TIMEOUT_SECONDS);
+    expect(runtime.clampBashTimeoutSeconds(60)).toBe(60);
+    expect(runtime.clampBashTimeoutSeconds(-5)).toBe(runtime.BASH_HARD_TIMEOUT_SECONDS);
+    expect(runtime.clampBashTimeoutSeconds(Number.NaN)).toBe(runtime.BASH_HARD_TIMEOUT_SECONDS);
+  });
+
+  const shellOk = runtime.shellAvailability().available;
+
+  test.if(shellOk)("执行中部分输出经 onToolPartialOutput 回写", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "stream" });
+    const conversation = bindConversation(workspace.id);
+    const partials: string[] = [];
+    const result = await runtime.runWorkspaceTool(
+      "bash",
+      { command: "echo first; sleep 0.3; echo second" },
+      {
+        conversationId: conversation.id,
+        onToolPartialOutput: (output) => partials.push(output.map((o) => ("text" in o ? o.text : "")).join("")),
+      },
+    );
+    const finalText = result.output.map((o) => ("text" in o ? o.text : "")).join("");
+    expect(finalText).toContain("first");
+    expect(finalText).toContain("second");
+    // pi 内核 100ms 节流下至少应有一次仅含 first 的中间帧
+    expect(partials.some((text) => text.includes("first") && !text.includes("second"))).toBe(true);
+  }, 15_000);
+
+  test.if(shellOk)("abort 杀进程树:长命令即时终止且报 Command aborted", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "abort" });
+    const conversation = bindConversation(workspace.id);
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runtime.runWorkspaceTool(
+      "bash",
+      { command: "sleep 30" },
+      { conversationId: conversation.id, signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 300);
+    await expect(pending).rejects.toThrow(/Command aborted/);
+    expect(Date.now() - started).toBeLessThan(10_000); // 没等满 30s = 进程树被杀
+  }, 15_000);
+
+  test.if(shellOk)("超时终止:timeout 生效并报 timed out", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "timeout" });
+    const conversation = bindConversation(workspace.id);
+    await expect(
+      runtime.runWorkspaceTool("bash", { command: "sleep 30", timeout: 1 }, { conversationId: conversation.id }),
+    ).rejects.toThrow(/timed out after 1 seconds/);
+  }, 15_000);
+});
+
 describe("提示词段(buildWorkspacePromptSegment)", () => {
   test("非工作区会话为空串;工作区会话含 pi 结构锚点", () => {
     expect(prompt.buildWorkspacePromptSegment(bindConversation(null) as never)).toBe("");

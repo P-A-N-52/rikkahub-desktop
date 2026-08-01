@@ -45,6 +45,9 @@ export interface ToolContext {
   messageNodeId?: string;
   signal?: AbortSignal;
   userApproved?: boolean;
+  /** 执行中部分输出回写（bash 流式输出，M1-5）：写回当前 tool part 的 output，
+   *  走现有 node_update 关键帧管线（pi 内核 100ms 节流 + touchStream 33ms 合帧）。 */
+  onToolPartialOutput?: (output: ToolOutputEntry[]) => void;
 }
 
 /** 工具执行的标准化返回值。

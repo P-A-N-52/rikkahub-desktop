@@ -66,7 +66,7 @@ async function runSaveMemoryTool(
 export async function executeToolCall(
   toolCall: any,
   assistant: Assistant,
-  context?: { conversationId?: string; conversationTitle?: string; messageNodeId?: string; signal?: AbortSignal; userApproved?: boolean },
+  context?: import("../inference-engine/events").ToolContext,
 ) {
   const name = String(toolCall.function?.name ?? "");
   let args: Record<string, JsonValue> = {};

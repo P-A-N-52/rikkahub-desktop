@@ -556,9 +556,13 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     // 这里保留对全局 state 的读写（如 saveToolBinaryContent），因为协调器仍然是唯一拥有
     // state 写权限的层；后续 Phase 会再把文件落盘拆到 files/ 模块。
     const executeTool: ToolExecutor = async (toolCall, context) => {
-      // 注入生成级 signal：工作区工具（尤其 bash）据此响应"停止生成"（pi 内核
-      // 逐 await 查 aborted，M1-5 再接杀进程树）。
-      const raw = await executeToolCall(toolCall, assistant, { ...context, signal: controller.signal });
+      // 注入生成级 signal（工作区工具据此取消，bash 连杀进程树）与部分输出回写
+      // （bash 执行中把尾部输出写进 tool part，走现有 touchStream 合帧管线）。
+      const raw = await executeToolCall(toolCall, assistant, {
+        ...context,
+        signal: controller.signal,
+        onToolPartialOutput: (output) => applyEvent({ kind: "tool_result", toolCallId: toolCall.id, output }),
+      });
       // ask_user / MCP 审批等 pending 状态直接作为单 output 载荷返回，让协调器走暂停路径。
       if (isRecord(raw) && "pending" in raw) {
         return { output: [raw as unknown as ToolPendingOutput] };

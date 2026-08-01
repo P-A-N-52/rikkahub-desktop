@@ -134,6 +134,15 @@ export function openAiWorkspaceTools(
 
 // ----- 执行分发 -----
 
+/** bash 超时硬上限(秒,§5.1):pi 原样无默认 timeout,PC 加 30min 保护罩——
+ *  模型没传 → 取硬上限;传了 → 夹到硬上限以内(无效值透传给 pi 内核报错)。 */
+export const BASH_HARD_TIMEOUT_SECONDS = 30 * 60;
+
+export function clampBashTimeoutSeconds(timeout: number | undefined): number {
+  if (timeout === undefined || !Number.isFinite(timeout) || timeout <= 0) return BASH_HARD_TIMEOUT_SECONDS;
+  return Math.min(timeout, BASH_HARD_TIMEOUT_SECONDS);
+}
+
 /** details 里可能带整文件 diff;落库/广播前截断,保护消息体与前端渲染(§4.5 有界渲染)。 */
 const DETAILS_TEXT_CAP = 100_000;
 
@@ -232,7 +241,12 @@ function logWorkspaceToolCall(
 export async function runWorkspaceTool(
   name: string,
   args: Record<string, JsonValue>,
-  context?: { conversationId?: string; userApproved?: boolean; signal?: AbortSignal },
+  context?: {
+    conversationId?: string;
+    userApproved?: boolean;
+    signal?: AbortSignal;
+    onToolPartialOutput?: (output: ToolOutputEntry[]) => void;
+  },
 ): Promise<{ output: ToolOutputEntry[]; fileCreations?: Array<{ data: string; mime: string; prefix: string }> }> {
   if (!isWorkspaceToolName(name)) throw new Error(`Unknown workspace tool: ${name}`);
   const conversation = context?.conversationId ? getConversation(context.conversationId) : null;
@@ -285,10 +299,16 @@ export async function runWorkspaceTool(
         input = args;
         break;
       case "bash":
-        input = { command: String(args.command), timeout: optionalNumberArg(args, "timeout") } satisfies BashToolInput;
+        input = { command: String(args.command), timeout: clampBashTimeoutSeconds(optionalNumberArg(args, "timeout")) } satisfies BashToolInput;
         break;
     }
-    const result = await tool.execute(input, context?.signal);
+    const onPartial = context?.onToolPartialOutput;
+    const result = await tool.execute(
+      input,
+      context?.signal,
+      // bash 执行中部分输出回写(pi onUpdate 全量快照语义,100ms 自节流);其余工具忽略该参数
+      onPartial ? (partial) => onPartial(toToolResult(name, partial).output) : undefined,
+    );
     const mapped = toToolResult(name, result);
     const summary = mapped.output
       .map((entry) => ("text" in entry && typeof entry.text === "string" ? entry.text : ""))

@@ -18,6 +18,7 @@ import { checkpointConversationsDb, flushConvDirtyNow, getConversation, persistC
 
 import process from "node:process";
 import { installProcessSafetyNet, reportError } from "./observability/app-errors";
+import { killTrackedDetachedChildren } from "./workspace/tools/shell";
 import { maybeRunExtractionWorker } from "./files/extraction";
 
 // 全面审查 4-2:进程级异常兜底必须最早安装,罩住后续启动期与运行期的一切
@@ -375,6 +376,8 @@ async function flushAllStateBeforeExit(): Promise<void> {
 
 async function shutdown() {
   server.stop(true);
+  // 工作区 bash 残留子进程清扫(M1-5)：detached 进程组不随宿主退出，不杀会变孤儿。
+  killTrackedDetachedChildren();
   await flushAllStateBeforeExit();
   process.exit(0);
 }
