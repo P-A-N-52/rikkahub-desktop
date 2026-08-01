@@ -63,7 +63,9 @@
     "open_model_settings": "Open model settings",
     "translation": "Translation",
     "expand_translation": "Expand translation",
-    "collapse_translation": "Collapse translation"
+    "collapse_translation": "Collapse translation",
+    "context_window_title": "Context window:",
+    "context_window_usage": "{{used}}% used ({{left}}% left)"
   },
   "memory": {
     "pending_title": "Memories to confirm",

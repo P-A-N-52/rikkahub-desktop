@@ -13,6 +13,7 @@ import { cn } from "~/lib/utils";
 import { getAudioPlaybackKey, stopAudio, useAudioPlaybackKey } from "~/lib/global-audio";
 import { ttsController, useIsTtsActiveForKey } from "~/lib/tts/tts-controller";
 import { Button } from "~/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import api from "~/services/api";
 import { useCurrentModel } from "~/hooks/use-current-model";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -269,9 +270,10 @@ interface NerdStatItem {
 }
 
 // Context window 占用单独返回(渲染时推到行尾右对齐),与 token / 速度 / 时长那组左对齐分开。
+// H6:改为结构化数据,由 ContextGauge 渲染成进度环 + 悬停详情卡(NewMax 对位)。
 interface NerdStats {
   items: NerdStatItem[];
-  context: NerdStatItem | null;
+  context: { usedTokens: number; limitTokens: number | null } | null;
 }
 
 function getNerdStats(
@@ -334,27 +336,70 @@ function getNerdStats(
   // 分子。分母优先用当前选中模型的 contextLimit(切模型即更新),loading / 查不到时回退到该消息
   // 生成时的快照(usage.contextLimit),避免切换瞬间分母闪烁/消失。
   const contextTokens = usage.promptTokens + usage.completionTokens;
-  let context: NerdStatItem | null = null;
+  let context: NerdStats["context"] = null;
   if (contextTokens > 0) {
-    const used =
-      contextTokens >= 1000 ? `${(contextTokens / 1000).toFixed(1)}k` : String(contextTokens);
     const liveValue = liveContextLimit != null && liveContextLimit > 0 ? liveContextLimit : null;
     const snapValue = usage.contextLimit && usage.contextLimit > 0 ? usage.contextLimit : null;
-    const limitValue = liveValue ?? snapValue;
-    const limit =
-      limitValue != null
-        ? limitValue >= 1000
-          ? `${(limitValue / 1000).toFixed(1)}k`
-          : String(limitValue)
-        : null;
-    context = {
-      key: "context",
-      icon: <Gauge className="size-3" />,
-      label: limit ? `${used} / ${limit}` : used,
-    };
+    context = { usedTokens: contextTokens, limitTokens: liveValue ?? snapValue };
   }
 
   return { items, context };
+}
+
+/** token 数简写:36k / 1M(NewMax 悬停卡口径,整数位去掉 .0)。 */
+function formatTokenCount(value: number): string {
+  const trim = (s: string) => s.replace(/\.0$/, "");
+  if (value >= 1_000_000) return `${trim((value / 1_000_000).toFixed(1))}M`;
+  if (value >= 1000) return `${trim((value / 1000).toFixed(1))}k`;
+  return String(value);
+}
+
+/** 上下文占用进度环(H6,NewMax 对位):环体填充 used/limit,悬停出详情卡;
+    模型上限未知时无法算百分比,退回 Gauge 图标 + 数字文本。 */
+function ContextGauge({ usedTokens, limitTokens }: { usedTokens: number; limitTokens: number | null }) {
+  const { t } = useTranslation("message");
+  if (limitTokens == null) {
+    return (
+      <div className="inline-flex items-center gap-1">
+        <Gauge className="size-3" />
+        <span>{formatTokenCount(usedTokens)}</span>
+      </div>
+    );
+  }
+  const percent = Math.min(100, (usedTokens / limitTokens) * 100);
+  const usedPct = Math.min(100, Math.max(percent > 0 ? 1 : 0, Math.round(percent)));
+  const radius = 5;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default items-center">
+          <svg className="size-3.5 shrink-0 -rotate-90" viewBox="0 0 14 14">
+            <circle cx="7" cy="7" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+            <circle
+              cx="7"
+              cy="7"
+              r={radius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeDasharray={`${(circumference * percent) / 100} ${circumference}`}
+              strokeLinecap="round"
+            />
+          </svg>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="end" className="text-center">
+        <div>{t("chat_message.context_window_title")}</div>
+        <div className="mt-0.5">
+          {t("chat_message.context_window_usage", { used: usedPct, left: 100 - usedPct })}
+        </div>
+        <div className="mt-0.5 font-normal text-[var(--ds-text-secondary)]">
+          {formatTokenCount(usedTokens)} / {formatTokenCount(limitTokens)} tokens
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function parseToolOutputJson(text: string): unknown {
@@ -917,7 +962,7 @@ const ChatMessageNerdLineRow = React.memo(
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {items.map(renderStat)}
         </div>
-        {renderStat(context)}
+        <ContextGauge usedTokens={context.usedTokens} limitTokens={context.limitTokens} />
       </div>
     );
   },

@@ -63,7 +63,9 @@
     "open_model_settings": "打开模型设置",
     "translation": "译文",
     "expand_translation": "展开译文",
-    "collapse_translation": "收起译文"
+    "collapse_translation": "收起译文",
+    "context_window_title": "上下文窗口：",
+    "context_window_usage": "已用 {{used}}%（剩余 {{left}}%）"
   },
   "memory": {
     "pending_title": "待确认的记忆",
