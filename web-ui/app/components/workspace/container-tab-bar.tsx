@@ -220,15 +220,16 @@ export function ContainerTabBar() {
   );
 
   // NewMax getTabWidthCalc:页签宽度随数量在 58~172px 间按容器宽均分(容器查询
-  // cqw),预留 64px 给 "+" 钮与边距——多开标签时像浏览器一样逐渐收窄。
-  const tabWidthCalc = `clamp(58px, calc((100cqw - ${64 + Math.max(0, openTabs.length - 1) * 3}px) / ${Math.max(1, openTabs.length)}), 172px)`;
+  // cqw),预留 77px 给 "+" 钮、边距与首标签 13px 左位——多开标签时像浏览器一样逐渐收窄。
+  const tabWidthCalc = `clamp(58px, calc((100cqw - ${77 + Math.max(0, openTabs.length - 1) * 3}px) / ${Math.max(1, openTabs.length)}), 172px)`;
 
   return (
     <div
       className="flex h-full min-w-0 flex-1 items-end gap-[3px]"
       style={{ containerType: "inline-size" }}
     >
-      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto [scrollbar-width:none]">
+      {/* I6:pl-[13px] 给首标签让出激活态左侧反圆角(R=13)的渲染空间(NewMax 同款右挪) */}
+      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto pl-[13px] [scrollbar-width:none]">
         {openTabs.map((key, index) => (
           <ContainerTab
             key={key}
