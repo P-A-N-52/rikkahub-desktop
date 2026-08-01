@@ -124,8 +124,8 @@ export function ContainerTabBar() {
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-1 items-end gap-1">
-      <div className="flex h-full min-w-0 items-end gap-1 overflow-x-auto [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
+    <div className="flex h-full min-w-0 flex-1 items-end gap-[3px]">
+      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
         {openTabs.map((key, index) => (
           <ContainerTab
             key={key}
@@ -152,9 +152,9 @@ export function ContainerTabBar() {
           <button
             type="button"
             aria-label={t("workspace.tabs.new_container")}
-            className="mb-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-[var(--ds-on-surface)] hover:text-foreground"
+            className="mb-[5px] flex size-7 shrink-0 items-center justify-center rounded-full text-[var(--ds-icon)] transition-colors duration-150 hover:bg-[var(--ds-on-surface)] hover:text-foreground"
           >
-            <Plus className="size-3.5" strokeWidth={1.75} />
+            <Plus className="size-[18px]" strokeWidth={1.75} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
@@ -240,6 +240,9 @@ function ContainerTab({
   // folder 型 hover 展示真实路径(方案 §4.1);managed 型路径是应用托管目录,不打扰。
   const tooltip = workspace?.type === "folder" ? workspace.root : label;
 
+  // NewMax WorkspaceTab 原样移植:28px 高页签,激活态与下方面板(surface-200)连体——
+  // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
+  const TAB_CORNER_R = 13;
   return (
     <button
       type="button"
@@ -258,34 +261,70 @@ function ContainerTab({
         event.preventDefault();
         onDragOverTab();
       }}
-      className={cn(
-        "group flex max-w-44 shrink-0 select-none items-center gap-1.5 px-3 text-xs transition-colors duration-150",
+      className={cn("relative shrink-0 select-none pb-[3px]", dragging && "opacity-60")}
+      style={
         active
-          ? // 激活页签与下方白面板同色连体:上圆角、无下圆角,负空间由面板补全
-            "h-8 rounded-t-[10px] bg-card text-foreground"
-          : "mb-1 h-7 rounded-lg text-muted-foreground hover:bg-[var(--ds-on-surface)] hover:text-foreground",
-        dragging && "opacity-60",
-      )}
+          ? {
+              filter: "drop-shadow(rgba(0, 0, 0, 0.08) 0px 0px 0.5px)",
+              clipPath: "inset(-2px -15px -2px -15px)",
+            }
+          : undefined
+      }
     >
-      <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
-      <span className="min-w-0 truncate">{label}</span>
-      {closable ? (
-        <span
-          role="button"
-          aria-label={t("workspace.tabs.close")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onClose();
-          }}
-          className={cn(
-            "flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity duration-150 hover:bg-[var(--ds-on-surface-active)]",
-            active
-              ? "opacity-60 hover:opacity-100"
-              : "opacity-0 group-hover:opacity-60 hover:group-hover:opacity-100",
-          )}
-        >
-          <X className="size-3" strokeWidth={1.75} />
-        </span>
+      <div
+        className={cn(
+          "group relative flex h-7 max-w-44 items-center gap-1.5 pl-2.5 pr-1.5 text-[13px] font-medium transition-colors duration-150",
+          active
+            ? "rounded-t-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-primary)]"
+            : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
+        )}
+      >
+        <Icon className="size-4 shrink-0" strokeWidth={1.75} />
+        <span className="min-w-0 truncate">{label}</span>
+        {closable ? (
+          <span
+            role="button"
+            aria-label={t("workspace.tabs.close")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+            className="flex h-5 w-0 shrink-0 items-center justify-center overflow-hidden rounded-full opacity-0 transition-all duration-150 group-hover:ml-0.5 group-hover:w-5 group-hover:opacity-100 hover:bg-[var(--ds-on-surface)]"
+          >
+            <X className="size-3.5" strokeWidth={1.75} />
+          </span>
+        ) : null}
+        {active ? (
+          <span
+            className="pointer-events-none absolute inset-0 rounded-t-[10px]"
+            style={{ boxShadow: "inset 0 0.5px 0 0 rgba(255, 255, 255, 0.2)" }}
+          />
+        ) : null}
+      </div>
+      {active ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center">
+          <div className="h-[3px] flex-1 bg-[var(--ds-surface-200)]" />
+          <div
+            className="absolute"
+            style={{
+              left: -TAB_CORNER_R,
+              bottom: -2,
+              width: TAB_CORNER_R,
+              height: TAB_CORNER_R + 2,
+              background: `radial-gradient(circle ${TAB_CORNER_R}px at 0 0, transparent ${TAB_CORNER_R - 0.5}px, var(--ds-surface-200) ${TAB_CORNER_R}px)`,
+            }}
+          />
+          <div
+            className="absolute"
+            style={{
+              right: -TAB_CORNER_R,
+              bottom: -2,
+              width: TAB_CORNER_R,
+              height: TAB_CORNER_R + 2,
+              background: `radial-gradient(circle ${TAB_CORNER_R}px at 100% 0, transparent ${TAB_CORNER_R - 0.5}px, var(--ds-surface-200) ${TAB_CORNER_R}px)`,
+            }}
+          />
+        </div>
       ) : null}
     </button>
   );

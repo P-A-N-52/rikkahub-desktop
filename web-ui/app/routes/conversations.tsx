@@ -2016,7 +2016,7 @@ function ConversationsPageInner() {
         onCreateConversation={handleCreateConversation}
         webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
-      <SidebarInset className="flex min-h-svh flex-col overflow-hidden">
+      <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pr-2 pb-2">
         {/* 一级容器标签行(前端重构A1,复刻 NewMax):落在沉浸标题栏 36px 高度带内。
             wrapper 关闭 pointer-events,空白处的鼠标事件穿透到 TitleBar 拖拽层(z-40)
             完成窗口拖拽;标签本体以 z-50 恢复交互。右端 pr-36 让出窗控按钮区。
@@ -2030,7 +2030,9 @@ function ConversationsPageInner() {
           </div>
         </div>
         {/* 白色圆角内容面板:奶油画布上的浮起主体,二级会话标签条是面板顶缘 */}
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl border border-b-0 border-divider bg-card">
+        {/* NewMax 悬浮内容面板:surface-200 底 + elevation-100,右/下由 SidebarInset 的
+            pr-2/pb-2 留出画布边距,四角圆角(上16/下18),激活页签经连接条与面板连体 */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
         <ConversationTabStrip
           conversations={conversations}
           trailing={

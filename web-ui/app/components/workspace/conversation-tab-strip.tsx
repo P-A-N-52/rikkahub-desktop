@@ -45,7 +45,7 @@ export function ConversationTabStrip({
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-divider px-2">
+    <div className="flex h-9 shrink-0 items-center gap-1 px-2">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
       {tabs.map((conversationId) => {
         const active = conversationId === activeConversation;
@@ -54,10 +54,10 @@ export function ConversationTabStrip({
           <div
             key={conversationId}
             className={cn(
-              "group relative flex h-7 max-w-44 shrink-0 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-xs transition-colors duration-150",
+              "group relative flex h-[26px] max-w-44 shrink-0 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-[13px] transition-colors duration-150",
               active
-                ? "bg-secondary text-foreground"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                ? "bg-[var(--ds-on-surface)] font-medium text-[var(--ds-text-primary)] shadow-[inset_0_0_0_0.5px_var(--ds-divider)]"
+                : "text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
             )}
             title={title}
             onClick={() => {
@@ -92,7 +92,7 @@ export function ConversationTabStrip({
           useContainerTabsStore.getState().clearActiveConversation(activeTab);
           navigate("/");
         }}
-        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+        className="flex size-6 shrink-0 items-center justify-center rounded-full text-[var(--ds-icon)] transition-colors duration-150 hover:bg-[var(--ds-on-surface)] hover:text-foreground"
       >
         <Plus className="size-3.5" strokeWidth={1.75} />
       </button>
