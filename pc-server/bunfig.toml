@@ -1,0 +1,4 @@
+[test]
+# 测试进程数据目录沙箱:防止任何测试触碰真实 pc-data(详见 ./test-preload.ts)。
+# CI 与开发者都从 pc-server/ 跑 `bun test`,故此处必须有一份;仓库根另有一份供根目录运行。
+preload = ["./test-preload.ts"]
