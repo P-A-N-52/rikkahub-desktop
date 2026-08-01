@@ -2016,23 +2016,22 @@ function ConversationsPageInner() {
         onCreateConversation={handleCreateConversation}
         webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
-      <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pr-2 pb-2">
-        {/* 一级容器标签行(前端重构A1,复刻 NewMax):落在沉浸标题栏 36px 高度带内。
-            wrapper 关闭 pointer-events,空白处的鼠标事件穿透到 TitleBar 拖拽层(z-40)
-            完成窗口拖拽;标签本体以 z-50 恢复交互。右端 pr-36 让出窗控按钮区。
-            原主副标题卡已删:折叠按钮迁至侧栏头部(收起态由 CollapsedSidebarTrigger
-            兜底),明暗切换迁至侧栏底部,缓存命中率停显留码(见 conversationCacheHitRate),
-            会话级自定义提示词铅笔迁至二级标签条行尾。 */}
-        <div className="pointer-events-none flex h-9 shrink-0 items-end gap-1 pl-1.5 pr-36">
-          <CollapsedSidebarTrigger />
-          <div className="pointer-events-auto relative z-50 flex h-8 min-w-0 flex-1 items-end">
-            <ContainerTabBar />
+      <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pt-1.5 pr-2 pb-2 pl-2">
+        {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
+            下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
+            pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。 */}
+        <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
+          {/* 一级容器标签行:空白处 pointer-events 穿透到 TitleBar 拖拽层(z-40)完成
+              窗口拖拽,标签本体 z-50 恢复交互;右端 pr-36 让出窗控按钮区。 */}
+          <div className="pointer-events-none flex h-[31px] shrink-0 items-end gap-1 pl-1 pr-36">
+            <CollapsedSidebarTrigger />
+            <div className="pointer-events-auto relative z-50 flex h-full min-w-0 flex-1 items-end">
+              <ContainerTabBar />
+            </div>
           </div>
-        </div>
-        {/* 白色圆角内容面板:奶油画布上的浮起主体,二级会话标签条是面板顶缘 */}
-        {/* NewMax 悬浮内容面板:surface-200 底 + elevation-100,右/下由 SidebarInset 的
-            pr-2/pb-2 留出画布边距,四角圆角(上16/下18),激活页签经连接条与面板连体 */}
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
+          {/* 白色圆角内容面板:surface-200 底 + elevation-100,盖住撞色带主体,
+              激活页签经连接条与面板连体;底部圆角与 wrapper 的 18px 对齐。 */}
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
         <ConversationTabStrip
           conversations={conversations}
           trailing={
@@ -2097,6 +2096,7 @@ function ConversationsPageInner() {
             </DrawerContent>
           </Drawer>
         ) : null}
+          </div>
         </div>
       </SidebarInset>
 
