@@ -97,7 +97,24 @@
     "source_code": "Source",
     "empty_content": "(empty)",
     "type_label": "Type: {{type}}",
-    "close_panel": "Close panel"
+    "close_panel": "Close panel",
+    "files": {
+      "title": "File panel",
+      "refresh": "Refresh",
+      "back": "Back",
+      "empty_dir": "Directory is empty",
+      "rename": "Rename",
+      "delete": "Delete",
+      "reveal": "Show in file explorer",
+      "cancel": "Cancel",
+      "confirm": "OK",
+      "delete_file_confirm": "Delete file {{name}}? This cannot be undone.",
+      "delete_dir_confirm": "Delete directory {{name}} and all its contents? This cannot be undone.",
+      "preview_truncated": "File is large; showing the first 512KB only",
+      "binary_preview": "Binary file ({{size}}), preview unavailable",
+      "workspace_missing": "Workspace missing or deleted",
+      "failed": "Operation failed"
+    }
   },
   "custom_theme_dialog": {
     "create_title": "New custom theme",

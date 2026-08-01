@@ -8,6 +8,7 @@ import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 
 import { getCodePreviewLanguage } from "./code-preview-language";
+import { WorkspaceFilesPanel } from "./workspace-files-panel";
 import type { WorkbenchPanel } from "./workbench-context";
 
 interface WorkbenchHostProps {
@@ -190,6 +191,10 @@ function UnknownPanel({ panel }: { panel: WorkbenchPanel }) {
 const PANEL_RENDERERS: Record<string, WorkbenchPanelRenderer> = {
   "code-preview": {
     render: (panel) => <CodePreviewPanel panel={panel} />,
+  },
+  // 工作区文件面板(M3-5,§4.4)
+  "workspace-files": {
+    render: (panel) => <WorkspaceFilesPanel workspaceId={readStringField(panel.payload, "workspaceId")} />,
   },
 };
 

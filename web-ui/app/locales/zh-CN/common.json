@@ -97,7 +97,24 @@
     "source_code": "源码",
     "empty_content": "(空内容)",
     "type_label": "类型：{{type}}",
-    "close_panel": "关闭面板"
+    "close_panel": "关闭面板",
+    "files": {
+      "title": "文件面板",
+      "refresh": "刷新",
+      "back": "返回",
+      "empty_dir": "目录为空",
+      "rename": "重命名",
+      "delete": "删除",
+      "reveal": "在资源管理器中显示",
+      "cancel": "取消",
+      "confirm": "确定",
+      "delete_file_confirm": "确定删除文件 {{name}}？此操作不可撤销。",
+      "delete_dir_confirm": "确定删除目录 {{name}} 及其全部内容？此操作不可撤销。",
+      "preview_truncated": "文件过大，仅显示前 512KB",
+      "binary_preview": "二进制文件（{{size}}），无法预览",
+      "workspace_missing": "工作区不存在或已删除",
+      "failed": "操作失败"
+    }
   },
   "custom_theme_dialog": {
     "create_title": "新建自定义主题",

@@ -4,6 +4,7 @@
 import type { Workspace } from "../../foundation/types";
 import type { WorkspaceDto } from "../../foundation/types/dto";
 import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, trustWorkspace, updateWorkspace, workspaceStatus } from "../../workspace";
+import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, renameWorkspaceEntry, revealWorkspaceEntry } from "../../workspace/files";
 import { error, json, readJson } from "../request";
 
 function toDto(workspace: Workspace): WorkspaceDto {
@@ -45,6 +46,38 @@ export async function handleWorkspaceRoutes(request: Request, _url: URL, path: s
       return json({ workspace: toDto(updated) });
     } catch (err) {
       return error(err instanceof Error ? err.message : "更新工作区失败", 400);
+    }
+  }
+
+  // ---- 文件面板路由(M3-5,§4.4):path 参数为相对 root 的路径,边界断言在领域层 ----
+  if (sub === "files" || sub.startsWith("files/")) {
+    const workspace = getWorkspace(workspaceId);
+    if (!workspace) return error("Workspace not found", 404);
+    const relPath = _url.searchParams.get("path") ?? "";
+    try {
+      if (sub === "files" && request.method === "GET") {
+        return json({ entries: listWorkspaceDir(workspace, relPath) });
+      }
+      if (sub === "files/content" && request.method === "GET") {
+        return json({ preview: await previewWorkspaceFile(workspace, relPath) });
+      }
+      if (sub === "files/rename" && request.method === "POST") {
+        const body = await readJson<{ path?: string; newName?: string }>(request);
+        renameWorkspaceEntry(workspace, String(body.path ?? ""), String(body.newName ?? ""));
+        return new Response(null, { status: 204 });
+      }
+      if (sub === "files" && request.method === "DELETE") {
+        deleteWorkspaceEntry(workspace, relPath);
+        return new Response(null, { status: 204 });
+      }
+      if (sub === "files/reveal" && request.method === "POST") {
+        const body = await readJson<{ path?: string }>(request);
+        revealWorkspaceEntry(workspace, String(body.path ?? ""));
+        return new Response(null, { status: 204 });
+      }
+      return null;
+    } catch (err) {
+      return error(err instanceof Error ? err.message : "文件操作失败", 400);
     }
   }
 

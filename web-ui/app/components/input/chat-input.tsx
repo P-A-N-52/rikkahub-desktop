@@ -12,6 +12,7 @@ import { McpPickerButton } from "~/components/input/mcp-picker";
 import { MemoryBadge } from "~/components/memory/memory-badge";
 import { ExtensionPickerButton } from "~/components/input/extension-picker";
 import { WorkspacePermissionPicker } from "~/components/input/workspace-permission-picker";
+import { WorkspaceFilesButton } from "~/components/input/workspace-files-button";
 import { useChatInputStore, useSettingsStore } from "~/stores";
 import { Button } from "~/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -913,6 +914,7 @@ function ChatInputInner({
               <McpPickerButton disabled={!canSwitchModel} />
               <ExtensionPickerButton disabled={!canSwitchModel} />
               <WorkspacePermissionPicker />
+              <WorkspaceFilesButton />
               <QuickMessageButton
                 quickMessages={quickMessages}
                 disabled={!canUseQuickMessage}
