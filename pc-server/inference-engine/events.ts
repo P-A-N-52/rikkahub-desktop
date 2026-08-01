@@ -17,6 +17,9 @@ export type GenerationEvent =
       approvalState: ToolApprovalState;
     }
   | { kind: "tool_input_delta"; toolCallId: string; input: string }
+  // 审批态上调同步:流内建卡(参数未到)给的是无参数下界,批内预扫描参数齐备后
+  // 若终局为 pending,循环层发此事件把卡从 auto 上调(带缘由)。只升不降。
+  | { kind: "tool_approval_updated"; toolCallId: string; approvalState: ToolApprovalState }
   | { kind: "tool_result"; toolCallId: string; output: ToolOutputEntry[] }
   | { kind: "usage"; usage: Message["usage"] }
   | { kind: "finished"; content: string; stopReason: string | null }

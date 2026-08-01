@@ -7,9 +7,11 @@ import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Database } from "bun:sqlite";
 import { dataDir, workspacesDir } from "../foundation/paths";
+import { systemDenyDirs } from "./boundary";
 import type { PcWorkspaceRow, Workspace, WorkspacePermissionPreset, WorkspaceStatus, WorkspaceType } from "../foundation/types";
 import { id as newId } from "../foundation/utils";
 import { getConversation, getConversationsDb, persistConversation } from "../conversations";
+import { scheduleThrottledSaveState, state } from "../persistence/json-store";
 import { reportError } from "../observability/app-errors";
 
 const WORKSPACE_NAME_MAX = 80;
@@ -151,19 +153,6 @@ export function validateFolderRoot(rawRoot: unknown): string {
   return root;
 }
 
-/** 平台系统目录黑名单(规范化绝对路径)。 */
-function systemDenyDirs(): string[] {
-  if (process.platform === "win32") {
-    return [
-      process.env.SystemRoot || "C:\Windows",
-      process.env.ProgramFiles || "C:\Program Files",
-      process.env["ProgramFiles(x86)"] || "C:\Program Files (x86)",
-      process.env.ProgramData || "C:\ProgramData",
-    ].map((dir) => resolve(dir));
-  }
-  return ["/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/var", "/System", "/Library"].map((dir) => resolve(dir));
-}
-
 export function createWorkspace(input: { type: WorkspaceType; name?: unknown; root?: unknown }): Workspace {
   const now = Date.now();
   const workspaceId = newId();
@@ -173,8 +162,10 @@ export function createWorkspace(input: { type: WorkspaceType; name?: unknown; ro
     root = validateFolderRoot(input.root);
     trustedAt = null; // folder 型必须显式过信任门
   }
-  // folder 型默认档位取"每步确认"(真实目录风险高),managed 型取"平衡"(§3.2)
-  const preset: WorkspacePermissionPreset = input.type === "folder" ? "confirm_each" : "balanced";
+  // 默认档位(权限档位改版):一律"默认权限"(balanced);但记住用户上一次的显式选择——
+  // 上次切到"完全访问"的用户,新建工作区也从"完全访问"起步。folder 型的风险由信任门把守。
+  // state 在启动装载前为 undefined(单测常见),此时按无记忆处理(normalizePreset 回退 balanced)。
+  const preset: WorkspacePermissionPreset = normalizePreset(String(state?.settings?.workspaceLastPermissionPreset ?? ""));
   const fallbackName = input.type === "folder" ? root.split(sep).filter(Boolean).pop() ?? "工作区" : "默认工作区";
   const name = sanitizeName(input.name, fallbackName);
 
@@ -200,6 +191,11 @@ export function updateWorkspace(workspaceId: string, patch: { name?: unknown; pe
       throw new Error("无效的权限档位");
     }
     preset = raw;
+    if (preset !== existing.permissionPreset && state?.settings) {
+      // 记录"用户上一次的选择"作为后续新建工作区的默认档位(PC-only 设置,节流落盘)。
+      state.settings.workspaceLastPermissionPreset = preset;
+      scheduleThrottledSaveState();
+    }
   }
   db().prepare("UPDATE pc_workspace SET name = ?, permission_preset = ?, update_at = ? WHERE id = ?")
     .run(name, preset, Date.now(), workspaceId);

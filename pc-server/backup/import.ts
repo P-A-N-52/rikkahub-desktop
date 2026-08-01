@@ -598,6 +598,8 @@ function applyAndroidOriginZipFromExtractDir(extractDir: string): { settingsImpo
         proxyConfig: pc.proxyConfig,
         webServerJwtEnabled: pc.webServerJwtEnabled,
         preferredPort: pc.preferredPort,
+        // workspaceLastPermissionPreset 是 PC-only 字段(工作区新建档位记忆),导入时保 PC 值。
+        workspaceLastPermissionPreset: pc.workspaceLastPermissionPreset,
         promptOptimizeModelId: pc.promptOptimizeModelId,
         promptOptimizePrompt: pc.promptOptimizePrompt,
         // keybindings 是 PC-only 字段(APP 无对应),导入时必须保 PC 自定义,否则被 normalizeState 重置为默认。

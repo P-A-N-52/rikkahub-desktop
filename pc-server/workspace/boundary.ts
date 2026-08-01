@@ -20,7 +20,8 @@
 import { realpathSync } from "node:fs";
 import { constants } from "node:fs";
 import { access as fsAccess, mkdir as fsMkdir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { dataDir } from "../foundation/paths";
 import type { ReadOperations } from "./tools/read";
 import type { WriteOperations } from "./tools/write";
 import type { EditOperations } from "./tools/edit";
@@ -120,16 +121,8 @@ export function createBoundedReadOperations(root: string, extraReadRoots: readon
 /** write 工具的有界 Operations:边界断言 + 2MB 写闸门;mkdir 同样受界。 */
 export function createBoundedWriteOperations(root: string): WriteOperations {
   return {
-    writeFile: async (absolutePath, content) => {
-      const safePath = assertInsideWorkspace(absolutePath, root);
-      const bytes = Buffer.byteLength(content, "utf-8");
-      if (bytes > WRITE_HARD_LIMIT_BYTES) {
-        throw new Error(
-          `Content is ${formatSize(bytes)}, exceeds the ${formatSize(WRITE_HARD_LIMIT_BYTES)} write limit. Write the file in smaller pieces (write a first chunk, then append with bash >> redirection).`,
-        );
-      }
-      await fsWriteFile(safePath, content, "utf-8");
-    },
+    // async 包裹:边界断言的同步 throw 统一成 rejected promise(Operations 契约)
+    writeFile: async (absolutePath, content) => writeWithHardLimit(assertInsideWorkspace(absolutePath, root), content, "Content"),
     mkdir: async (dir) => {
       await fsMkdir(assertInsideWorkspace(dir, root), { recursive: true });
     },
@@ -142,14 +135,88 @@ export function createBoundedEditOperations(root: string): EditOperations {
     readFile: (absolutePath) => readWithHardLimit(assertInsideWorkspace(absolutePath, root), absolutePath),
     writeFile: async (absolutePath, content) => {
       const safePath = assertInsideWorkspace(absolutePath, root);
-      const bytes = Buffer.byteLength(content, "utf-8");
-      if (bytes > WRITE_HARD_LIMIT_BYTES) {
-        throw new Error(
-          `Edited content is ${formatSize(bytes)}, exceeds the ${formatSize(WRITE_HARD_LIMIT_BYTES)} write limit.`,
-        );
-      }
-      await fsWriteFile(safePath, content, "utf-8");
+      await writeWithHardLimit(safePath, content, "Edited content");
     },
     access: (absolutePath) => fsAccess(assertInsideWorkspace(absolutePath, root), constants.R_OK | constants.W_OK),
+  };
+}
+
+// ----- 宽界 Operations(权限档位改版:经用户批准的区外写入 / full_access 档) -----
+//
+// "宽"不是"无界":操作系统目录与应用数据目录仍然硬拒——写坏前者是系统级灾难,写
+// 后者等于模型改写应用自身状态,两者都没有正当场景,不给审批放行的机会。除此之外
+// 不设路径限制("完全访问=不受限制操作电脑文件"),体积闸门照旧。
+
+/** 平台系统目录黑名单(规范化绝对路径)。工作区准入(index.ts)与宽界写入共用。 */
+export function systemDenyDirs(): string[] {
+  if (process.platform === "win32") {
+    return [
+      process.env.SystemRoot || String.raw`C:\Windows`,
+      process.env.ProgramFiles || String.raw`C:\Program Files`,
+      process.env["ProgramFiles(x86)"] || String.raw`C:\Program Files (x86)`,
+      process.env.ProgramData || String.raw`C:\ProgramData`,
+    ].map((dir) => resolve(dir));
+  }
+  return ["/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/var", "/System", "/Library"].map((dir) => resolve(dir));
+}
+
+function isUnderAny(canonicalTarget: string, denyRoots: string[]): boolean {
+  const target = comparablePath(canonicalTarget);
+  for (const deny of denyRoots) {
+    const denyCmp = comparablePath(deny);
+    if (target === denyCmp || target.startsWith(denyCmp.endsWith(sep) ? denyCmp : denyCmp + sep)) return true;
+  }
+  return false;
+}
+
+/** 宽界写入断言:realpath 化(软链照样揪),命中系统目录/应用数据目录即拒。 */
+export function assertWideWritablePath(absolutePath: string): string {
+  if (absolutePath.includes(String.fromCharCode(0))) {
+    throw new Error(`Access denied: invalid path. Requested: ${absolutePath}`);
+  }
+  const canonical = canonicalizeWithNonexistentTail(absolutePath);
+  if (isUnderAny(canonical, [...systemDenyDirs(), resolve(dataDir)])) {
+    throw new Error(
+      `Access denied: writing into operating-system directories or the application data directory is not allowed. Requested: ${absolutePath}`,
+    );
+  }
+  return canonical;
+}
+
+async function writeWithHardLimit(safePath: string, content: string, what: string): Promise<void> {
+  const bytes = Buffer.byteLength(content, "utf-8");
+  if (bytes > WRITE_HARD_LIMIT_BYTES) {
+    throw new Error(
+      `${what} is ${formatSize(bytes)}, exceeds the ${formatSize(WRITE_HARD_LIMIT_BYTES)} write limit. Write the file in smaller pieces (write a first chunk, then append with bash >> redirection).`,
+    );
+  }
+  await fsWriteFile(safePath, content, "utf-8");
+}
+
+/** read 工具的宽界 Operations(full_access 档):无路径限制,512KB 读闸门照旧。 */
+export function createWideReadOperations(): ReadOperations {
+  return {
+    readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
+    access: (absolutePath) => fsAccess(absolutePath, constants.R_OK),
+    detectImageMimeType: (absolutePath) => detectSupportedImageMimeTypeFromFile(absolutePath),
+  };
+}
+
+/** write 工具的宽界 Operations(经批准的区外写入 / full_access):系统目录硬拒,2MB 闸门照旧。 */
+export function createWideWriteOperations(): WriteOperations {
+  return {
+    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath), content, "Content"),
+    mkdir: async (dir) => {
+      await fsMkdir(assertWideWritablePath(dir), { recursive: true });
+    },
+  };
+}
+
+/** edit 工具的宽界 Operations(经批准的区外编辑 / full_access)。 */
+export function createWideEditOperations(): EditOperations {
+  return {
+    readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
+    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath), content, "Edited content"),
+    access: (absolutePath) => fsAccess(absolutePath, constants.R_OK | constants.W_OK),
   };
 }

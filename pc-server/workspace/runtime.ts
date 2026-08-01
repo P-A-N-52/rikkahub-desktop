@@ -11,7 +11,15 @@ import type { Conversation, JsonValue, TextPart, ToolOutputEntry, Workspace } fr
 import { getConversation } from "../conversations";
 import { addLog } from "../api/logs";
 import { getWorkspace, touchWorkspaceAccess, workspaceStatus, workspaceTmpDir } from "./index";
-import { assertInsideWorkspace, createBoundedEditOperations, createBoundedReadOperations, createBoundedWriteOperations } from "./boundary";
+import {
+  assertInsideWorkspace,
+  createBoundedEditOperations,
+  createBoundedReadOperations,
+  createBoundedWriteOperations,
+  createWideEditOperations,
+  createWideReadOperations,
+  createWideWriteOperations,
+} from "./boundary";
 import { skillsDir } from "../foundation/paths";
 import { findDangerousCommandReason, isWorkspaceToolName, type WorkspaceToolName } from "./approval";
 import { createReadTool } from "./tools/read";
@@ -96,19 +104,44 @@ export function mountedWorkspaceToolNames(): WorkspaceToolName[] {
   return shellAvailability().available ? ["read", "bash", "edit", "write"] : ["read", "edit", "write"];
 }
 
-function buildWorkspaceTool(name: WorkspaceToolName, runtime: WorkspaceRuntime): WorkspaceToolDefinition<unknown, unknown> {
+/** 边界宽窄选择(权限档位改版,与 workspace/approval.ts 三档语义配套):
+ *  - write/edit 走宽界当且仅当"用户显式批准了这次调用"(区外写入的知情同意)或
+ *    档位为 full_access(不受限制操作电脑文件);其余走严界(realpath 断言)——
+ *    词法审批判定看漏的逃逸(软链指向区外)在严界被兜底拒绝;
+ *  - read 恒免审,只有 full_access 才放宽(其余档位维持 root+skills+tmp 只读沙箱);
+ *  - 宽界仍硬拒系统目录与应用数据目录(boundary.ts,不给审批放行的机会)。 */
+interface BoundaryChoice {
+  /** write/edit 宽界(userApproved 或 full_access) */
+  wideWrite: boolean;
+  /** read 宽界(仅 full_access) */
+  wideRead: boolean;
+}
+
+const STRICT_BOUNDARY: BoundaryChoice = { wideWrite: false, wideRead: false };
+
+function buildWorkspaceTool(
+  name: WorkspaceToolName,
+  runtime: WorkspaceRuntime,
+  boundary: BoundaryChoice = STRICT_BOUNDARY,
+): WorkspaceToolDefinition<unknown, unknown> {
   switch (name) {
     case "read":
       // M3-3:skillsDir 作只读根暴露给 read(对齐安卓 /skills 只读挂载);write/edit 仍单根。
       // M3-4:工作区 tmp/(bash 截断全量落盘处)同为只读根——否则模型拿到
       // "Full output: <path>" 提示却被边界拒 read,只能绕道 bash。
       return createReadTool(runtime.cwd, {
-        operations: createBoundedReadOperations(runtime.root, [skillsDir, workspaceTmpDir(runtime.workspace.id)]),
+        operations: boundary.wideRead
+          ? createWideReadOperations()
+          : createBoundedReadOperations(runtime.root, [skillsDir, workspaceTmpDir(runtime.workspace.id)]),
       }) as WorkspaceToolDefinition<unknown, unknown>;
     case "write":
-      return createWriteTool(runtime.cwd, { operations: createBoundedWriteOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
+      return createWriteTool(runtime.cwd, {
+        operations: boundary.wideWrite ? createWideWriteOperations() : createBoundedWriteOperations(runtime.root),
+      }) as WorkspaceToolDefinition<unknown, unknown>;
     case "edit":
-      return createEditTool(runtime.cwd, { operations: createBoundedEditOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
+      return createEditTool(runtime.cwd, {
+        operations: boundary.wideWrite ? createWideEditOperations() : createBoundedEditOperations(runtime.root),
+      }) as WorkspaceToolDefinition<unknown, unknown>;
     case "bash": {
       // tmp/ 放超长输出落盘;声明装配也走本函数(每轮热路径),existsSync 先挡一层
       const tmpDir = workspaceTmpDir(runtime.workspace.id);
@@ -273,21 +306,26 @@ export async function runWorkspaceTool(
     }
     const command = requireStringArg(args, "command", name);
     const dangerReason = findDangerousCommandReason(command);
-    if (dangerReason && !context?.userApproved) {
-      // 危险命令拦截(§3.2:任何档位都拦,独立于审批)。执行层拦截而非审批态拦截,
-      // 见 ./approval.ts 头注的一致性不变量。用户对 pending 卡显式批准 → userApproved
-      // → 知情同意放行;full_access 免审路径永远进不到 userApproved,即"免审仍拦截"。
+    if (dangerReason && !context?.userApproved && runtime.workspace.permissionPreset !== "full_access") {
+      // 危险命令执行层兜底(权限档位改版):正常路径下 confirm_each/balanced 档的危险
+      // 命令在预扫描就挂了 pending 卡,用户批准 → userApproved → 知情同意放行;能走到
+      // 这里说明调用绕过了审批(历史残留恢复等),按档位语义拒绝。full_access 档
+      // "不受限制操作电脑文件",不拦(用户选择该档即知情)。
       throw new Error(
         `Command blocked by safety policy: it matches a destructive pattern (${dangerReason}) and was NOT executed. ` +
-          `If the user genuinely wants this, ask them to run it manually or switch the workspace permission preset to per-step confirmation and approve it explicitly.`,
+          `Ask the user to approve it explicitly, or ask them to run it manually.`,
       );
     }
   }
 
   const started = Date.now();
   touchWorkspaceAccess(runtime.workspace.id);
+  const fullAccess = runtime.workspace.permissionPreset === "full_access";
   try {
-    const tool = buildWorkspaceTool(name, runtime);
+    const tool = buildWorkspaceTool(name, runtime, {
+      wideWrite: context?.userApproved === true || fullAccess,
+      wideRead: fullAccess,
+    });
     let input: unknown;
     switch (name) {
       case "read":

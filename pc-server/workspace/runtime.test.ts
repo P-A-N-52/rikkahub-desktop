@@ -3,7 +3,7 @@
 // pi 内核全链路(write→read→edit 经有界 Operations)、审批矩阵经 tools/approval 联动、
 // 提示词段(结构锚点 + AGENTS.md 冻结快照)。
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,6 +125,73 @@ describe("执行守卫链(runWorkspaceTool)", () => {
       expect(text).toContain("would-run");
     }
   });
+
+  test("full_access:危险命令不拦(不受限制操作电脑文件,用户选档即知情)", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "danger-full" });
+    ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
+    const conversation = bindConversation(workspace.id);
+    if (!runtime.shellAvailability().available) return;
+    // 同样命中清单的无害变体:full_access 下无 userApproved 也直达 shell 层
+    const result = await runtime.runWorkspaceTool(
+      "bash",
+      { command: "echo full-run; true # rm -rf /" },
+      { conversationId: conversation.id },
+    );
+    const text = result.output.map((o) => ("text" in o ? o.text : "")).join("");
+    expect(text).toContain("full-run");
+  });
+});
+
+describe("宽/严边界选择(权限档位改版:区外写入经批准放行)", () => {
+  const joined = (result: { output: Array<Record<string, unknown>> }) =>
+    result.output.map((o) => (typeof o.text === "string" ? o.text : "")).join("");
+
+  test("balanced:区外写未经批准被严界兜底拒;userApproved 走宽界成功", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "wide-approved" });
+    const conversation = bindConversation(workspace.id);
+    const outsideDir = mkdtempSync(join(tmpdir(), "rkh-wide-out-"));
+    const target = join(outsideDir, "note.txt");
+    await expect(
+      runtime.runWorkspaceTool("write", { path: target, content: "hi" }, { conversationId: conversation.id }),
+    ).rejects.toThrow(/outside the workspace boundary/);
+    await runtime.runWorkspaceTool("write", { path: target, content: "hi" }, { conversationId: conversation.id, userApproved: true });
+    expect(readFileSync(target, "utf8")).toBe("hi");
+    // edit 同享宽界:经批准可改区外文件(先读后写都放行)
+    await runtime.runWorkspaceTool(
+      "edit",
+      { path: target, edits: [{ oldText: "hi", newText: "hello" }] },
+      { conversationId: conversation.id, userApproved: true },
+    );
+    expect(readFileSync(target, "utf8")).toBe("hello");
+  });
+
+  test("full_access:区外读写免批准;read 沙箱放开", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "wide-full" });
+    ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
+    const conversation = bindConversation(workspace.id);
+    const outsideDir = mkdtempSync(join(tmpdir(), "rkh-full-out-"));
+    writeFileSync(join(outsideDir, "readable.txt"), "outside-data");
+    const read = await runtime.runWorkspaceTool("read", { path: join(outsideDir, "readable.txt") }, { conversationId: conversation.id });
+    expect(joined(read)).toContain("outside-data");
+    await runtime.runWorkspaceTool("write", { path: join(outsideDir, "w.txt"), content: "w" }, { conversationId: conversation.id });
+    expect(readFileSync(join(outsideDir, "w.txt"), "utf8")).toBe("w");
+  });
+
+  test("宽界不是无界:系统目录与应用数据目录写入仍硬拒", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "wide-deny" });
+    ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
+    const conversation = bindConversation(workspace.id);
+    const sysTarget = process.platform === "win32"
+      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "rkh-deny-test.txt")
+      : "/etc/rkh-deny-test.txt";
+    await expect(
+      runtime.runWorkspaceTool("write", { path: sysTarget, content: "x" }, { conversationId: conversation.id }),
+    ).rejects.toThrow(/operating-system directories/);
+    const { dataDir } = await import("../foundation/paths");
+    await expect(
+      runtime.runWorkspaceTool("write", { path: join(dataDir, "rkh-deny-test.txt"), content: "x" }, { conversationId: conversation.id }),
+    ).rejects.toThrow(/application data directory/);
+  });
 });
 
 describe("pi 内核全链路(有界 Operations)", () => {
@@ -164,20 +231,35 @@ describe("pi 内核全链路(有界 Operations)", () => {
   });
 });
 
-describe("审批矩阵经 tools/approval 联动", () => {
-  test("balanced:write 免审、bash 审批;confirm_each:write 审批;full_access 全免", () => {
+describe("审批矩阵经 tools/approval 联动(三档改版)", () => {
+  test("balanced:区内 write/常规 bash 免审;危险命令/区外写入审批(带缘由)", () => {
     const workspace = ws.createWorkspace({ type: "managed", name: "appr" }); // 默认 balanced
     const conversation = bindConversation(workspace.id);
+    // 参数未到(无参数下界):balanced 全部 auto
     expect(approval.toolNeedsApproval("write", fakeAssistant, conversation)).toBe(false);
-    expect(approval.toolNeedsApproval("bash", fakeAssistant, conversation)).toBe(true);
+    expect(approval.toolNeedsApproval("bash", fakeAssistant, conversation)).toBe(false);
     expect(approval.toolNeedsApproval("read", fakeAssistant, conversation)).toBe(false);
+    // 参数齐备(终局):区内写免审;危险命令/区外写入 pending 且带缘由
+    expect(approval.toolNeedsApproval("write", fakeAssistant, conversation, JSON.stringify({ path: "a.txt" }))).toBe(false);
+    expect(approval.toolNeedsApproval("bash", fakeAssistant, conversation, JSON.stringify({ command: "ls -la" }))).toBe(false);
+    const dangerous = approval.initialApprovalState("bash", fakeAssistant, conversation, JSON.stringify({ command: "rm -rf /" }));
+    expect(dangerous.type).toBe("pending");
+    expect((dangerous as { reason?: string }).reason).toContain("Destructive command pattern");
+    const outside = approval.initialApprovalState("write", fakeAssistant, conversation, JSON.stringify({ path: "../outside.txt" }));
+    expect(outside.type).toBe("pending");
+    expect((outside as { reason?: string }).reason).toContain("Writes outside the workspace");
 
     ws.updateWorkspace(workspace.id, { permissionPreset: "confirm_each" });
     expect(approval.toolNeedsApproval("write", fakeAssistant, conversation)).toBe(true);
     expect(approval.initialApprovalState("edit", fakeAssistant, conversation)).toEqual({ type: "pending" });
+    // confirm_each 恒审批,无附加缘由
+    expect(approval.initialApprovalState("bash", fakeAssistant, conversation, JSON.stringify({ command: "ls" }))).toEqual({ type: "pending" });
 
     ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
     expect(approval.toolNeedsApproval("bash", fakeAssistant, conversation)).toBe(false);
+    // full_access:危险命令与区外写入也免审("不受限制操作电脑文件")
+    expect(approval.toolNeedsApproval("bash", fakeAssistant, conversation, JSON.stringify({ command: "rm -rf /" }))).toBe(false);
+    expect(approval.toolNeedsApproval("write", fakeAssistant, conversation, JSON.stringify({ path: "../outside.txt" }))).toBe(false);
   });
 
   test("非工作区会话对同名工具不挂审批(执行层守卫兜底)", () => {

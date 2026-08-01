@@ -15,7 +15,7 @@
 //     冻结点——此前 Claude/Google 停止后本轮工具仍会执行,违背用户"停止"心智)。
 // 其余仍为纯参数化差异(文案/编码格式等),不做无谓统一。
 import type { Assistant, Message, Provider } from "../foundation/types";
-import { initialApprovalState, toolNeedsApproval } from "../tools/approval";
+import { initialApprovalState } from "../tools/approval";
 import { toolExecutionErrorPayload } from "../tools/format";
 import { finishReasoningParts } from "./parts";
 import type { StreamHooksWithSink, ToolCall, ToolDispatchContext, ToolResult } from "./events";
@@ -284,9 +284,32 @@ export async function runStreamingToolLoop(
     }
 
     // 审批 pre-scan：批内任一工具需要用户审批就整批不执行（避免部分执行后下一轮缺
-    // tool_result）。工具卡已经/将要渲染为 pending 态，generateAnswer 看到
+    // tool_result）。此刻流已读完、参数齐备，这里是审批的终局判定（工作区工具在
+    // balanced 档依赖参数：危险命令/区外写入才审批）。generateAnswer 看到
     // hasPendingToolApproval 会暂停等用户决定。
-    const hasPendingInBatch = result.toolCalls.some((call) => toolNeedsApproval(call.name, assistant, hooks.conversation));
+    const approvalByCall = new Map(
+      result.toolCalls.map((call) => [call.id, initialApprovalState(call.name, assistant, hooks.conversation, call.arguments)] as const),
+    );
+    const hasPendingInBatch = [...approvalByCall.values()].some((state) => state.type === "pending");
+    // 流内建卡的 provider（Claude）在参数未到时用无参数下界建卡；终局若上调为
+    // pending，把卡状态同步上去（只升不降，auto 卡才会被改写）。Google 的函数调用
+    // 整体到达、建卡即终局，此处的重复 pending 同步幂等无害。
+    if (adapter.toolCardsCreatedInStream && hooks.message) {
+      for (const call of result.toolCalls) {
+        const finalState = approvalByCall.get(call.id)!;
+        if (finalState.type !== "pending") continue;
+        if (hooks.sink) {
+          hooks.sink({ kind: "tool_approval_updated", toolCallId: call.id, approvalState: finalState });
+        } else {
+          hooks.message.parts = hooks.message.parts.map((part) => {
+            if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== call.id) return part;
+            const current = isRecord(part.approvalState) ? String(part.approvalState.type ?? "") : "";
+            return current === "auto" || current === "pending" ? { ...part, approvalState: finalState } : part;
+          });
+        }
+      }
+      if (hasPendingInBatch) touchStream(hooks);
+    }
     const dispatchCtx = toolCallContext(hooks);
     const toolResults: ExecutedToolResult[] = [];
 
@@ -302,7 +325,8 @@ export async function runStreamingToolLoop(
           toolName: call.name,
           input: call.arguments,
           output: [],
-          approvalState: initialApprovalState(call.name, assistant, hooks.conversation),
+          // 循环层建卡时参数已齐，直接用终局审批态（含缘由）
+          approvalState: approvalByCall.get(call.id) ?? initialApprovalState(call.name, assistant, hooks.conversation, call.arguments),
         };
         finishReasoningParts(hooks.message);
         hooks.sink?.({

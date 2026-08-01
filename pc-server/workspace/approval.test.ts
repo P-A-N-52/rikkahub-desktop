@@ -1,26 +1,32 @@
-// workspace/approval.test.ts — 审批矩阵与危险命令拦截清单单测(M1-4,纯函数层)
+// workspace/approval.test.ts — 审批矩阵(三档改版)与危险命令清单单测(纯函数层)
 import { describe, expect, test } from "bun:test";
-import { findDangerousCommandReason, isWorkspaceToolName, workspaceToolNeedsApproval } from "./approval";
+import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import {
+  findDangerousCommandReason,
+  isWorkspaceToolName,
+  lexicalWorkspaceCwd,
+  workspaceCallApprovalReason,
+  workspaceToolNeedsApproval,
+} from "./approval";
 
-describe("审批矩阵(§3.2)", () => {
+// 词法判定不碰文件系统,root/cwd 无需真实存在
+const ROOT = join(tmpdir(), "rkh-approval-root");
+const CTX = { root: ROOT, cwd: ROOT };
+
+describe("无参数下界(建卡态)", () => {
   test("read 任何档位免审", () => {
     expect(workspaceToolNeedsApproval("read", "confirm_each")).toBe(false);
     expect(workspaceToolNeedsApproval("read", "balanced")).toBe(false);
     expect(workspaceToolNeedsApproval("read", "full_access")).toBe(false);
   });
 
-  test("write/edit 仅每步确认档审批", () => {
-    for (const tool of ["write", "edit"] as const) {
+  test("仅 confirm_each 的非 read 工具在参数未到时即可断定审批", () => {
+    for (const tool of ["write", "edit", "bash"] as const) {
       expect(workspaceToolNeedsApproval(tool, "confirm_each")).toBe(true);
       expect(workspaceToolNeedsApproval(tool, "balanced")).toBe(false);
       expect(workspaceToolNeedsApproval(tool, "full_access")).toBe(false);
     }
-  });
-
-  test("bash 仅完全访问档免审", () => {
-    expect(workspaceToolNeedsApproval("bash", "confirm_each")).toBe(true);
-    expect(workspaceToolNeedsApproval("bash", "balanced")).toBe(true);
-    expect(workspaceToolNeedsApproval("bash", "full_access")).toBe(false);
   });
 
   test("工具名判别", () => {
@@ -29,6 +35,55 @@ describe("审批矩阵(§3.2)", () => {
     expect(isWorkspaceToolName("search_web")).toBe(false);
     expect(isWorkspaceToolName("mcp__read")).toBe(false);
     expect(isWorkspaceToolName("")).toBe(false);
+  });
+});
+
+describe("终局判定(参数齐备,三档语义)", () => {
+  test("confirm_each:非 read 恒审批(空串缘由);read 免审", () => {
+    expect(workspaceCallApprovalReason("write", "confirm_each", { path: "a.txt" }, CTX)).toBe("");
+    expect(workspaceCallApprovalReason("bash", "confirm_each", { command: "ls" }, CTX)).toBe("");
+    expect(workspaceCallApprovalReason("read", "confirm_each", { path: "a.txt" }, CTX)).toBeNull();
+  });
+
+  test("full_access:全部免审,危险命令与区外路径也不审", () => {
+    expect(workspaceCallApprovalReason("bash", "full_access", { command: "rm -rf /" }, CTX)).toBeNull();
+    expect(workspaceCallApprovalReason("write", "full_access", { path: "/outside/x.txt" }, CTX)).toBeNull();
+  });
+
+  test("balanced bash:危险命令审批(带缘由),常规命令免审", () => {
+    const reason = workspaceCallApprovalReason("bash", "balanced", { command: "rm -rf /" }, CTX);
+    expect(reason).toContain("Destructive command pattern");
+    expect(workspaceCallApprovalReason("bash", "balanced", { command: "bun test && git status" }, CTX)).toBeNull();
+  });
+
+  test("balanced write/edit:区内免审,区外审批(带解析后目标)", () => {
+    expect(workspaceCallApprovalReason("write", "balanced", { path: "sub/a.txt" }, CTX)).toBeNull();
+    expect(workspaceCallApprovalReason("edit", "balanced", { path: join(ROOT, "b.txt") }, CTX)).toBeNull();
+    const outside = workspaceCallApprovalReason("write", "balanced", { path: join(tmpdir(), "elsewhere", "x.txt") }, CTX);
+    expect(outside).toContain("Writes outside the workspace");
+    // 相对路径逃逸与 ~ 展开都按工具内核同一 resolveToCwd 语义判定
+    expect(workspaceCallApprovalReason("write", "balanced", { path: "../../escape.txt" }, CTX)).toContain("Writes outside");
+    expect(workspaceCallApprovalReason("write", "balanced", { path: "~/escape.txt" }, CTX)).toContain(homedir());
+  });
+
+  test("形状残缺不挂审批(交给内核按 schema 报错)", () => {
+    expect(workspaceCallApprovalReason("write", "balanced", {}, CTX)).toBeNull();
+    expect(workspaceCallApprovalReason("write", "balanced", { path: "  " }, CTX)).toBeNull();
+  });
+
+  test("单调性:下界为 pending 的组合终局必为 pending(卡永不降级)", () => {
+    for (const tool of ["write", "edit", "bash"] as const) {
+      const benign: Record<string, string> = tool === "bash" ? { command: "ls" } : { path: "a.txt" };
+      expect(workspaceCallApprovalReason(tool, "confirm_each", benign, CTX)).not.toBeNull();
+    }
+  });
+});
+
+describe("会话 cwd 词法解析", () => {
+  test("空值回 root;相对值按 root 解析;词法越界回 root", () => {
+    expect(lexicalWorkspaceCwd(ROOT, null)).toBe(ROOT);
+    expect(lexicalWorkspaceCwd(ROOT, "sub")).toBe(join(ROOT, "sub"));
+    expect(lexicalWorkspaceCwd(ROOT, join(tmpdir(), "other"))).toBe(ROOT);
   });
 });
 

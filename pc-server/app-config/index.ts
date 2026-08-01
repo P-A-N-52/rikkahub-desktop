@@ -15,6 +15,7 @@ export function selectAppConfig(settings: Settings): AppConfig {
     developerMode: settings.developerMode,
     displaySetting: settings.displaySetting,
     preferredPort: settings.preferredPort,
+    workspaceLastPermissionPreset: settings.workspaceLastPermissionPreset,
     keybindings: settings.keybindings,
     webServerJwtEnabled: settings.webServerJwtEnabled,
   };

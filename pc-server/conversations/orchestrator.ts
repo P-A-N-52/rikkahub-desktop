@@ -608,6 +608,17 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
           });
           touchStream(streamHooks as StreamHooksWithSink);
           break;
+        case "tool_approval_updated":
+          // 审批态上调同步（流内建卡的无参数下界 → 参数齐备后的终局）。只改 auto/pending
+          // 态的卡，绝不回写用户已决定的 approved/denied。
+          currentMessage.parts = currentMessage.parts.map((part) => {
+            if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
+            const current = isRecord(part.approvalState) ? String(part.approvalState.type ?? "") : "";
+            if (current !== "auto" && current !== "pending") return part;
+            return { ...part, approvalState: event.approvalState };
+          });
+          touchStream(streamHooks as StreamHooksWithSink);
+          break;
         case "tool_result":
           currentMessage.parts = currentMessage.parts.map((part) => {
             if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;

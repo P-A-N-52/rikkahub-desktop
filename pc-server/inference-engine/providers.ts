@@ -454,13 +454,14 @@ export async function readClaudeJsonRound(
       hooks.sink?.({ kind: "text_delta", text: block.text });
     } else if (type === "tool_use" && hooks.message) {
       const name = String(block.name ?? "");
+      const inputJson = JSON.stringify(isRecord(block.input) ? block.input : {});
       finishReasoningParts(hooks.message);
       hooks.sink?.({
         kind: "tool_call_created",
         toolCallId: String(block.id ?? id()),
         toolName: name,
-        input: JSON.stringify(isRecord(block.input) ? block.input : {}),
-        approvalState: initialApprovalState(name, assistant, hooks.conversation),
+        input: inputJson,
+        approvalState: initialApprovalState(name, assistant, hooks.conversation, inputJson),
       });
       touchStream(hooks);
     }
@@ -616,7 +617,9 @@ export async function fetchClaudeTextWithTools(
     const dispatchCtx = toolCallContext(hooks);
     // Same rationale as the stream path: bail out of the turn if any tool needs approval so
     // we don't end up sending an unanswered tool_use to Anthropic on the next turn.
-    const hasPendingInBatch = toolUses.some((toolUse) => toolNeedsApproval(String(toolUse.name ?? ""), assistant, hooks?.conversation));
+    const hasPendingInBatch = toolUses.some((toolUse) =>
+      toolNeedsApproval(String(toolUse.name ?? ""), assistant, hooks?.conversation, JSON.stringify(isRecord(toolUse.input) ? toolUse.input : {})),
+    );
     for (const toolUse of toolUses) {
       // R3-4:停止后剩余工具不再执行。
       if (signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
@@ -634,7 +637,7 @@ export async function fetchClaudeTextWithTools(
         toolName: toolCall.function.name,
         input: toolCall.function.arguments,
         output: [],
-        approvalState: initialApprovalState(toolCall.function.name, assistant, hooks?.conversation),
+        approvalState: initialApprovalState(toolCall.function.name, assistant, hooks?.conversation, toolCall.function.arguments),
       };
       if (hooks?.message) {
         finishReasoningParts(hooks.message);
@@ -757,7 +760,8 @@ function applyGoogleRoundChunk(
           toolCallId: callId,
           toolName: name,
           input: JSON.stringify(args),
-          approvalState: initialApprovalState(name, assistant, hooks.conversation),
+          // Gemini 函数调用整体到达，建卡即参数齐备的终局审批态
+          approvalState: initialApprovalState(name, assistant, hooks.conversation, JSON.stringify(args)),
         });
         touchStream(hooks);
       }
@@ -972,7 +976,9 @@ export async function fetchOpenAiText(
     if (toolCalls.length === 0) return allContent.trim() || "(empty response)";
 
     const toolMessages = [];
-    const hasPendingInBatch = toolCalls.some((toolCall: any) => toolNeedsApproval(String(toolCall?.function?.name ?? ""), assistant, hooks?.conversation));
+    const hasPendingInBatch = toolCalls.some((toolCall: any) =>
+      toolNeedsApproval(String(toolCall?.function?.name ?? ""), assistant, hooks?.conversation, String(toolCall?.function?.arguments ?? "{}")),
+    );
     const dispatchCtx = toolCallContext(hooks);
     for (const toolCall of toolCalls) {
       // R3-4:停止后剩余工具不再执行。
@@ -983,7 +989,7 @@ export async function fetchOpenAiText(
         toolName: String(toolCall.function?.name ?? ""),
         input: String(toolCall.function?.arguments ?? "{}"),
         output: [],
-        approvalState: initialApprovalState(String(toolCall.function?.name ?? ""), assistant, hooks?.conversation),
+        approvalState: initialApprovalState(String(toolCall.function?.name ?? ""), assistant, hooks?.conversation, String(toolCall.function?.arguments ?? "{}")),
       };
       if (hooks?.message) {
         finishReasoningParts(hooks.message);

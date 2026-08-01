@@ -97,12 +97,34 @@ describe("folder 工作区准入校验", () => {
     expect(() => ws.createWorkspace({ type: "folder", root: parentOfData })).toThrow("重叠");
   });
 
-  test("合法目录:未信任、每步确认档、默认名取目录名;信任门幂等", () => {
+  test("档位记忆:用户上次的选择成为新建工作区的默认档位", async () => {
+    const store = await import("../persistence/json-store");
+    const prev = store.state;
+    // 最小合法 settings:只有本特性读写的键。finally 恢复原值,不向后续测试文件泄漏。
+    store.setState({ settings: { workspaceLastPermissionPreset: null } } as never);
+    try {
+      const first = ws.createWorkspace({ type: "managed", name: "mem-1" });
+      expect(first.permissionPreset).toBe("balanced"); // 无记忆 → 默认权限
+      ws.updateWorkspace(first.id, { permissionPreset: "full_access" });
+      const second = ws.createWorkspace({ type: "managed", name: "mem-2" });
+      expect(second.permissionPreset).toBe("full_access"); // 继承上次选择
+      const dir = mkdtempSync(join(tmpdir(), "rkh-ws-mem-"));
+      const folder = ws.createWorkspace({ type: "folder", root: dir });
+      expect(folder.permissionPreset).toBe("full_access"); // folder 型同样继承
+    } finally {
+      store.saveState(); // 冲掉可能挂起的节流定时器
+      await store.flushSaveState(); // 等在飞/尾随写结算后再恢复,防止落盘协程读到恢复后的 undefined
+      store.setState(prev as never);
+    }
+  });
+
+  test("合法目录:未信任、默认权限档、默认名取目录名;信任门幂等", () => {
     const realDir = mkdtempSync(join(tmpdir(), "rkh-ws-real-"));
     const workspace = ws.createWorkspace({ type: "folder", root: realDir });
     expect(workspace.type).toBe("folder");
     expect(workspace.trustedAt).toBeNull();
-    expect(workspace.permissionPreset).toBe("confirm_each");
+    // 权限档位改版:folder 型不再默认最严档,风险由信任门把守,档位统一默认 balanced
+    expect(workspace.permissionPreset).toBe("balanced");
     expect(workspace.name).toBe(realDir.split(sep).filter(Boolean).pop() ?? "");
     expect(workspace.root).toBe(realDir);
 

@@ -1,14 +1,24 @@
-// workspace/approval.ts — 工作区审批矩阵与危险命令拦截(M1-4,纯函数层)
-// 纪律:零依赖纯函数,便于单测与在 tools/approval.ts 内联使用。
+// workspace/approval.ts — 工作区审批矩阵与危险命令识别(纯函数层)
+// 纪律:零依赖纯函数(词法路径运算,不碰文件系统),便于单测与在 tools/approval.ts 内联使用。
 //
-// 审批一致性不变量(§9.3):审批判定只依赖 (工具名, 档位),绝不依赖工具参数——
-// Claude/Google 流式路径在 content_block_start 建卡时参数尚未到齐,若审批依赖参数,
-// 建卡态与批内预扫描(tool-loop.ts:289)会不一致,导致"卡显示免审但整批被挂起"的死局。
-// 因此危险命令拦截不走审批态,而在执行层(runtime.ts)拦:未经用户显式批准(userApproved)
-// 的危险命令直接拒绝执行,错误文案回灌模型;confirm_each/balanced 档 bash 恒审批,
-// 用户批准后即视为知情同意放行——这正是方案 §3.2"完全访问=免审(危险命令仍拦截)"的语义。
+// 三档语义(2026-08-01 用户拍板改版):
+//   confirm_each(询问批准):write/edit/bash 恒审批;read 免审。
+//   balanced(默认权限):区内 write/edit 免审(类比安卓 /tmp 豁免:区内写入低风险);
+//     bash 仅危险命令审批;write/edit 目标在工作区边界外 → 审批。
+//   full_access(完全访问):全部免审,不受限制操作电脑文件(系统目录仍硬拒,boundary.ts)。
+//
+// 两段式审批判定(取代旧"只依赖工具名+档位"不变量,§9.3 修订):
+//   建卡态 = 无参数下界 workspaceToolNeedsApproval(tool, preset)——Claude 流式在
+//   content_block_start 参数未到时用它建卡;
+//   终局 = 参数齐备后的 workspaceCallApprovalReason(tool, preset, args, ctx)——
+//   批内预扫描用它,循环层把 auto→pending 的上调经 tool_approval_updated 事件同步回卡。
+//   单调性是硬前提:下界为 pending 的组合终局必为 pending,卡永不 pending→auto 降级。
+// 词法判定看不出的逃逸(软链指向区外等)不产生审批漏洞:未经批准的执行走严界
+// Operations(boundary.ts realpath 断言),照样被拒。
 
-import type { WorkspacePermissionPreset } from "../foundation/types";
+import { isAbsolute, resolve, sep } from "node:path";
+import type { JsonValue, WorkspacePermissionPreset } from "../foundation/types";
+import { resolveToCwd } from "./tools/path-utils";
 
 export const WORKSPACE_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
 
@@ -18,11 +28,58 @@ export function isWorkspaceToolName(name: string): name is WorkspaceToolName {
   return (WORKSPACE_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-/** 审批矩阵(§3.2):read 恒免审;write/edit 仅 confirm_each 审批;bash 仅 full_access 免审。 */
+/** 无参数下界(建卡态):只有 confirm_each 的非 read 工具能在参数未到时断定要审批。 */
 export function workspaceToolNeedsApproval(tool: WorkspaceToolName, preset: WorkspacePermissionPreset): boolean {
   if (tool === "read") return false;
-  if (tool === "bash") return preset !== "full_access";
   return preset === "confirm_each";
+}
+
+/** 词法越界判定:与 boundary.ts 同前缀语义(Windows 大小写不敏感),但不做 realpath。 */
+function isLexicallyOutsideRoot(absolutePath: string, root: string): boolean {
+  const cmp = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const target = cmp(resolve(absolutePath));
+  const rootCmp = cmp(resolve(root));
+  return target !== rootCmp && !target.startsWith(rootCmp.endsWith(sep) ? rootCmp : rootCmp + sep);
+}
+
+/** 会话 cwd 的词法解析(与 runtime.resolveCwd 同语义,少一步存在性自愈——审批判定不碰 fs)。 */
+export function lexicalWorkspaceCwd(root: string, workspaceCwd: string | null | undefined): string {
+  const raw = String(workspaceCwd ?? "").trim();
+  if (!raw) return root;
+  const absolute = isAbsolute(raw) ? resolve(raw) : resolve(root, raw);
+  return isLexicallyOutsideRoot(absolute, root) ? root : absolute;
+}
+
+export interface WorkspaceCallContext {
+  /** 工作区边界根(绝对路径) */
+  root: string;
+  /** 会话工作目录(相对参数路径按此解析,恒在 root 内) */
+  cwd: string;
+}
+
+/** 参数齐备后的终局判定。返回 null=免审;返回字符串=需审批,非空串是给审批卡的缘由
+ *  (英文,与工具错误文案同语言),空串=档位恒审批、无需附加说明。 */
+export function workspaceCallApprovalReason(
+  tool: WorkspaceToolName,
+  preset: WorkspacePermissionPreset,
+  args: Record<string, JsonValue>,
+  ctx: WorkspaceCallContext,
+): string | null {
+  if (tool === "read" || preset === "full_access") return null;
+  if (preset === "confirm_each") return "";
+  if (tool === "bash") {
+    const reason = findDangerousCommandReason(String(args.command ?? ""));
+    return reason ? `Destructive command pattern: ${reason}` : null;
+  }
+  // balanced 档 write/edit:目标在边界外 → 审批。路径解析用与工具内核同一 resolveToCwd
+  // (含 ~ 展开),保证审批眼中的目标与实际写入目标一致;形状残缺(path 缺失)不挂审批,
+  // 交给内核按 schema 报错回灌模型。
+  const raw = args.path;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const resolved = resolveToCwd(raw, ctx.cwd);
+  return isLexicallyOutsideRoot(resolved, ctx.root)
+    ? `Writes outside the workspace: ${resolved}`
+    : null;
 }
 
 // 危险命令静态拦截清单。目标是灾难性、不可逆的系统级破坏(整盘/设备/系统目录),
