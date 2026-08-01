@@ -35,7 +35,8 @@ function formatDuration(createdAt?: string, finishedAt?: string | null): number 
   const seconds = Math.max((end - start) / 1000, 0);
   if (seconds <= 0) return null;
 
-  return Math.round(seconds * 10) / 10;
+  // 精确到个位即可(用户反馈:一位小数没必要);不足 1 秒进位显示 1 秒。
+  return Math.max(1, Math.round(seconds));
 }
 
 export function ReasoningStepPart({
@@ -95,7 +96,7 @@ export function ReasoningStepPart({
   React.useEffect(() => {
     setDuration(formatDuration(reasoning.createdAt, reasoning.finishedAt));
     if (!loading) return;
-    // 500ms 刷新足够(显示精度 0.1s,肉眼无差);原 100ms(10fps)会让推理消息持续
+    // 500ms 刷新足够(显示精度 1s);原 100ms(10fps)会让推理消息持续
     // 高频重渲染 + Markdown 重解析,是思考过程卡顿的放大器。
     const id = setInterval(() => {
       setDuration(formatDuration(reasoning.createdAt, reasoning.finishedAt));
@@ -125,13 +126,13 @@ export function ReasoningStepPart({
             {showThinkingTitle
               ? thinkingTitle
               : duration !== null
-                ? t("message_parts.thinking_seconds", { seconds: duration.toFixed(1) })
+                ? t("message_parts.thinking_seconds", { seconds: duration })
                 : t("message_parts.deep_thinking")}
           </span>
         }
         extra={
           showThinkingTitle && duration !== null ? (
-            <span className="text-muted-foreground text-xs">{duration.toFixed(1)}s</span>
+            <span className="text-muted-foreground text-xs">{duration}s</span>
           ) : undefined
         }
         contentVisible={expandState !== ReasoningCardState.Collapsed}

@@ -1292,6 +1292,7 @@ export function applyOpenAiDelta(
   rawEvent: any,
   hooks: StreamHooksWithSink,
   toolCalls: any[],
+  assistant?: Assistant,
 ) {
   appendUsageFromRaw(hooks.message, rawEvent);
   let content = "";
@@ -1329,6 +1330,36 @@ export function applyOpenAiDelta(
   if (Array.isArray(delta.tool_calls)) {
     const mode = isSnapshot || delta.tool_calls.some((call: any) => call?._rikkahubSnapshot) ? "snapshot" : "delta";
     mergeToolCallDeltas(toolCalls, delta.tool_calls, mode);
+    // 流式(delta)模式下即时建卡+参数流(对齐 Claude reader 的 content_block_start /
+    // input_json_delta 行为):此前 OpenAI 系工具调用在整轮流读完才由循环层建卡,而
+    // write/edit 等工具的参数(整个文件内容)本身就是流式生成的,这段窗口可长达几十秒
+    // ——期间思考卡持续计时、无任何工具反馈。id+name 齐备即宣告建卡(审批态用无参数
+    // 下界,循环层 pre-scan 后经幂等更新上调终局);后续参数增量走 tool_input_delta。
+    // snapshot(非流式/回放)模式无实时窗口,仍由循环层建卡。
+    if (mode === "delta" && hooks.sink && hooks.message) {
+      for (const call of toolCalls) {
+        if (!call || typeof call !== "object") continue;
+        const callId = String(call.id ?? "");
+        const callName = String(call.function?.name ?? "");
+        if (!callId || !callName) continue;
+        const args = String(call.function?.arguments ?? "");
+        if (!call._announced) {
+          call._announced = true;
+          finishReasoningParts(hooks.message);
+          hooks.sink({
+            kind: "tool_call_created",
+            toolCallId: callId,
+            toolName: callName,
+            input: args,
+            approvalState: assistant
+              ? initialApprovalState(callName, assistant, hooks.conversation)
+              : { type: "auto" },
+          });
+        } else if (args) {
+          hooks.sink({ kind: "tool_input_delta", toolCallId: callId, input: args });
+        }
+      }
+    }
   }
   return { content, reasoning };
 }
@@ -1523,7 +1554,7 @@ export async function fetchGoogleAuxiliaryStream(
   return text.trim() || "(empty response)";
 }
 
-export function readOpenAiSseTextIntoMessage(rawText: string, hooks: StreamHooksWithSink, toolCalls: any[]) {
+export function readOpenAiSseTextIntoMessage(rawText: string, hooks: StreamHooksWithSink, toolCalls: any[], assistant?: Assistant) {
   let content = "";
   let reasoning = "";
   for (const payload of parseSseChunks(rawText)) {
@@ -1535,7 +1566,7 @@ export function readOpenAiSseTextIntoMessage(rawText: string, hooks: StreamHooks
         appendUsageFromRaw(hooks.message, raw);
         continue;
       }
-      const applied = applyOpenAiDelta(delta, raw, hooks, toolCalls);
+      const applied = applyOpenAiDelta(delta, raw, hooks, toolCalls, assistant);
       content += applied.content;
       reasoning += applied.reasoning;
     } catch {
@@ -1607,6 +1638,7 @@ export async function readOpenAiResponseIntoMessage(
   response: Response,
   hooks: StreamHooksWithSink,
   signal?: AbortSignal,
+  assistant?: Assistant,
 ) {
   const toolCalls: any[] = [];
   const contentType = response.headers.get("content-type") ?? "";
@@ -1617,14 +1649,14 @@ export async function readOpenAiResponseIntoMessage(
 
   if (contentType.includes("text/event-stream")) {
     content = await readOpenAiStream(response, (delta, rawEvent) => {
-      const applied = applyOpenAiDelta(delta, rawEvent, hooks, toolCalls);
+      const applied = applyOpenAiDelta(delta, rawEvent, hooks, toolCalls, assistant);
       reasoning += applied.reasoning;
       return applied;
     }, signal);
   } else {
     rawText = await response.text();
     if (/^\s*data:/m.test(rawText)) {
-      const streamed = readOpenAiSseTextIntoMessage(rawText, hooks, toolCalls);
+      const streamed = readOpenAiSseTextIntoMessage(rawText, hooks, toolCalls, assistant);
       content = streamed.content;
       reasoning = streamed.reasoning;
       return { content, reasoning, toolCalls, rawText, raw };
@@ -1715,7 +1747,7 @@ export async function fetchOpenAiTextStreaming(
     // 非流式从 300s 对齐流式 600s——非流式响应头要等全文生成完,长思考模型误杀风险更高)。
     headerTimeoutMs: () => 600_000,
     async readRound(response, sig) {
-      const r = await readOpenAiResponseIntoMessage(response, hooks, sig);
+      const r = await readOpenAiResponseIntoMessage(response, hooks, sig, assistant);
       // 稀疏数组洞与无名条目过滤:Responses API 流按 output_index 建槽,function_call 与
       // web_search_call 混发时索引不连续产生 undefined 洞(gpt-5.5 + web_search 崩溃 bug);
       // web_search_call 由 OpenAI 服务端执行,无需本地工具往返,跳过即正确行为。无名条目是

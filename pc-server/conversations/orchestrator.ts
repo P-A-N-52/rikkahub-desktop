@@ -589,18 +589,37 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
           addStreamImage(streamHooks, event.url, event.metadata);
           touchStream(streamHooks as StreamHooksWithSink);
           break;
-        case "tool_call_created":
+        case "tool_call_created": {
           finishReasoningParts(currentMessage);
-          replaceLoadingReasoningWithTool(currentMessage, {
-            type: "tool",
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            input: event.input,
-            output: [],
-            approvalState: event.approvalState,
-          });
+          // 幂等化:OpenAI 系流内建卡(参数未齐的下界)后,循环层读完整轮还会发一次
+          // 终局建卡事件——已有同 id 卡时改为更新参数与审批态(只升不降:auto/pending
+          // 可被终局覆盖,用户已决定的 approved/denied 不回写),不再追加重复卡。
+          const exists = currentMessage.parts.some(
+            (part) => isRecord(part) && part.type === "tool" && part.toolCallId === event.toolCallId,
+          );
+          if (exists) {
+            currentMessage.parts = currentMessage.parts.map((part) => {
+              if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
+              const current = isRecord(part.approvalState) ? String(part.approvalState.type ?? "") : "";
+              return {
+                ...part,
+                ...(event.input ? { input: event.input } : {}),
+                ...(current === "auto" || current === "pending" ? { approvalState: event.approvalState } : {}),
+              };
+            });
+          } else {
+            replaceLoadingReasoningWithTool(currentMessage, {
+              type: "tool",
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              input: event.input,
+              output: [],
+              approvalState: event.approvalState,
+            });
+          }
           touchStream(streamHooks as StreamHooksWithSink);
           break;
+        }
         case "tool_input_delta":
           currentMessage.parts = currentMessage.parts.map((part) => {
             if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;

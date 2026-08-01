@@ -526,7 +526,7 @@ function ReasoningCard({
         <span>{t("message_parts.deep_thinking")}</span>
         {seconds != null ? (
           <span style={{ fontWeight: 400 }}>
-            · {t("message_parts.thinking_seconds", { seconds: seconds.toFixed(1) })}
+            · {t("message_parts.thinking_seconds", { seconds: Math.max(1, Math.round(seconds)) })}
           </span>
         ) : null}
       </div>

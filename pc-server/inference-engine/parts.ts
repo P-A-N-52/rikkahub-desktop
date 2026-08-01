@@ -26,18 +26,8 @@ export function hasOpenReasoningPart(msg: Message) {
   );
 }
 
-/** 把 loading / 占位 reasoning 替换成工具 part。事件流模式下只发事件，不直接改 message。 */
-export function replaceLoadingReasoningWithTool(msg: Message, toolPart: ToolPart, sink?: (event: any) => void) {
-  if (sink) {
-    sink({
-      kind: "tool_call_created",
-      toolCallId: String(toolPart.toolCallId ?? ""),
-      toolName: String(toolPart.toolName ?? ""),
-      input: String(toolPart.input ?? ""),
-      approvalState: toolPart.approvalState ?? { type: "auto" },
-    });
-    return;
-  }
+/** 把 loading / 占位 reasoning 替换成工具 part（协调器应用 tool_call_created 事件时调用）。 */
+export function replaceLoadingReasoningWithTool(msg: Message, toolPart: ToolPart) {
   markStreamFirstContent(msg);
   msg.parts = msg.parts.filter((part) => !(
     part &&
