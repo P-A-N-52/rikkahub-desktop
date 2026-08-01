@@ -9,7 +9,9 @@ import {
   Clipboard,
   ClipboardPaste,
   Clock3,
+  FileSearch,
   FileText,
+  FolderOpen,
   Globe,
   Loader2,
   MessageCircleQuestion,
@@ -34,6 +36,7 @@ import { ControlledChainOfThoughtStep } from "../chain-of-thought";
 import {
   WorkspaceApprovalCard,
   workspaceReadTitle,
+  workspaceReconTitle,
   workspaceToolKind,
 } from "./workspace-tool-part";
 import { AudioPart as AudioPartRenderer } from "./audio-part";
@@ -241,6 +244,10 @@ function SearchResultMiniList({ items }: { items: unknown[] }) {
 function getToolIcon(toolName: string, action?: string) {
   // 工作区 read(M2-3):文件图标。write/edit/bash 已被抽出为顶层动作卡,不走本分派。
   if (workspaceToolKind(toolName) === "read") return FileText;
+  // 兜底检索工具(grep/find/ls):与 read 同属侦察类,折叠组内用专属图标
+  if (toolName === "grep") return FileSearch;
+  if (toolName === "find") return FileSearch;
+  if (toolName === "ls") return FolderOpen;
   if (toolName === TOOL_NAMES.MEMORY) {
     if (action === MEMORY_ACTIONS.CREATE || action === MEMORY_ACTIONS.EDIT) {
       return BookHeart;
@@ -273,6 +280,9 @@ function getToolTitle(toolName: string, args: unknown, t: TFunction): string {
     // 工作区 read(M2-3):相对路径+offset/limit 徽标(方案 §4.3 单行步骤形态)。
     const readTitle = workspaceReadTitle(toolName, JSON.stringify(args ?? {}), t);
     if (readTitle) return readTitle;
+    // 兜底检索工具(grep/find/ls)的单行步骤标题
+    const reconTitle = workspaceReconTitle(toolName, JSON.stringify(args ?? {}), t);
+    if (reconTitle) return reconTitle;
   }
 
   if (toolName === TOOL_NAMES.MEMORY) {

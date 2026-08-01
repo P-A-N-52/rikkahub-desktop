@@ -14,6 +14,9 @@ import { getWorkspace, touchWorkspaceAccess, workspaceStatus, workspaceTmpDir } 
 import {
   assertInsideWorkspace,
   createBoundedEditOperations,
+  createBoundedFindOperations,
+  createBoundedGrepOperations,
+  createBoundedLsOperations,
   createBoundedWriteOperations,
   createWideEditOperations,
   createWideReadOperations,
@@ -24,7 +27,10 @@ import { createReadTool } from "./tools/read";
 import { createWriteTool } from "./tools/write";
 import { createEditTool } from "./tools/edit";
 import { createBashTool, type BashToolInput } from "./tools/bash";
-import { getShellConfig } from "./tools/shell";
+import { createGrepTool } from "./tools/grep";
+import { createFindTool } from "./tools/find";
+import { createLsTool } from "./tools/ls";
+import { getShellConfig, resetShellConfigCache } from "./tools/shell";
 import type { WorkspaceToolDefinition, WorkspaceToolOutput } from "./tools/types";
 
 // ----- shell 可用性探针(进程级缓存;Windows 无 Git Bash → bash 工具不挂载,§5.1) -----
@@ -43,9 +49,10 @@ export function shellAvailability(): { available: boolean; error?: string } {
   return shellProbe;
 }
 
-/** 用户装完 Git Bash 后从 UI 触发重探(M2 接线);单测亦用。 */
+/** 用户装完 Git Bash 后从 UI 触发重探;单测亦用。shell.ts 的验证缓存一并清。 */
 export function refreshShellAvailability(): void {
   shellProbe = null;
+  resetShellConfigCache();
 }
 
 // ----- 会话 → 工作区运行时解析 -----
@@ -97,9 +104,13 @@ export function workspaceRuntimeForConversation(
 
 // ----- 工具实例构建(pi 内核 + 有界 Operations) -----
 
-/** pi 默认工具顺序(system-prompt.ts:["read","bash","edit","write"]);声明与提示词共用。 */
+/** pi 默认工具顺序(system-prompt.ts:["read","bash","edit","write"]);声明与提示词共用。
+ *  bash 不可用时挂纯 TS 的 grep/find/ls 兜底(2026-08-01 用户拍板:bash 正常时不挂,
+ *  防止稀释工具面;pi 的 grep/find/ls 也非默认挂载,此处与 pi 精神一致)。 */
 export function mountedWorkspaceToolNames(): WorkspaceToolName[] {
-  return shellAvailability().available ? ["read", "bash", "edit", "write"] : ["read", "edit", "write"];
+  return shellAvailability().available
+    ? ["read", "bash", "edit", "write"]
+    : ["read", "edit", "write", "grep", "find", "ls"];
 }
 
 /** 边界宽窄选择(权限档位改版,与 workspace/approval.ts 三档语义配套):
@@ -133,6 +144,12 @@ function buildWorkspaceTool(
       if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
       return createBashTool(runtime.cwd, { tempFileDir: tmpDir }) as WorkspaceToolDefinition<unknown, unknown>;
     }
+    case "grep":
+      return createGrepTool(runtime.cwd, { operations: createBoundedGrepOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
+    case "find":
+      return createFindTool(runtime.cwd, { operations: createBoundedFindOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
+    case "ls":
+      return createLsTool(runtime.cwd, { operations: createBoundedLsOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
   }
 }
 

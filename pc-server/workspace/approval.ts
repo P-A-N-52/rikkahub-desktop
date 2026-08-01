@@ -20,7 +20,11 @@ import { isAbsolute, resolve, sep } from "node:path";
 import type { JsonValue, WorkspacePermissionPreset } from "../foundation/types";
 import { resolveToCwd } from "./tools/path-utils";
 
-export const WORKSPACE_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
+export const WORKSPACE_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
+
+/** 只读工具集:恒免审。grep/find/ls 是 bash 不可用时的兜底(runtime.mountedWorkspaceToolNames),
+ *  读语义与 read 同档——不改盘、不出网,任何档位都无需打断用户。 */
+const READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "find", "ls"]);
 
 export type WorkspaceToolName = (typeof WORKSPACE_TOOL_NAMES)[number];
 
@@ -28,9 +32,9 @@ export function isWorkspaceToolName(name: string): name is WorkspaceToolName {
   return (WORKSPACE_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-/** 无参数下界(建卡态):只有 confirm_each 的非 read 工具能在参数未到时断定要审批。 */
+/** 无参数下界(建卡态):只有 confirm_each 的非只读工具能在参数未到时断定要审批。 */
 export function workspaceToolNeedsApproval(tool: WorkspaceToolName, preset: WorkspacePermissionPreset): boolean {
-  if (tool === "read") return false;
+  if (READONLY_TOOL_NAMES.has(tool)) return false;
   return preset === "confirm_each";
 }
 
@@ -65,7 +69,7 @@ export function workspaceCallApprovalReason(
   args: Record<string, JsonValue>,
   ctx: WorkspaceCallContext,
 ): string | null {
-  if (tool === "read" || preset === "full_access") return null;
+  if (READONLY_TOOL_NAMES.has(tool) || preset === "full_access") return null;
   if (preset === "confirm_each") return "";
   if (tool === "bash") {
     const reason = findDangerousCommandReason(String(args.command ?? ""));

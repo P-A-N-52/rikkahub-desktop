@@ -5,7 +5,13 @@ import type { Workspace } from "../../foundation/types";
 import type { WorkspaceDto } from "../../foundation/types/dto";
 import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, trustWorkspace, updateWorkspace, workspaceStatus } from "../../workspace";
 import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, renameWorkspaceEntry, revealWorkspaceEntry } from "../../workspace/files";
+import { mountedWorkspaceToolNames, refreshShellAvailability, shellAvailability } from "../../workspace/runtime";
 import { error, json, readJson } from "../request";
+
+function shellStatusPayload(): { available: boolean; error: string | null; mountedTools: string[] } {
+  const shell = shellAvailability();
+  return { available: shell.available, error: shell.error ?? null, mountedTools: [...mountedWorkspaceToolNames()] };
+}
 
 function toDto(workspace: Workspace): WorkspaceDto {
   return { ...workspace, status: workspaceStatus(workspace) };
@@ -25,6 +31,16 @@ export async function handleWorkspaceRoutes(request: Request, _url: URL, path: s
     } catch (err) {
       return error(err instanceof Error ? err.message : "创建工作区失败", 400);
     }
+  }
+
+  // ---- shell 探测状态(K3):bash 不可用时前端引导安装 Git;装完后可触发重探 ----
+  // 注意置于 :id 正则之前,否则 shell-status 会被吞成工作区 id。
+  if (path === "workspaces/shell-status" && request.method === "GET") {
+    return json({ shell: shellStatusPayload() });
+  }
+  if (path === "workspaces/shell-status/refresh" && request.method === "POST") {
+    refreshShellAvailability();
+    return json({ shell: shellStatusPayload() });
   }
 
   const workspaceRoute = path.match(/^workspaces\/([^/]+)(?:\/(.*))?$/);

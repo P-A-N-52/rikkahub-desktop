@@ -19,12 +19,15 @@
 
 import { realpathSync } from "node:fs";
 import { constants } from "node:fs";
-import { access as fsAccess, mkdir as fsMkdir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
+import { access as fsAccess, mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { dataDir } from "../foundation/paths";
 import type { ReadOperations } from "./tools/read";
 import type { WriteOperations } from "./tools/write";
 import type { EditOperations } from "./tools/edit";
+import type { GrepOperations } from "./tools/grep";
+import type { FindOperations } from "./tools/find";
+import type { LsOperations } from "./tools/ls";
 import { detectSupportedImageMimeTypeFromFile } from "./tools/mime";
 import { formatSize } from "./tools/truncate";
 
@@ -196,5 +199,45 @@ export function createWideEditOperations(root: string): EditOperations {
     readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
     writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Edited content"),
     access: (absolutePath) => fsAccess(absolutePath, constants.R_OK | constants.W_OK),
+  };
+}
+
+// ----- 兜底搜索工具(grep/find/ls,bash 不可用时挂载)的有界 Operations -----
+// 三者皆只读;遍历器(fs-walk)不跟符号链接,从界内根出发不会走出边界,
+// 此处的断言管住模型直接传入的 path 参数(绝对路径/../ 逃逸)。
+
+/** exists 语义:界内不存在 → false;越界 → 抛边界错误(模型该看到"越界"而非"不存在")。 */
+async function boundedExists(absolutePath: string, root: string): Promise<boolean> {
+  const safePath = assertInsideWorkspace(absolutePath, root);
+  try {
+    await fsAccess(safePath, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** ls 工具的有界 Operations:exists/stat/readdir 全部过边界断言。 */
+export function createBoundedLsOperations(root: string): LsOperations {
+  return {
+    exists: (absolutePath) => boundedExists(absolutePath, root),
+    stat: (absolutePath) => fsStat(assertInsideWorkspace(absolutePath, root)),
+    readdir: (absolutePath) => fsReaddir(assertInsideWorkspace(absolutePath, root)),
+  };
+}
+
+/** find 工具的有界 Operations:搜索根过边界断言即可(遍历自持在界内)。 */
+export function createBoundedFindOperations(root: string): FindOperations {
+  return {
+    exists: (absolutePath) => boundedExists(absolutePath, root),
+  };
+}
+
+/** grep 工具的有界 Operations:体积闸在引擎内(超限文件跳过而非报错),此处只管边界。 */
+export function createBoundedGrepOperations(root: string): GrepOperations {
+  return {
+    isDirectory: async (absolutePath) => (await fsStat(assertInsideWorkspace(absolutePath, root))).isDirectory(),
+    readFile: (absolutePath) => fsReadFile(assertInsideWorkspace(absolutePath, root)),
+    statSize: async (absolutePath) => (await fsStat(assertInsideWorkspace(absolutePath, root))).size,
   };
 }

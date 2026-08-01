@@ -20,6 +20,10 @@ const TOOL_SNIPPETS: Record<WorkspaceToolName, string> = {
   bash: "Execute bash commands (ls, grep, find, etc.)",
   edit: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
   write: "Create or overwrite files",
+  // 兜底工具(bash 不可用时挂载)的 promptSnippet 原文(grep.ts:132 / find.ts:118 / ls.ts:104)
+  grep: "Search file contents for patterns (respects .gitignore)",
+  find: "Find files by glob pattern (respects .gitignore)",
+  ls: "List directory contents",
 };
 
 // pi 各工具的 promptGuidelines 原文(bash 无;顺序按工具挂载序,后接恒有的两条)
@@ -33,6 +37,9 @@ const TOOL_GUIDELINES: Record<WorkspaceToolName, string[]> = {
     "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
   ],
   write: ["Use write only for new files or complete rewrites."],
+  grep: [],
+  find: [],
+  ls: [],
 };
 
 const AGENTS_FILE = "AGENTS.md";
@@ -78,10 +85,15 @@ export function buildWorkspacePromptSegment(conversation: Conversation): string 
   const tools = mountedWorkspaceToolNames();
   const toolsList = tools.map((name) => `- ${name}: ${TOOL_SNIPPETS[name]}`).join("\n");
 
-  // pi 的 guideline 组装序:bash 文件操作提示(有 bash 无 grep/find/ls 时)→ 各工具
-  // guidelines(挂载序)→ 恒有两条;Set 去重语义此处天然满足(清单静态无重复)。
+  // pi 的 guideline 组装序:bash 文件操作提示(有 bash 且无 grep/find/ls 时,与 pi
+  // system-prompt.ts:104 的条件逐字一致)→ 各工具 guidelines(挂载序)→ 恒有两条;
+  // Set 去重语义此处天然满足(清单静态无重复)。
   const guidelines: string[] = [];
-  if (tools.includes("bash")) guidelines.push("Use bash for file operations like ls, rg, find");
+  const hasBash = tools.includes("bash");
+  const hasGrep = tools.includes("grep");
+  const hasFind = tools.includes("find");
+  const hasLs = tools.includes("ls");
+  if (hasBash && !hasGrep && !hasFind && !hasLs) guidelines.push("Use bash for file operations like ls, rg, find");
   for (const name of tools) guidelines.push(...TOOL_GUIDELINES[name]);
   // M3-3:技能目录教学(对齐安卓 /skills 挂载文案,路径换成 PC 真实 skillsDir)。
   // 门控在目录存在性上:无技能用户零 token 开销;目录出现/消失是极低频事件,

@@ -117,6 +117,25 @@ export function readRangeBadge(args: Record<string, unknown>, t: TFunction): str
   return null;
 }
 
+/** 兜底检索工具(grep/find/ls,bash 不可用时挂载,恒只读)的步骤标题;
+ *  不注册进 KIND_BY_TOOL_NAME——它们与 read 同属侦察类,留在思维链折叠组,
+ *  只需要标题/图标定制(tool-part.tsx 调用)。非这三个工具返回 null。 */
+export function workspaceReconTitle(toolName: string, input: string, t: TFunction): string | null {
+  if (toolName === "grep") {
+    const pattern = str(parseArgs(input), "pattern") ?? "";
+    return pattern ? t("workspace_tool.grep_title", { pattern }) : t("workspace_tool.grep");
+  }
+  if (toolName === "find") {
+    const pattern = str(parseArgs(input), "pattern") ?? "";
+    return pattern ? t("workspace_tool.find_title", { pattern }) : t("workspace_tool.find");
+  }
+  if (toolName === "ls") {
+    const path = str(parseArgs(input), "path") ?? ".";
+    return t("workspace_tool.ls_title", { path });
+  }
+  return null;
+}
+
 /** 思维链折叠组里 read 步骤的标题(tool-part.tsx getToolTitle 调用)。 */
 export function workspaceReadTitle(toolName: string, input: string, t: TFunction): string | null {
   if (workspaceToolKind(toolName) !== "read") return null;

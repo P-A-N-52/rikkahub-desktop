@@ -153,6 +153,12 @@
     "approval_bash": "AI 请求执行命令",
     "approval_hint": "请确认后批准，AI 将在你的工作区内执行该操作",
     "approval_reason": "触发审批：{{reason}}",
-    "bash_prefix": "执行命令："
+    "bash_prefix": "执行命令：",
+    "grep": "搜索内容",
+    "grep_title": "搜索内容：{{pattern}}",
+    "find": "查找文件",
+    "find_title": "查找文件：{{pattern}}",
+    "ls": "列出目录",
+    "ls_title": "列出目录：{{path}}"
   }
 }

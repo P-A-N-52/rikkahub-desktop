@@ -153,6 +153,12 @@
     "approval_bash": "AI requests to run a command",
     "approval_hint": "Review and approve; AI will perform this action inside your workspace",
     "approval_reason": "Approval required: {{reason}}",
-    "bash_prefix": "Run command: "
+    "bash_prefix": "Run command: ",
+    "grep": "Search content",
+    "grep_title": "Search content: {{pattern}}",
+    "find": "Find files",
+    "find_title": "Find files: {{pattern}}",
+    "ls": "List directory",
+    "ls_title": "List directory: {{path}}"
   }
 }

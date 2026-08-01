@@ -166,6 +166,14 @@
       "edit_title": "Edit Workspace",
       "name_label": "Workspace Name",
       "path_label": "Path"
+    },
+    "shell": {
+      "title": "No usable bash shell found",
+      "desc": "The AI can't run terminal commands on this machine, so built-in read-only grep / find / ls tools are mounted instead. Install Git for Windows and re-check to unlock full command execution.",
+      "install": "Download Git for Windows",
+      "recheck": "Installed, re-check",
+      "recheck_ok": "Bash detected — conversations now get the full toolset",
+      "recheck_fail": "Still no usable bash found. Make sure Git for Windows is installed"
     }
   },
   "window_controls": {

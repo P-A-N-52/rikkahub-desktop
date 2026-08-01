@@ -166,6 +166,14 @@
       "edit_title": "编辑工作区",
       "name_label": "工作区名称",
       "path_label": "路径"
+    },
+    "shell": {
+      "title": "未找到可用的 bash 终端",
+      "desc": "AI 暂时无法执行终端命令，已自动改挂内置的 grep / find / ls 只读检索工具。安装 Git for Windows 后重新检测，即可解锁完整的命令执行能力。",
+      "install": "下载 Git for Windows",
+      "recheck": "已安装，重新检测",
+      "recheck_ok": "检测成功，bash 已可用，会话将挂载完整工具",
+      "recheck_fail": "仍未找到可用的 bash，请确认 Git for Windows 已安装"
     }
   },
   "window_controls": {

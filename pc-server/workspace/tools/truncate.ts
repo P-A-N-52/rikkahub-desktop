@@ -261,3 +261,17 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
   return buf.slice(start).toString("utf-8");
 }
+
+// ----- grep 行截断(pi truncate.ts:268 原样;grep 兜底工具引用) -----
+
+export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
+
+export function truncateLine(
+  line: string,
+  maxChars: number = GREP_MAX_LINE_LENGTH,
+): { text: string; wasTruncated: boolean } {
+  if (line.length <= maxChars) {
+    return { text: line, wasTruncated: false };
+  }
+  return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
+}

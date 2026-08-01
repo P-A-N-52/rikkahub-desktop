@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { FolderGit2, FolderOpen } from "lucide-react";
 
 import { EmptyGreeting } from "~/components/empty-greeting";
+import { WorkspaceShellNotice } from "~/components/workspace/workspace-shell-notice";
 import { Button } from "~/components/ui/button";
 import type { WorkspaceDto } from "~/types";
 
@@ -39,6 +40,7 @@ export function WorkspaceEmptyState({
           </span>
         </span>
       </div>
+      <WorkspaceShellNotice />
       <EmptyGreeting />
       <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
         {EXAMPLE_KEYS.map((key) => (
