@@ -41,7 +41,6 @@ const REASONING_LEVELS: ReasoningLevel[] = ["off", "auto", "low", "medium", "hig
 interface ReasoningPreset {
   key: ReasoningLevel;
   label: string;
-  description: string;
 }
 
 function isReasoningModel(model: ProviderModel | null): boolean {
@@ -78,7 +77,6 @@ function useReasoningPresets(): ReasoningPreset[] {
       REASONING_LEVELS.map((key) => ({
         key,
         label: t(`reasoning.presets.${key}.label`),
-        description: t(`reasoning.presets.${key}.description`),
       })),
     [t],
   );
@@ -166,12 +164,7 @@ export function ReasoningSubmenu({ disabled = false }: ReasoningSubmenuProps) {
               <span className="flex w-[18px] shrink-0 items-center justify-center">
                 {active ? <Check className="size-4 !text-current" /> : null}
               </span>
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate">{preset.label}</span>
-                <span className="truncate text-xs font-normal text-[var(--ds-text-tertiary)]">
-                  {preset.description}
-                </span>
-              </span>
+              <span className="min-w-0 flex-1 truncate">{preset.label}</span>
             </DropdownMenuItem>
           );
         })}
