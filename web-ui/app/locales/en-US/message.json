@@ -131,14 +131,14 @@
   },
   "workspace_tool": {
     "read": "Read file",
-    "read_title": "Read {{path}}",
+    "read_title": "Read file: {{path}}",
     "read_range_both": "from line {{offset}} · {{limit}} lines",
     "read_range_offset": "from line {{offset}}",
     "read_range_limit": "first {{limit}} lines",
     "write_title": "Write file",
-    "write_title_with_path": "Write {{path}}",
+    "write_title_with_path": "Write file: {{path}}",
     "edit_title": "Edit file",
-    "edit_title_with_path": "Edit {{path}}",
+    "edit_title_with_path": "Edit file: {{path}}",
     "bytes": "{{bytes}} bytes",
     "no_output": "(no output)",
     "open_details": "View details",
@@ -152,6 +152,7 @@
     "approval_edit": "AI requests to edit a file",
     "approval_bash": "AI requests to run a command",
     "approval_hint": "Review and approve; AI will perform this action inside your workspace",
-    "approval_reason": "Approval required: {{reason}}"
+    "approval_reason": "Approval required: {{reason}}",
+    "bash_prefix": "Run command: "
   }
 }

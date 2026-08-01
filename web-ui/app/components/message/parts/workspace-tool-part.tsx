@@ -192,10 +192,20 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
     return match ? Number(match[1]) : null;
   }, [model.text]);
 
+  // H7:标题遵循全应用"工具名:操作对象"规则(同 联网搜索:词 / 加载技能:名)。
   const title =
     model.kind === "bash"
       ? command
-      : path || (model.kind === "write" ? t("workspace_tool.write_title") : t("workspace_tool.edit_title"));
+      : path
+        ? t(
+            model.kind === "write"
+              ? "workspace_tool.write_title_with_path"
+              : "workspace_tool.edit_title_with_path",
+            { path },
+          )
+        : model.kind === "write"
+          ? t("workspace_tool.write_title")
+          : t("workspace_tool.edit_title");
   const TitleIcon = model.kind === "bash" ? SquareTerminal : model.kind === "write" ? FilePlus2 : FilePen;
 
   const statusIcon = running ? (
@@ -218,13 +228,15 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
         >
           <span className="shrink-0">{statusIcon}</span>
           <TitleIcon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-sm",
-              model.kind === "bash" ? "font-mono text-[13px]" : "font-medium",
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            {model.kind === "bash" ? (
+              <>
+                {t("workspace_tool.bash_prefix")}
+                <span className="font-mono text-[13px] font-normal">{title}</span>
+              </>
+            ) : (
+              title
             )}
-          >
-            {model.kind === "bash" ? `$ ${title}` : title}
           </span>
           {stats ? (
             <span className="shrink-0 font-mono text-xs">

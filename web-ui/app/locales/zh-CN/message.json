@@ -131,14 +131,14 @@
   },
   "workspace_tool": {
     "read": "读取文件",
-    "read_title": "读取 {{path}}",
+    "read_title": "读取文件：{{path}}",
     "read_range_both": "第 {{offset}} 行起 · {{limit}} 行",
     "read_range_offset": "第 {{offset}} 行起",
     "read_range_limit": "前 {{limit}} 行",
     "write_title": "写入文件",
-    "write_title_with_path": "写入 {{path}}",
+    "write_title_with_path": "写入文件：{{path}}",
     "edit_title": "编辑文件",
-    "edit_title_with_path": "编辑 {{path}}",
+    "edit_title_with_path": "编辑文件：{{path}}",
     "bytes": "{{bytes}} 字节",
     "no_output": "（无输出）",
     "open_details": "查看详情",
@@ -152,6 +152,7 @@
     "approval_edit": "AI 请求编辑文件",
     "approval_bash": "AI 请求执行命令",
     "approval_hint": "请确认后批准，AI 将在你的工作区内执行该操作",
-    "approval_reason": "触发审批：{{reason}}"
+    "approval_reason": "触发审批：{{reason}}",
+    "bash_prefix": "执行命令："
   }
 }
