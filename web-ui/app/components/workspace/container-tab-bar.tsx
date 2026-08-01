@@ -21,6 +21,14 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { Input } from "~/components/ui/input";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "~/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { confirmDialog } from "~/stores/confirm-store";
 import { cn } from "~/lib/utils";
 import {
@@ -106,6 +114,27 @@ export function ContainerTabBar() {
       if (wasActive) navigateToContainer(useContainerTabsStore.getState().activeTab, navigate);
     },
     [navigate],
+  );
+
+  // G4 右键批量关闭:store 更新后按新 activeTab 导航(可能落回原容器,导航幂等)。
+  const closeTabsBatch = React.useCallback(
+    (scope: "others" | "right" | "all", anchor: ContainerKey) => {
+      useContainerTabsStore.getState().closeContainersBatch(scope, anchor);
+      navigateToContainer(useContainerTabsStore.getState().activeTab, navigate);
+    },
+    [navigate],
+  );
+
+  // G4 在资源管理器中显示:path 空串 = 工作区根目录本身(explorer /select 选中)。
+  const revealWorkspace = React.useCallback(
+    (workspace: WorkspaceDto) => {
+      void api
+        .post(`workspaces/${workspace.id}/files/reveal`, { path: "" })
+        .catch((err: unknown) => {
+          toast.error(err instanceof Error ? err.message : t("workspace.menu.reveal_failed"));
+        });
+    },
+    [t],
   );
 
   const createManagedWorkspace = React.useCallback(async () => {
@@ -208,9 +237,32 @@ export function ContainerTabBar() {
             width={tabWidthCalc}
             active={key === activeTab}
             closable={openTabs.length > 1}
+            hasOthers={openTabs.length > 1}
+            hasRight={index < openTabs.length - 1}
             dragging={dragKey === key}
             onActivate={() => activateGuarded(key)}
             onClose={() => closeTab(key)}
+            onCloseOthers={() => closeTabsBatch("others", key)}
+            onCloseRight={() => closeTabsBatch("right", key)}
+            onCloseAll={() => closeTabsBatch("all", key)}
+            onEdit={
+              key === CHAT_CONTAINER
+                ? undefined
+                : () => {
+                    const workspace = workspaceById.get(key);
+                    if (!workspace) return;
+                    setRenameValue(workspace.name);
+                    setRenameTarget(workspace);
+                  }
+            }
+            onReveal={
+              key === CHAT_CONTAINER
+                ? undefined
+                : () => {
+                    const workspace = workspaceById.get(key);
+                    if (workspace) revealWorkspace(workspace);
+                  }
+            }
             onDragStart={() => setDragKey(key)}
             onDragEnd={() => setDragKey(null)}
             onDragOverTab={() => {
@@ -247,8 +299,11 @@ export function ContainerTabBar() {
                     onSelect={() => openWorkspaceFromMenu(workspace)}
                   >
                     <WsIcon className="size-4" strokeWidth={1.75} />
-                    <span className="min-w-0 flex-1 truncate" title={workspace.type === "folder" ? workspace.root : undefined}>
-                      {workspace.name}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{workspace.name}</span>
+                      <span className="truncate text-[11px] leading-4 text-[var(--ds-text-tertiary)]">
+                        {workspace.root}
+                      </span>
                     </span>
                     <span
                       className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/ws:opacity-100"
@@ -314,7 +369,7 @@ export function ContainerTabBar() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* R7 重命名工作区 */}
+      {/* G3 编辑工作区(NewMax 对位):名称可编辑,路径只读可点选(资源管理器中显示) */}
       <Dialog
         open={renameTarget !== null}
         onOpenChange={(open) => {
@@ -323,17 +378,38 @@ export function ContainerTabBar() {
       >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>{t("workspace.menu.rename_title")}</DialogTitle>
+            <DialogTitle>{t("workspace.menu.edit_title")}</DialogTitle>
           </DialogHeader>
-          <Input
-            value={renameValue}
-            autoFocus
-            placeholder={t("workspace.menu.rename_placeholder")}
-            onChange={(event) => setRenameValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void submitRename();
-            }}
-          />
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-[var(--ds-text-secondary)]">
+                {t("workspace.menu.name_label")}
+              </label>
+              <Input
+                value={renameValue}
+                autoFocus
+                placeholder={t("workspace.menu.rename_placeholder")}
+                onChange={(event) => setRenameValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitRename();
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-[var(--ds-text-secondary)]">
+                {t("workspace.menu.path_label")}
+              </label>
+              <button
+                type="button"
+                onClick={() => renameTarget && revealWorkspace(renameTarget)}
+                title={t("workspace.menu.reveal")}
+                className="flex h-9 w-full items-center gap-2 rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
+              >
+                <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
+                <span className="min-w-0 flex-1 truncate">{renameTarget?.root}</span>
+              </button>
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameTarget(null)}>
               {t("workspace.create.cancel")}
@@ -371,9 +447,16 @@ function ContainerTab({
   width,
   active,
   closable,
+  hasOthers,
+  hasRight,
   dragging,
   onActivate,
   onClose,
+  onCloseOthers,
+  onCloseRight,
+  onCloseAll,
+  onEdit,
+  onReveal,
   onDragStart,
   onDragEnd,
   onDragOverTab,
@@ -383,9 +466,16 @@ function ContainerTab({
   width: string;
   active: boolean;
   closable: boolean;
+  hasOthers: boolean;
+  hasRight: boolean;
   dragging: boolean;
   onActivate: () => void;
   onClose: () => void;
+  onCloseOthers: () => void;
+  onCloseRight: () => void;
+  onCloseAll: () => void;
+  onEdit?: () => void;
+  onReveal?: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragOverTab: () => void;
@@ -396,17 +486,17 @@ function ContainerTab({
     ? t("workspace.tabs.chat")
     : (workspace?.name ?? t("workspace.tabs.missing"));
   const Icon = isChat ? MessageSquare : workspace?.type === "folder" ? FolderOpen : Folder;
-  // folder 型 hover 展示真实路径(方案 §4.1);managed 型路径是应用托管目录,不打扰。
-  const tooltip = workspace?.type === "folder" ? workspace.root : label;
-
   // NewMax WorkspaceTab 原样移植:28px 高页签,激活态与下方面板(surface-200)连体——
   // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
   const TAB_CORNER_R = 13;
   return (
+    <ContextMenu>
+      <Tooltip delayDuration={800}>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
     <button
       type="button"
       draggable
-      title={tooltip}
       onClick={onActivate}
       onAuxClick={(event) => {
         if (event.button === 1 && closable) onClose();
@@ -487,5 +577,48 @@ function ContainerTab({
         </div>
       ) : null}
     </button>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="max-w-[380px]">
+          <div className="font-medium">{label}</div>
+          {workspace ? (
+            <div className="mt-0.5 font-normal break-all text-[var(--ds-text-secondary)]">
+              {workspace.root}
+            </div>
+          ) : null}
+        </TooltipContent>
+      </Tooltip>
+      <ContextMenuContent className="min-w-44">
+        {workspace && onEdit ? (
+          <>
+            <ContextMenuItem onSelect={onEdit}>
+              <Pencil className="size-4" strokeWidth={1.75} />
+              {t("workspace.menu.rename")}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        ) : null}
+        <ContextMenuItem disabled={!closable} onSelect={onClose}>
+          {t("workspace.tabs.ctx_close")}
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasOthers} onSelect={onCloseOthers}>
+          {t("workspace.tabs.ctx_close_others")}
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasRight} onSelect={onCloseRight}>
+          {t("workspace.tabs.ctx_close_right")}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={onCloseAll}>{t("workspace.tabs.ctx_close_all")}</ContextMenuItem>
+        {workspace && onReveal ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={onReveal}>
+              <FolderOpen className="size-4" strokeWidth={1.75} />
+              {t("workspace.menu.reveal")}
+            </ContextMenuItem>
+          </>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

@@ -107,7 +107,15 @@
       "missing": "已删除的工作区",
       "untitled": "新对话",
       "new_container": "新建容器",
-      "new_conversation": "新对话"
+      "new_conversation": "新对话",
+      "ctx_rename": "重命名",
+      "ctx_close": "关闭",
+      "ctx_close_others": "关闭其他",
+      "ctx_close_right": "关闭右侧",
+      "ctx_close_all": "关闭全部",
+      "rename_title": "重命名会话",
+      "rename_placeholder": "输入新标题…",
+      "rename_failed": "重命名失败"
     },
     "create": {
       "managed": "默认工作区",
@@ -151,7 +159,12 @@
       "rename_failed": "重命名失败",
       "delete_confirm_title": "删除工作区「{{name}}」？",
       "delete_confirm_desc": "仅移除工作区记录与会话，不会删除磁盘上的文件。",
-      "delete_failed": "删除工作区失败"
+      "delete_failed": "删除工作区失败",
+      "reveal": "在资源管理器中显示",
+      "reveal_failed": "打开资源管理器失败",
+      "edit_title": "编辑工作区",
+      "name_label": "工作区名称",
+      "path_label": "路径"
     }
   }
 }

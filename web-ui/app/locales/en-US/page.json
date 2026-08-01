@@ -107,7 +107,15 @@
       "missing": "Deleted workspace",
       "untitled": "New chat",
       "new_container": "New container",
-      "new_conversation": "New chat"
+      "new_conversation": "New chat",
+      "ctx_rename": "Rename",
+      "ctx_close": "Close",
+      "ctx_close_others": "Close Others",
+      "ctx_close_right": "Close Tabs to the Right",
+      "ctx_close_all": "Close All",
+      "rename_title": "Rename Conversation",
+      "rename_placeholder": "Enter a new title…",
+      "rename_failed": "Rename failed"
     },
     "create": {
       "managed": "Default workspace",
@@ -151,7 +159,12 @@
       "rename_failed": "Failed to rename workspace",
       "delete_confirm_title": "Delete workspace \"{{name}}\"?",
       "delete_confirm_desc": "Only removes the workspace record and conversations; files on disk are untouched.",
-      "delete_failed": "Failed to delete workspace"
+      "delete_failed": "Failed to delete workspace",
+      "reveal": "Show in File Explorer",
+      "reveal_failed": "Failed to open file explorer",
+      "edit_title": "Edit Workspace",
+      "name_label": "Workspace Name",
+      "path_label": "Path"
     }
   }
 }

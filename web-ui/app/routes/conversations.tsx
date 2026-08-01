@@ -2033,6 +2033,7 @@ function ConversationsPageInner() {
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
         <ConversationTabStrip
           conversations={conversations}
+          onRename={handleUpdateConversationTitle}
           trailing={
             canOverrideConversationSystemPrompt ? (
               <Button

@@ -27,6 +27,8 @@ interface ContainerTabsState {
   openContainer: (key: ContainerKey) => void;
   /** 收起容器标签。若关闭的是激活容器,激活其右邻(无则左邻);关到最后一个时回落到对话模式。 */
   closeContainer: (key: ContainerKey) => void;
+  /** 批量收起容器标签(右键菜单):others=只留 anchor;right=关 anchor 右侧;all=全关(回落对话模式)。 */
+  closeContainersBatch: (scope: "others" | "right" | "all", anchor: ContainerKey) => void;
   reorderContainer: (key: ContainerKey, toIndex: number) => void;
 
   /** 在容器内打开会话标签并激活(容器随之打开并激活)。路由是权威,本方法由路由同步调用。 */
@@ -35,6 +37,8 @@ interface ContainerTabsState {
   clearActiveConversation: (container: ContainerKey) => void;
   /** 关闭会话标签。返回该容器关闭后应激活的会话(undefined = 关闭的不是激活标签,无需导航)。 */
   closeConversation: (container: ContainerKey, conversationId: string) => string | null | undefined;
+  /** 批量关闭会话标签(右键菜单)。返回容器关闭后应激活的会话(undefined = 激活标签未受影响)。 */
+  closeConversationsBatch: (container: ContainerKey, scope: "others" | "right" | "all", anchor: string) => string | null | undefined;
   /** 会话被删除时从所有容器状态中移除。 */
   forgetConversation: (conversationId: string) => void;
   /** 工作区被删除后清理其容器标签与二层状态。 */
@@ -127,6 +131,23 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       return { openTabs, activeTab };
     }),
 
+  closeContainersBatch: (scope, anchor) =>
+    set((state) => {
+      const index = state.openTabs.indexOf(anchor);
+      if (index < 0) return state;
+      const openTabs =
+        scope === "others"
+          ? [anchor]
+          : scope === "right"
+            ? state.openTabs.slice(0, index + 1)
+            : [];
+      if (openTabs.length === 0) {
+        return { openTabs: [CHAT_CONTAINER], activeTab: CHAT_CONTAINER };
+      }
+      const activeTab = openTabs.includes(state.activeTab) ? state.activeTab : anchor;
+      return { openTabs, activeTab };
+    }),
+
   reorderContainer: (key, toIndex) =>
     set((state) => {
       const from = state.openTabs.indexOf(key);
@@ -175,6 +196,25 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       conversationTabs: { ...state.conversationTabs, [container]: nextTabs },
       ...(wasActive
         ? { activeConversation: { ...state.activeConversation, [container]: nextActive ?? null } }
+        : {}),
+    });
+    return nextActive;
+  },
+
+  closeConversationsBatch: (container, scope, anchor) => {
+    const state = get();
+    const tabs = state.conversationTabs[container] ?? [];
+    const index = tabs.indexOf(anchor);
+    if (index < 0) return undefined;
+    const nextTabs =
+      scope === "others" ? [anchor] : scope === "right" ? tabs.slice(0, index + 1) : [];
+    const currentActive = state.activeConversation[container] ?? null;
+    const activeStays = currentActive !== null && nextTabs.includes(currentActive);
+    const nextActive = activeStays ? undefined : nextTabs.length > 0 ? anchor : null;
+    set({
+      conversationTabs: { ...state.conversationTabs, [container]: nextTabs },
+      ...(nextActive !== undefined
+        ? { activeConversation: { ...state.activeConversation, [container]: nextActive } }
         : {}),
     });
     return nextActive;
