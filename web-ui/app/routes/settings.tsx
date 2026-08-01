@@ -152,9 +152,9 @@ export default function SettingsPage() {
           mobileContentOpen ? "hidden md:flex" : "flex",
         )}
       >
-        {/* pt-9 让出沉浸式标题栏高度,标题栏透明后内容仍顶到窗口顶但不会被盖住。
+        {/* 原生标题栏回归后无需再为沉浸标题栏让位,普通页内间距即可。
             border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。 */}
-        <div className="flex items-center gap-2 border-b border-divider px-4 pb-3 pt-9">
+        <div className="flex items-center gap-2 border-b border-divider px-4 py-3">
           <Button asChild size="icon-sm" variant="ghost">
             <Link to="/">
               <ArrowLeft className="size-4" />
@@ -202,8 +202,7 @@ export default function SettingsPage() {
       </aside>
       <main className={cn("min-w-0 flex-1", mobileContentOpen ? "block" : "hidden md:block")}>
         <ScrollArea className="h-svh">
-          <div className="mx-auto w-full max-w-5xl px-6 pb-6 pt-9">
-            {/* pt-9 与左侧 aside 顶部对齐,让出沉浸式透明标题栏高度,避免各板块内容贴顶。 */}
+          <div className="mx-auto w-full max-w-5xl px-6 py-6">
             {/* 窄屏内容页头:返回导航列表 + 当前分区名(md 起隐藏) */}
             <div className="mb-4 flex items-center gap-2 md:hidden">
               <Button

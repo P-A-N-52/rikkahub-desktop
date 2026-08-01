@@ -210,8 +210,7 @@ export default function ImagesPage() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      {/* aside 顶部 pt-9 让出沉浸式透明标题栏高度,与设置页一致。 */}
-      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-9 md:block">
+      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-4 md:block">
         <div className="flex items-center justify-between">
           <Button asChild size="icon-sm" variant="ghost">
             <Link
@@ -312,7 +311,7 @@ export default function ImagesPage() {
           </div>
         </div>
         <ScrollArea className="flex-1">
-          <div className="mx-auto max-w-6xl space-y-6 p-4 pb-8 md:pt-9">
+          <div className="mx-auto max-w-6xl space-y-6 p-4 pb-8 md:pt-6">
             <section className="rounded-xl border bg-card p-4 shadow-card">
               <Textarea
                 value={prompt}

@@ -33,6 +33,7 @@ import { AvatarCropper } from "~/components/avatar-cropper";
 import { RenameConversationDialog } from "~/components/rename-conversation-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import Logo from "~/components/logo";
 import {
   Dialog,
   DialogContent,
@@ -850,8 +851,15 @@ export const ConversationSidebar = React.memo(
     return (
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
-          {/* 用户资料行 + 折叠钮(F1:按用户要求回归顶部,不学 NewMax 的用户归底) */}
-          <div className="flex items-start gap-1">
+          {/* 品牌行(G8):Logo+应用名居左,折叠钮居右 */}
+          <div className="flex h-8 items-center justify-between pl-2 pr-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <Logo className="size-5 shrink-0 text-primary" />
+              <span className="truncate text-sm font-semibold text-[var(--ds-text-primary)]">RikkaHub</span>
+            </div>
+            <SidebarTrigger className="shrink-0 text-muted-foreground hover:text-foreground" />
+          </div>
+          {/* 用户资料行(F1:按用户要求保持顶部,不学 NewMax 的用户归底) */}
           <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
             <DialogTrigger asChild>
               <button
@@ -921,8 +929,6 @@ export const ConversationSidebar = React.memo(
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <SidebarTrigger className="mt-2 shrink-0 text-muted-foreground hover:text-foreground" />
-          </div>
         </SidebarHeader>
         <SidebarContent className="min-h-0">
           <SidebarGroup>

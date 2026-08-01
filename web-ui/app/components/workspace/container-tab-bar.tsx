@@ -39,7 +39,7 @@ import type { WorkspaceDto } from "~/types";
 // 一层容器标签栏(工作区 M2-1;前端重构A1 复刻 NewMax 浏览器式页签):
 // 激活标签白底(bg-card)上圆角,与下方白色内容面板连成一体;非激活为画布上的
 // 幽灵态。中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚+右端渐隐。
-// 所在行落在沉浸标题栏高度带内,空白处穿透给 TitleBar 拖拽层(见 conversations.tsx)。
+// 所在行是内容列撞色带顶部的纯交互行(原生标题栏负责窗控/拖拽,见 conversations.tsx)。
 
 /** 点击/循环切换容器:激活并导航到该容器上次停留的会话(无则回"新对话"首页)。 */
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {

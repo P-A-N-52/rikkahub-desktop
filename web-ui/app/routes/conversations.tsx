@@ -2021,11 +2021,10 @@ function ConversationsPageInner() {
             下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
             pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。 */}
         <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
-          {/* 一级容器标签行:空白处 pointer-events 穿透到 TitleBar 拖拽层(z-40)完成
-              窗口拖拽,标签本体 z-50 恢复交互;右端 pr-36 让出窗控按钮区。 */}
-          <div className="pointer-events-none flex h-[31px] shrink-0 items-end gap-1 pl-1 pr-36">
+          {/* 一级容器标签行:原生标题栏回归后窗控/拖拽都由系统负责,本行纯交互。 */}
+          <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
             <CollapsedSidebarTrigger />
-            <div className="pointer-events-auto relative z-50 flex h-full min-w-0 flex-1 items-end">
+            <div className="relative flex h-full min-w-0 flex-1 items-end">
               <ContainerTabBar />
             </div>
           </div>

@@ -17,7 +17,6 @@ import "./app.css";
 import "./i18n";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/theme-provider";
-import { TitleBar } from "./components/title-bar";
 import { UpdateDialog, type UpdateInfo } from "./components/update-dialog";
 import { WebAuthGate } from "./components/web-auth-gate";
 import { StartupGate } from "./components/startup-gate";
@@ -335,7 +334,6 @@ function AppContent() {
 
   return (
     <ThemeProvider defaultTheme="light">
-      <TitleBar />
       {/* 路由切换即时呈现,不做过渡动画(专题1 B 族终案):AnimatePresence mode="wait" 的
           串行动画(旧页淡出→新页淡入)必然穿越空白帧,在整页切换场景被感知为闪动;
           成熟桌面应用的主区域切换均为即时切换 —— React 单次提交内旧页换新页,

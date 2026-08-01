@@ -1581,24 +1581,6 @@
    来"平滑"切换,但长会话下 DOM 有数万节点,每个都做 transition 会让 style recalc
    风暴,切主题时整个应用卡死。专业应用(IDE / 设计工具)切主题本就是瞬间的,干脆。 */
 
-/* 沉浸式标题栏:TitleBar 是浮在窗口顶部的透明拖拽层(z-50, 高 36px),不再往下推
-   内容——侧边栏和正文都顶到窗口最顶端(y=0),让各自的背景色从底到顶连续不断。
-   代价:标题栏那 36px 会盖住侧边栏顶部和正文顶部的一截。所以给两者的顶部内边距
-   各加 36px,让实际内容(用户按钮 / 顶栏)落在标题栏下方,不被遮挡,同时背景色仍顶到顶。 */
-:root:has([data-tauri-drag-region]) [data-slot="sidebar-header"] {
-  padding-top: 2.25rem;
-}
-:root:has([data-tauri-drag-region]) .h-screen,
-:root:has([data-tauri-drag-region]) .h-svh {
-  height: 100svh;
-}
-:root:has([data-tauri-drag-region]) .min-h-screen,
-:root:has([data-tauri-drag-region]) .min-h-svh {
-  min-height: 100svh;
-}
-/* shadcn `Sidebar` 挂成 fixed inset-y-0,默认顶到 viewport 边——正是我们要的(顶到窗口顶)。
-   不再像之前那样把它往下 snap 36px。 */
-
 /* MX Brutalist 主题下 sidebar footer 背景是深绿色,但底部入口按钮和文字仍引用
    主内容区的 muted-foreground/foreground(深棕/近黑),导致完全看不清。
    在 footer 作用域内把相关变量映射到 sidebar 自己的浅色前景系统,既保留主内容区
