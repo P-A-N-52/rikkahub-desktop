@@ -1,57 +1,59 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Geist+Mono:wght@300;400;500;600;700&display=swap");
+@import "./fonts.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.992 0.002 240);
-  --foreground: oklch(0.18 0.005 240);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.005 240);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.005 240);
-  --primary: oklch(0.24 0.01 240);
-  --primary-foreground: oklch(0.992 0.002 240);
-  --secondary: oklch(0.96 0.003 240);
-  --secondary-foreground: oklch(0.24 0.01 240);
-  --muted: oklch(0.96 0.003 240);
-  --muted-foreground: oklch(0.55 0.01 240);
-  --accent: oklch(0.96 0.003 240);
-  --accent-foreground: oklch(0.24 0.01 240);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.9 0.004 240 / 0.62);
-  --input: oklch(0.94 0.004 240);
-  --ring: oklch(0.708 0 0);
+  /* ===== 默认主题 = NewMax 视觉复刻(2026-08-01 前端重构 A0) =====
+     暖奶油画布 + 白色浮起面板 + 墨绿品牌色,取自参考项目 design-tokens.css。
+     预置(data-theme)与用户自定义主题照旧覆写这些同名变量,机制不变。 */
+  --background: #f2eee6;
+  --foreground: #181b19;
+  --card: #ffffff;
+  --card-foreground: #181b19;
+  --popover: #ffffff;
+  --popover-foreground: #181b19;
+  --primary: #2d4739;
+  --primary-foreground: rgba(255, 255, 255, 0.9);
+  --secondary: #f6f4ef;
+  --secondary-foreground: #181b19;
+  --muted: #f6f4ef;
+  --muted-foreground: rgba(24, 27, 25, 0.64);
+  --accent: rgba(55, 61, 58, 0.06);
+  --accent-foreground: #181b19;
+  --destructive: #b64a34;
+  --destructive-foreground: rgba(255, 255, 255, 0.92);
+  --border: rgba(24, 27, 25, 0.1);
+  --input: rgba(24, 27, 25, 0.08);
+  --ring: color-mix(in srgb, #2d4739 60%, transparent);
   /* 板块分界线专用:比 --border 更淡,用于侧边栏边界、正文顶栏下沿等"区域分隔",
      让大区块之间的界线退到背景里,不抢视觉。输入框/卡片等仍用 --border。 */
-  --divider: oklch(0.965 0.002 240 / 0.35);
-  /* AI 图标底色:固定取 default 主题的 secondary 值,在任何 colorTheme 下都不变,
-     让供应商/模型 logo 的"画板"始终保持中性底,不被花色主题染色。只随明暗模式切换。 */
-  --ai-icon-bg: oklch(0.96 0.003 240);
+  --divider: rgba(24, 27, 25, 0.06);
+  /* AI 图标底色:固定中性底,不被花色主题染色,只随明暗模式切换。 */
+  --ai-icon-bg: #f6f4ef;
   --chart-1: oklch(0.81 0.1 252);
   --chart-2: oklch(0.62 0.19 260);
   --chart-3: oklch(0.55 0.22 263);
   --chart-4: oklch(0.49 0.22 264);
   --chart-5: oklch(0.42 0.18 266);
-  --sidebar: oklch(0.985 0.002 240);
-  --sidebar-foreground: oklch(0.18 0.005 240);
-  --sidebar-primary: oklch(0.24 0.01 240);
-  --sidebar-primary-foreground: oklch(0.992 0.002 240);
-  --sidebar-accent: oklch(0.96 0.003 240);
-  --sidebar-accent-foreground: oklch(0.24 0.01 240);
-  --sidebar-border: oklch(0.94 0.004 240 / 0.4);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #f2eee6;
+  --sidebar-foreground: #181b19;
+  --sidebar-primary: #2d4739;
+  --sidebar-primary-foreground: rgba(255, 255, 255, 0.9);
+  --sidebar-accent: rgba(55, 61, 58, 0.07);
+  --sidebar-accent-foreground: #181b19;
+  --sidebar-border: rgba(24, 27, 25, 0.06);
+  --sidebar-ring: color-mix(in srgb, #2d4739 60%, transparent);
   --font-sans:
-    "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    "Inter Variable", "Inter", "Noto Sans SC Variable", "Noto Sans SC", "PingFang SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono:
-    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Spline Sans Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
-  /* 默认代码字体:参考现代 IDE 与图1等宽观感,优先尝试 Maple Mono / JetBrains Mono / Fira Code,
-     系统中未安装则回退到系统默认等宽栈。块内代码文本使用此变量,块 UI 文字仍走对话字体。 */
+  /* 默认代码字体:优先尝试本机安装的现代等宽字体,未安装则回退系统等宽栈。 */
   --rikkahub-code-font:
     "Maple Mono", "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", ui-monospace,
     SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -81,52 +83,88 @@
   --surface-floating: var(--popover);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+
+  /* ===== NewMax 设计令牌(--ds-*) =====
+     阴影/圆角/动效为主题中性;带色令牌一律由语义变量派生(color-mix),
+     预置/自定义主题无需覆写即可正确适配。表面色阶仅默认主题的组件样式使用。 */
+  --ds-surface-100: #ffffff;
+  --ds-surface-200: #faf9f5;
+  --ds-surface-300: #f6f4ef;
+  --ds-surface-400: #f2eee6;
+  --ds-on-surface: rgba(55, 61, 58, 0.06);
+  --ds-on-surface-active: rgba(55, 61, 58, 0.08);
+  --ds-pill-bg: color-mix(in srgb, var(--primary) 12%, transparent);
+  --ds-success: #287d46;
+  --ds-warning: #916300;
+  --ds-success-bg: color-mix(in srgb, var(--ds-success) 8%, var(--card));
+  --ds-warning-bg: color-mix(in srgb, var(--ds-warning) 8%, var(--card));
+  --ds-danger-bg: color-mix(in srgb, var(--destructive) 8%, var(--card));
+  --ds-radius-sm: 8px;
+  --ds-radius-md: 12px;
+  --ds-radius-lg: 18px;
+  --ds-radius-pill: 64px;
+  --ds-chat-composer-radius: 20px;
+  --ds-elevation-100: inset 0.5px 0.5px 0.5px #ffffff, 0px 0px 0.5px 0.5px rgba(0, 0, 0, 0.04), 0.5px 0.5px 1px rgba(0, 0, 0, 0.08);
+  --ds-elevation-200: 0px 0px 0px 0.5px color-mix(in srgb, var(--primary) 12%, transparent), 0px 9px 4px rgba(0, 0, 0, 0.01), 0px 5px 3px rgba(0, 0, 0, 0.02), 0px 2px 2px rgba(0, 0, 0, 0.03), 0px 1px 1px rgba(0, 0, 0, 0.04), inset 0.5px 0.5px 0.5px rgba(255, 255, 255, 0.85);
+  --ds-elevation-300: inset 0 0 0.5px 0.5px rgba(255, 255, 255, 0.8), 0 0 0 0.5px rgba(0, 0, 0, 0.04), 0px 3px 6px 0px rgba(0, 0, 0, 0.04), 0px 11px 11px 0px rgba(0, 0, 0, 0.03), 0px 24px 15px 0px rgba(0, 0, 0, 0.02), 0px 43px 17px 0px rgba(0, 0, 0, 0.01);
+  --ds-chat-composer-shadow: inset 0 0 0.5px rgba(255, 255, 255, 0.84), 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 0 4px -1px rgba(0, 0, 0, 0.05), 0 0 14px -5px rgba(0, 0, 0, 0.07), 0 0 28px -10px rgba(0, 0, 0, 0.07);
+  --ds-chat-composer-shadow-focus: inset 0 0 0.5px rgba(255, 255, 255, 0.88), 0 0 0 0.5px rgba(0, 0, 0, 0.14), 0 0 6px -2px rgba(0, 0, 0, 0.07), 0 0 18px -6px rgba(0, 0, 0, 0.09), 0 0 34px -12px rgba(0, 0, 0, 0.1);
+  --ds-input-shadow: 0px 0px 0.5px 0.5px rgba(0, 0, 0, 0.08), 0.5px 0.5px 1px 0px rgba(0, 0, 0, 0.12);
+  --ds-input-shadow-inset: inset 0.5px 0.5px 0.5px 0px white;
+  --ds-input-shadow-hover: 0px 0px 0.5px 0.5px rgba(0, 0, 0, 0.04), 0 0 0 0.5px color-mix(in srgb, var(--primary) 24%, transparent), 0.5px 0.5px 1px 0px rgba(0, 0, 0, 0.08);
+  --ds-input-shadow-focus: 0px 0px 0.5px 0.5px rgba(0, 0, 0, 0.04), 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent), 0.5px 0.5px 1px 0px rgba(0, 0, 0, 0.08);
+  --ds-menu-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 2px 1px 5px 0 rgba(50, 48, 48, 0.06), 8px 6px 10px 0 rgba(50, 48, 48, 0.05), 18px 13px 13px 0 rgba(50, 48, 48, 0.03), 31px 24px 16px 0 rgba(50, 48, 48, 0.01);
+  --ds-menu-shadow-inset: inset 0.5px 0.5px 0px 0px white;
+  --ds-ease-swift: cubic-bezier(0.33, 1, 0.68, 1);
+  --ds-ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ds-ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --ds-ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --ds-duration-fast: 180ms;
+  --ds-duration-base: 240ms;
+  --ds-duration-slow: 350ms;
+  --ds-motion-swift: var(--ds-duration-fast) var(--ds-ease-swift);
+  --ds-motion-soft: var(--ds-duration-base) var(--ds-ease-soft);
+  --ds-motion-spring: var(--ds-duration-base) var(--ds-ease-spring);
+  --ds-font-display-number: "Spline Sans Mono", ui-monospace, monospace;
 }
 
 .dark {
-  --background: oklch(0.12 0.006 240);
-  --foreground: oklch(0.93 0.006 240);
-  --card: oklch(0.16 0.01 240);
-  --card-foreground: oklch(0.93 0.006 240);
-  --popover: oklch(0.18 0.01 240);
-  --popover-foreground: oklch(0.93 0.006 240);
-  --primary: oklch(0.96 0.004 240);
-  --primary-foreground: oklch(0.12 0.006 240);
-  --secondary: oklch(0.2 0.01 240);
-  --secondary-foreground: oklch(0.93 0.006 240);
-  --muted: oklch(0.18 0.01 240);
-  --muted-foreground: oklch(0.65 0.01 240);
-  --accent: oklch(0.22 0.01 240);
-  --accent-foreground: oklch(0.96 0.004 240);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.22 0.01 240 / 0.5);
-  --input: oklch(0.24 0.01 240);
-  --ring: oklch(0.556 0 0);
-  --divider: oklch(0.18 0.01 240 / 0.3);
-  --ai-icon-bg: oklch(0.2 0.01 240);
+  /* NewMax 暗色:近黑炭底 + 荧绿品牌色;表面色阶反转(100 最暗 → 400 最亮)。 */
+  --background: #191a1a;
+  --foreground: rgba(255, 255, 255, 0.9);
+  --card: #1e1f1f;
+  --card-foreground: rgba(255, 255, 255, 0.9);
+  --popover: #252726;
+  --popover-foreground: rgba(255, 255, 255, 0.9);
+  --primary: #36d385;
+  --primary-foreground: rgba(0, 0, 0, 0.9);
+  --secondary: #252726;
+  --secondary-foreground: rgba(255, 255, 255, 0.9);
+  --muted: #252726;
+  --muted-foreground: rgba(255, 255, 255, 0.5);
+  --accent: rgba(168, 184, 176, 0.08);
+  --accent-foreground: rgba(255, 255, 255, 0.9);
+  --destructive: #e56555;
+  --destructive-foreground: rgba(255, 255, 255, 0.92);
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: color-mix(in srgb, #36d385 60%, transparent);
+  --divider: rgba(255, 255, 255, 0.07);
+  --ai-icon-bg: #2a2d2b;
   --chart-1: oklch(0.81 0.1 252);
   --chart-2: oklch(0.62 0.19 260);
   --chart-3: oklch(0.55 0.22 263);
   --chart-4: oklch(0.49 0.22 264);
   --chart-5: oklch(0.42 0.18 266);
-  --sidebar: oklch(0.14 0.008 240);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.275 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol", "Noto Color Emoji";
-  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-  --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
-  --radius: 0.625rem;
+  --sidebar: #191a1a;
+  --sidebar-foreground: rgba(255, 255, 255, 0.9);
+  --sidebar-primary: #36d385;
+  --sidebar-primary-foreground: rgba(0, 0, 0, 0.9);
+  --sidebar-accent: rgba(168, 184, 176, 0.1);
+  --sidebar-accent-foreground: rgba(255, 255, 255, 0.9);
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+  --sidebar-ring: color-mix(in srgb, #36d385 60%, transparent);
+  --radius: 0.75rem;
   --shadow-x: 0;
   --shadow-y: 1px;
   --shadow-blur: 3px;
@@ -152,6 +190,31 @@
   --surface-floating: var(--popover);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+
+  /* NewMax 设计令牌暗色值(预置主题的暗色态一并继承,均为中性/派生色)。 */
+  --ds-surface-100: #191a1a;
+  --ds-surface-200: #1e1f1f;
+  --ds-surface-300: #252726;
+  --ds-surface-400: #2a2d2b;
+  --ds-on-surface: rgba(168, 184, 176, 0.08);
+  --ds-on-surface-active: rgba(168, 184, 176, 0.16);
+  --ds-pill-bg: color-mix(in srgb, var(--primary) 8%, transparent);
+  --ds-success: #4ade80;
+  --ds-warning: #e0a830;
+  --ds-success-bg: color-mix(in srgb, var(--ds-success) 12%, var(--card));
+  --ds-warning-bg: color-mix(in srgb, var(--ds-warning) 12%, var(--card));
+  --ds-danger-bg: color-mix(in srgb, var(--destructive) 12%, var(--card));
+  --ds-elevation-100: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --ds-elevation-200: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 0 9px -4px rgba(0, 0, 0, 0.4), 0 0 32px -8px rgba(0, 0, 0, 0.16);
+  --ds-elevation-300: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 2px 12px -6px rgba(0, 0, 0, 0.44), 0 5px 36px -12px rgba(0, 0, 0, 0.2);
+  --ds-chat-composer-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 0 20px -10px rgba(0, 0, 0, 0.08);
+  --ds-chat-composer-shadow-focus: inset 0 0 0 0.5px rgba(255, 255, 255, 0.13), 0 0 24px -12px rgba(0, 0, 0, 0.1);
+  --ds-input-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --ds-input-shadow-inset: none;
+  --ds-input-shadow-hover: 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+  --ds-input-shadow-focus: 0 0 1px 0.5px color-mix(in srgb, var(--primary) 56%, transparent), 0 0 0 4px color-mix(in srgb, var(--primary) 10%, transparent);
+  --ds-menu-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 0 9px -4px rgba(0, 0, 0, 0.5), 0 0 32px -8px rgba(0, 0, 0, 0.2);
+  --ds-menu-shadow-inset: none;
 }
 
 :root[data-theme="claude"] {
