@@ -384,11 +384,12 @@ export function ContainerTabBar() {
           if (!open) setRenameTarget(null);
         }}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("workspace.menu.edit_title")}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          {/* min-w-0:DialogContent 是 grid,不压住 auto 最小宽的话长路径会把格子撑出对话框 */}
+          <div className="min-w-0 space-y-4">
             <div className="space-y-1.5">
               <label className="text-[13px] font-medium text-[var(--ds-text-secondary)]">
                 {t("workspace.menu.name_label")}
@@ -411,7 +412,7 @@ export function ContainerTabBar() {
                 type="button"
                 onClick={() => renameTarget && revealWorkspace(renameTarget)}
                 aria-label={t("workspace.menu.reveal")}
-                className="flex h-9 w-full items-center gap-2 rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
+                className="flex h-9 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
               >
                 <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
                 <span className="min-w-0 flex-1 truncate">{renameTarget?.root}</span>
