@@ -53,7 +53,10 @@ import type { WorkspaceDto } from "~/types";
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {
   const store = useContainerTabsStore.getState();
   store.activateContainer(key);
-  const conversationId = store.activeConversation[key];
+  // J 轮分栏后:容器的"上次停留会话" = 聚焦窗格的激活会话。
+  const panes = store.panes[key] ?? [];
+  const focused = Math.max(0, Math.min(store.focusedPane[key] ?? 0, panes.length - 1));
+  const conversationId = panes[focused]?.active ?? null;
   navigate(conversationId ? `/c/${conversationId}` : "/");
 }
 

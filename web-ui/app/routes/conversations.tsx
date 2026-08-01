@@ -68,13 +68,19 @@ import { WindowControlsBar } from "~/components/window-controls";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
 import { useWorkspaceStore } from "~/stores/workspace-store";
-import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-store";
+import {
+  CHAT_CONTAINER,
+  type ConversationPane,
+  useContainerTabsStore,
+} from "~/stores/container-tabs-store";
+import { useTabDragStore } from "~/stores/tab-drag-store";
 import {
   useWorkbench,
   useWorkbenchController,
   WorkbenchProvider,
 } from "~/components/workbench/workbench-context";
 import {
+  type ConversationListDto,
   type MessageNodeDto,
   type MessageDto,
   type ProviderModel,
@@ -1292,19 +1298,59 @@ export default function ConversationsPage() {
   );
 }
 
-function ConversationsPageInner() {
+// ===== J 轮分栏:每窗格一份的会话视图 =====
+// 订阅/选择器/草稿/编辑态/三个会话级对话框全部收进本组件,以 conversationId 为参数——
+// 双栏/三栏 = 渲染多个实例。流订阅(entries 多路)与草稿(drafts 按会话键)天然隔离,
+// 打字/流式只重渲染所属窗格。页面层只保留侧栏、容器标签、热键、工作台等全局职责。
+
+const DEFAULT_PANES: ConversationPane[] = [{ tabs: [], active: null }];
+
+type CurrentAssistantValue = ReturnType<typeof useCurrentAssistant>["currentAssistant"];
+
+interface ConversationPaneViewProps {
+  paneIndex: number;
+  /** 是否聚焦窗格:路由 /c/:id、侧栏高亮、全局拖放与热键都跟随聚焦窗格。 */
+  focused: boolean;
+  /** 本窗格的会话:聚焦窗格由路由权威(null = "新对话"态);非聚焦窗格 = 窗格激活标签。 */
+  conversationId: string | null;
+  isHomeRoute: boolean;
+  homeDraftId: string;
+  setHomeDraftId: React.Dispatch<React.SetStateAction<string>>;
+  setActiveId: React.Dispatch<React.SetStateAction<string | null>>;
+  navigate: ReturnType<typeof useNavigate>;
+  refreshList: () => void;
+  settings: Settings | null;
+  conversations: ConversationListDto[];
+  activeWorkspace?: React.ComponentProps<typeof WorkspaceEmptyState>["workspace"];
+  currentAssistantId: ReturnType<typeof useCurrentAssistant>["currentAssistantId"];
+  currentAssistant: CurrentAssistantValue;
+  onRenameConversation: (conversationId: string, title: string) => Promise<void>;
+  onFocusPane: (index: number) => void;
+}
+
+const ConversationPaneView = React.memo(function ConversationPaneView({
+  paneIndex,
+  focused,
+  conversationId,
+  isHomeRoute,
+  homeDraftId,
+  setHomeDraftId,
+  setActiveId,
+  navigate,
+  refreshList,
+  settings,
+  conversations,
+  activeWorkspace,
+  currentAssistantId,
+  currentAssistant,
+  onRenameConversation,
+  onFocusPane,
+}: ConversationPaneViewProps) {
   const { t } = useTranslation("page");
-  const navigate = useNavigate();
-  const { id: routeId } = useParams();
-  const isHomeRoute = !routeId;
-  const isMobile = useIsMobile();
-  const { panel, closePanel } = useWorkbench();
+  const activeId = conversationId;
+  // 非聚焦窗格永远有会话(多窗格不变量:空窗格即收起),"新对话"态只属于聚焦窗格。
+  const paneIsHome = focused && isHomeRoute;
 
-  const { settings, assistants, currentAssistantId, currentAssistant } = useCurrentAssistant();
-  const { conversations, activeId, setActiveId, loading, error, hasMore, loadMore, refreshList } =
-    useConversationList({ currentAssistantId, routeId, autoSelectFirst: !isHomeRoute });
-
-  const [homeDraftId, setHomeDraftId] = React.useState(() => createHomeDraftId());
   const [editingSession, setEditingSession] = React.useState<EditingSession | null>(null);
   const [compressDialogOpen, setCompressDialogOpen] = React.useState(false);
   const [compressTargetTokens, setCompressTargetTokens] = React.useState(2000);
@@ -1323,11 +1369,10 @@ function ConversationsPageInner() {
   const [systemPromptDialogOpen, setSystemPromptDialogOpen] = React.useState(false);
   const [systemPromptDraft, setSystemPromptDraft] = React.useState("");
 
-  // 订阅生命周期挂在顶层:会话打开即持流,与消息面板的条件渲染解耦
-  // (未来多标签页 = 每个页签容器各挂一份,同会话自动共享一条流)。
+  // 订阅生命周期挂在窗格顶层:窗格打开即持流,与消息面板的条件渲染解耦。
+  // 分栏 = 每窗格各挂一份,同会话自动共享一条流。
   useConversationSubscription(activeId);
-  // 顶层只用窄选择器取标量/稳定引用 —— zustand 按 Object.is 比较选择值,流式内容
-  // 增量期间这些值不变,顶层(侧边栏/顶栏/对话框)零重渲染(D 族根治的另一半)。
+  // 窄选择器取标量/稳定引用 —— 流式增量期间这些值不变,窗格壳零重渲染。
   const conversationAssistantId = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.detail?.assistantId ?? null) : null,
   );
@@ -1340,9 +1385,6 @@ function ConversationsPageInner() {
   const hasDetail = useConversationStore((state) =>
     activeId ? state.entries[activeId]?.detail != null : false,
   );
-  // 会话缓存命中率的展示位已定(H4):二级标签悬停卡,见 conversation-tab-strip.tsx
-  // 的 TabTooltipBody。此处 A1 时代的停显留码选择器使命完成,已删。
-  // 节点增删才变(流式 chunk 只改节点内部),导出/压缩入口的可用性开关
   const hasMessages = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.detail?.messages.length ?? 0) > 0 : false,
   );
@@ -1354,6 +1396,10 @@ function ConversationsPageInner() {
   const detailError = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.error ?? null) : null,
   );
+  const chatSuggestions =
+    useConversationStore((state) =>
+      activeId ? state.entries[activeId]?.detail?.chatSuggestions : undefined,
+    ) ?? EMPTY_SUGGESTIONS;
 
   const {
     draftKey,
@@ -1364,7 +1410,7 @@ function ConversationsPageInner() {
     getCurrentSubmitParts,
   } = useDraftInputController({
     activeId,
-    isHomeRoute,
+    isHomeRoute: paneIsHome,
     homeDraftId,
     setHomeDraftId,
     setActiveId,
@@ -1372,49 +1418,17 @@ function ConversationsPageInner() {
     refreshList,
   });
 
-  const activeConversation = conversations.find((item) => item.id === activeId);
-  // ===== 双层标签页(工作区 M2-1) =====
-  // 路由 /c/:id 是权威:会话的容器归属(列表 meta 或详情快照的 workspaceId)一旦可知,
-  // 就把对应容器与会话标签打开——搜索跨容器命中、外部链接进入都自然切换容器。
-  const detailWorkspaceId = useConversationStore((state) =>
-    activeId ? state.entries[activeId]?.detail?.workspaceId : undefined,
-  );
-  React.useEffect(() => {
-    if (!activeId) return;
-    const workspaceId = activeConversation ? activeConversation.workspaceId : detailWorkspaceId;
-    if (workspaceId === undefined) return; // 归属未知(列表/详情都未到),等下一拍
-    useContainerTabsStore.getState().openConversation(workspaceId ?? CHAT_CONTAINER, activeId);
-  }, [activeId, activeConversation, detailWorkspaceId]);
-  const activeContainer = useContainerTabsStore((state) => state.activeTab);
-  // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)
-  const activeWorkspace = useWorkspaceStore((state) =>
-    activeContainer === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeContainer),
-  );
-  // 侧栏语义随容器切换(方案 §3.1):只列当前容器的会话;完整列表仍用于标题查找等。
-  const containerConversations = React.useMemo(
-    () =>
-      conversations.filter((item) =>
-        activeContainer === CHAT_CONTAINER
-          ? item.workspaceId == null
-          : item.workspaceId === activeContainer,
-      ),
-    [activeContainer, conversations],
-  );
-  // 快照整体替换时才换引用;node_update 展开会话对象时该字段引用原样带过,流式期间稳定
-  const chatSuggestions =
-    useConversationStore((state) =>
-      activeId ? state.entries[activeId]?.detail?.chatSuggestions : undefined,
-    ) ?? EMPTY_SUGGESTIONS;
+  const activeConversationMeta = conversations.find((item) => item.id === activeId);
   const activeAssistantForConversation = React.useMemo(() => {
     const assistantId =
-      conversationAssistantId ?? activeConversation?.assistantId ?? currentAssistantId;
+      conversationAssistantId ?? activeConversationMeta?.assistantId ?? currentAssistantId;
     return (
       settings?.assistants.find((assistant) => assistant.id === assistantId) ??
       currentAssistant ??
       null
     );
   }, [
-    activeConversation?.assistantId,
+    activeConversationMeta?.assistantId,
     conversationAssistantId,
     currentAssistant,
     currentAssistantId,
@@ -1435,48 +1449,20 @@ function ConversationsPageInner() {
     systemPromptDialogOpen,
   ]);
 
-  React.useEffect(() => {
-    const base = t("conversations.meta.title");
-    document.title = activeConversation?.title ? `${activeConversation.title} - ${base}` : base;
-    return () => {
-      document.title = base;
-    };
-  }, [activeConversation?.title, t]);
-  const isNewChat = isHomeRoute && !activeId;
+  const isNewChat = paneIsHome && !activeId;
   const showSuggestions =
     Boolean(activeId) && !detailLoading && !detailError && chatSuggestions.length > 0;
   const displaySuggestions = showSuggestions ? chatSuggestions : EMPTY_SUGGESTIONS;
-
-  const handleSelect = React.useCallback(
-    (id: string, messageId?: string) => {
-      setActiveId(id);
-      // 搜索命中带 messageId 时通过 URL query 传给详情页,加载完成后滚到那条消息位置
-      // (对齐安卓);普通点击不带 messageId,维持原"进入会话滚底部"行为。
-      const target = messageId ? `/c/${id}?msg=${messageId}` : `/c/${id}`;
-      // 同会话也要 navigate 以更新 query(搜索当前会话的某条消息)
-      if (routeId !== id || messageId) {
-        navigate(target);
-      }
-    },
-    [navigate, routeId, setActiveId],
-  );
 
   React.useEffect(() => {
     setEditingSession(null);
   }, [activeId]);
 
-  const handleAssistantChange = React.useCallback(
-    async (assistantId: string) => {
-      await api.post<{ status: string }>("settings/assistant", { assistantId });
-      await refreshSettingsStore();
-      setActiveId(null);
-      if (routeId) {
-        navigate("/", { replace: true });
-      }
-      refreshList();
-    },
-    [navigate, refreshList, routeId, setActiveId],
-  );
+  /** 交互改路由前先聚焦本窗格(fork/新建等依赖"路由同步进聚焦窗格"的语义)。 */
+  const focusSelf = React.useCallback(() => {
+    const store = useContainerTabsStore.getState();
+    store.focusPane(store.activeTab, paneIndex);
+  }, [paneIndex]);
 
   const handleToolApproval = React.useCallback(
     async (toolCallId: string, approved: boolean, reason: string, answer?: string) => {
@@ -1529,11 +1515,13 @@ function ConversationsPageInner() {
           messageId,
         },
       );
+      // fork 结果在本窗格打开:先聚焦,路由同步效应会把新会话挂进聚焦窗格。
+      focusSelf();
       setActiveId(response.conversationId);
       navigate(`/c/${response.conversationId}`);
       refreshList();
     },
-    [activeId, navigate, refreshList, setActiveId],
+    [activeId, focusSelf, navigate, refreshList, setActiveId],
   );
 
   const handleTranslateMessage = React.useCallback(async (messageId: string) => {
@@ -1621,100 +1609,13 @@ function ConversationsPageInner() {
     refreshList,
   ]);
 
-  const handleTogglePinConversation = React.useCallback(
-    async (conversationId: string) => {
-      await api.post<{ status: string }>(`conversations/${conversationId}/pin`);
-      refreshList();
-    },
-    [refreshList],
-  );
-
-  const handleRegenerateConversationTitle = React.useCallback(
-    async (conversationId: string) => {
-      // R7-4:标题生成设 120s 客户端上限(原 timeout:false 会让侧栏 spinner 跟着卡死的
-      // 后端无限转)。ky 超时会 abort 底层请求;后端在落库前检查 request.signal,
-      // 超时后的迟到结果不落库。
-      await api.post<{ status: string }>(
-        `conversations/${conversationId}/regenerate-title`,
-        undefined,
-        { timeout: 120_000 },
-      );
-      // 有活跃订阅(当前打开/未来其它页签)才需要重取,refreshConversation 对未订阅 id 空操作
-      refreshConversation(conversationId);
-      refreshList();
-    },
-    [refreshList],
-  );
-
-  const handleMoveConversation = React.useCallback(
-    async (conversationId: string, assistantId: string) => {
-      await api.post<{ status: string }>(`conversations/${conversationId}/move`, { assistantId });
-      if (conversationId === activeId) {
-        setActiveId(null);
-        setHomeDraftId(createHomeDraftId());
-        if (routeId === conversationId) {
-          navigate("/", { replace: true });
-        }
-      }
-      refreshList();
-    },
-    [activeId, navigate, refreshList, routeId, setActiveId],
-  );
-
-  const handleUpdateConversationTitle = React.useCallback(
-    async (conversationId: string, title: string) => {
-      await api.post<{ status: string }>(`conversations/${conversationId}/title`, { title });
-      refreshList();
-    },
-    [refreshList],
-  );
-
-  const handleDeleteConversation = React.useCallback(
-    async (conversationId: string) => {
-      await api.delete<Record<string, never>>(`conversations/${conversationId}`, {
-        parseJson: (raw) => (raw ? JSON.parse(raw) : {}),
-      });
-      evictConversations([conversationId]);
-      useContainerTabsStore.getState().forgetConversation(conversationId);
-      if (conversationId === activeId) {
-        setActiveId(null);
-        setHomeDraftId(createHomeDraftId());
-        if (routeId === conversationId) {
-          navigate("/", { replace: true });
-        }
-      }
-      refreshList();
-    },
-    [activeId, navigate, refreshList, routeId, setActiveId],
-  );
-
-  const handleDeleteConversations = React.useCallback(
-    async (conversationIds: string[]) => {
-      await api.post<{ status: string; deleted: number }>("conversations/batch-delete", {
-        ids: conversationIds,
-      });
-      evictConversations(conversationIds);
-      for (const id of conversationIds) useContainerTabsStore.getState().forgetConversation(id);
-      if (activeId && conversationIds.includes(activeId)) {
-        setActiveId(null);
-        setHomeDraftId(createHomeDraftId());
-        if (routeId && conversationIds.includes(routeId)) {
-          navigate("/", { replace: true });
-        }
-      }
-      refreshList();
-    },
-    [activeId, navigate, refreshList, routeId, setActiveId],
-  );
-
   const handleCompressConversation = React.useCallback(() => {
     if (!activeId) return;
     setCompressDialogOpen(true);
   }, [activeId]);
 
   // 提示词优化时提取最近 3 轮对话(6 条消息)的纯文本,让优化模型理解"那个""上次的"等指代。
-  // 只取 text part —— 图片(image)、文件(document)、工具调用(tool)、思维链(reasoning)全部被
-  // filter 排除,不会发给优化模型。截断到 4000 字符避免吃掉 token 预算。首条消息时返回空。
+  // 只取 text part,截断到 4000 字符;首条消息时返回空。
   const getOptimizeContext = React.useCallback((): string => {
     // 点击优化时按需读取(不订阅):事件处理器拿最新值即可,不为它拉宽重渲染面
     const detail = activeId ? useConversationStore.getState().entries[activeId]?.detail : null;
@@ -1769,70 +1670,6 @@ function ConversationsPageInner() {
     }
   }, [activeId, compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, refreshList]);
 
-  const handleCreateConversation = React.useCallback(() => {
-    closePanel();
-    setActiveId(null);
-    setHomeDraftId(createHomeDraftId());
-
-    if (routeId) {
-      navigate("/");
-    }
-  }, [closePanel, navigate, routeId, setActiveId]);
-
-  // 切换到上/下个会话(按侧边栏列表顺序:置顶优先,然后按更新时间降序,与展示一致)。
-  const switchConversation = (direction: -1 | 1) => {
-    if (!activeId || containerConversations.length === 0) return;
-    const index = containerConversations.findIndex((c) => c.id === activeId);
-    if (index === -1) return;
-    const target = containerConversations[index + direction];
-    if (!target) return;
-    setActiveId(target.id);
-    navigate(`/c/${target.id}`);
-  };
-
-  // 重命名当前会话:打开自定义 Dialog(替代 WebView2 原生 prompt —— 其标题栏硬编码
-  // "localhost:8080 显示",无法定制、样式与应用割裂)。Dialog 内部处理输入校验与确认。
-  const [renameOpen, setRenameOpen] = React.useState(false);
-  const renameActiveConversation = () => {
-    if (!activeId) return;
-    if (!conversations.some((c) => c.id === activeId)) return;
-    setRenameOpen(true);
-  };
-
-  // 快捷键事件接入:ref 每次 render 更新最新闭包,useEffect 只挂一次监听,避免重建与陈旧。
-  const hotkeyHandlerRef = React.useRef<(action: HotkeyBusAction) => void>(() => {});
-  hotkeyHandlerRef.current = (action: HotkeyBusAction) => {
-    switch (action) {
-      case "newConversation":
-        handleCreateConversation();
-        break;
-      case "prevConversation":
-        switchConversation(-1);
-        break;
-      case "nextConversation":
-        switchConversation(1);
-        break;
-      case "renameConversation":
-        renameActiveConversation();
-        break;
-      case "searchConversations":
-        break;
-    }
-  };
-
-  React.useEffect(() => {
-    const actions: HotkeyBusAction[] = [
-      "newConversation",
-      "prevConversation",
-      "nextConversation",
-      "renameConversation",
-    ];
-    const offs = actions.map((action) =>
-      onHotkeyAction(action, () => hotkeyHandlerRef.current(action)),
-    );
-    return () => offs.forEach((off) => off());
-  }, []);
-
   const handleStop = React.useCallback(async () => {
     if (!activeId) return;
     await api.post<{ status: string }>(`conversations/${activeId}/stop`);
@@ -1869,219 +1706,172 @@ function ConversationsPageInner() {
     [activeAssistantForConversation?.allowConversationSystemPrompt, activeId, refreshList],
   );
 
-  const hasWorkbenchPanel = Boolean(panel);
-  const workbenchPanelRef = React.useRef<PanelImperativeHandle | null>(null);
+  // J 轮拖拽分栏:拖动会话标签悬停内容区时三分区高亮——左/右 = 拖出为左/右侧新窗格,
+  // 中 = 移入本窗格。落点动作与高亮都读内存 store(dataTransfer 在 dragover 读不到)。
+  const draggingConversation = useTabDragStore((state) => state.draggingId);
+  const [dropZone, setDropZone] = React.useState<"left" | "center" | "right" | null>(null);
 
-  React.useEffect(() => {
-    if (isMobile) return;
+  const resolveDropZone = (event: React.DragEvent<HTMLDivElement>): "left" | "center" | "right" => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = (event.clientX - rect.left) / Math.max(1, rect.width);
+    return ratio < 0.25 ? "left" : ratio > 0.75 ? "right" : "center";
+  };
 
-    const workbenchPanel = workbenchPanelRef.current;
-    if (!workbenchPanel) return;
-
-    if (hasWorkbenchPanel) {
-      workbenchPanel.expand();
+  const handleZoneDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const draggingId = useTabDragStore.getState().draggingId;
+    setDropZone(null);
+    useTabDragStore.getState().setDragging(null);
+    if (!draggingId) return;
+    const store = useContainerTabsStore.getState();
+    const container = store.activeTab;
+    const zone = resolveDropZone(event);
+    if (zone === "center") {
+      store.moveConversationToPane(container, draggingId, paneIndex);
     } else {
-      workbenchPanel.collapse();
+      const ok = store.splitConversation(
+        container,
+        draggingId,
+        zone === "left" ? paneIndex : paneIndex + 1,
+      );
+      // 分栏被拒(已达 MAX_PANES / 源窗格只剩一个标签)→ 退化为移入本窗格。
+      if (!ok) store.moveConversationToPane(container, draggingId, paneIndex);
     }
-  }, [hasWorkbenchPanel, isMobile]);
-
-  const chatContent = (
-    <div
-      className={cn("flex flex-1 flex-col min-h-0 overflow-hidden", isNewChat && "justify-center")}
-    >
-      {!isNewChat && (
-        <>
-          {canOverrideConversationSystemPrompt && hasDetail ? (
-            <ConversationSystemPromptButton
-              value={conversationSystemPrompt}
-              onSave={handleSaveConversationSystemPromptValue}
-            />
-          ) : null}
-          <div className="relative flex min-h-0 flex-1">
-            <ConversationTimeline
-              activeId={activeId}
-              isHomeRoute={isHomeRoute}
-              settings={settings}
-              onEdit={handleStartEdit}
-              onDelete={handleDeleteMessage}
-              onFork={handleForkMessage}
-              onRegenerate={handleRegenerate}
-              onSelectBranch={handleSelectBranch}
-              onTranslate={handleTranslateMessage}
-              onToolApproval={handleToolApproval}
-            />
-          </div>
-        </>
-      )}
-
-      <div>
-        {isNewChat && (activeWorkspace ? (
-          <WorkspaceEmptyState workspace={activeWorkspace} onPrompt={handleClickSuggestion} />
-        ) : (
-          <div className="mb-6 text-center">
-            <EmptyGreeting />
-          </div>
-        ))}
-        {/* Floating chunked-TTS play bar — pops in only while a message is being read out
-            via the per-chunk pipeline (TtsController), shows the dual ring + transport. */}
-        <TtsPlayBar />
-        <ChatInputArea
-          draftKey={draftKey}
-          isGenerating={conversationIsGenerating}
-          disabled={detailLoading || Boolean(detailError)}
-          isEditing={Boolean(editingSession)}
-          suggestions={displaySuggestions}
-          onSuggestionClick={handleClickSuggestion}
-          onCancelEdit={editingSession ? handleCancelEdit : undefined}
-          shouldDeleteFileOnRemove={shouldDeleteAttachmentFileOnRemove}
-          onSend={handleSend}
-          onStop={activeId ? handleStop : undefined}
-          onExportConversation={
-            hasMessages
-              ? async (includeReasoning: boolean) => {
-                  // 导出需要完整历史:窗口化(I-2)时先拉全量;拿不到完整历史则报错
-                  // 放弃,绝不导出被窗口截断的部分内容。
-                  const detail = activeId ? await ensureFullConversationDetail(activeId) : null;
-                  if (!detail) {
-                    if (activeId) toast.error(t("conversations.errors.load_detail_failed"));
-                    return;
-                  }
-                  const content = await convertConversationToMarkdown(detail, includeReasoning);
-                  const filename = safeMarkdownFilename(detail.title || "conversation");
-                  downloadMarkdown(content, filename);
-                }
-              : undefined
-          }
-          onCompressConversation={hasMessages ? handleCompressConversation : undefined}
-          getOptimizeContext={getOptimizeContext}
-        />
-      </div>
-    </div>
-  );
+    navigate(`/c/${draggingId}`);
+  };
 
   return (
-    <SidebarProvider defaultOpen className="h-svh overflow-hidden">
-      <GlobalDropZone draftKey={draftKey} disabled={detailLoading || Boolean(detailError)} />
-      <RenameConversationDialog
-        open={renameOpen}
-        onOpenChange={setRenameOpen}
-        currentTitle={conversations.find((c) => c.id === activeId)?.title ?? ""}
-        onConfirm={(nextTitle) => {
-          if (!activeId) return;
-          void handleUpdateConversationTitle(activeId, nextTitle);
-        }}
-      />
-      <ConversationSidebar
-        conversations={containerConversations}
-        activeId={activeId}
-        loading={loading}
-        error={error}
-        hasMore={hasMore}
-        loadMore={loadMore}
-        userName={
-          settings?.displaySetting.userNickname?.trim() || t("conversations.user.default_name")
+    <div
+      className="relative flex h-full min-h-0 flex-1 flex-col"
+      // 点击非聚焦窗格任意处 → 聚焦并把路由切到它的激活会话。
+      onMouseDownCapture={focused ? undefined : () => onFocusPane(paneIndex)}
+    >
+      <ConversationTabStrip
+        paneIndex={paneIndex}
+        conversations={conversations}
+        onRename={onRenameConversation}
+        trailing={
+          canOverrideConversationSystemPrompt ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setSystemPromptDialogOpen(true)}
+              disabled={!hasDetail}
+              aria-label={t("conversations.custom_prompt.edit_aria")}
+              title={t("conversations.custom_prompt.edit_aria")}
+            >
+              <Pencil className="size-4" />
+            </Button>
+          ) : null
         }
-        userAvatar={settings?.displaySetting.userAvatar}
-        assistants={assistants}
-        assistantTags={settings?.assistantTags ?? []}
-        currentAssistantId={currentAssistantId}
-        onSelect={handleSelect}
-        onAssistantChange={handleAssistantChange}
-        onPin={handleTogglePinConversation}
-        onRegenerateTitle={handleRegenerateConversationTitle}
-        onMoveToAssistant={handleMoveConversation}
-        onUpdateTitle={handleUpdateConversationTitle}
-        onDelete={handleDeleteConversation}
-        onDeleteMany={handleDeleteConversations}
-        onCreateConversation={handleCreateConversation}
-        webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
-      <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pt-1.5 pr-2 pb-2 pl-2">
-        {/* I1 窗控带:与画布同色(透明露底),右缘窗控钮;I4 减高 1/3(pt-1.5+22=28px),
-            与侧栏品牌行(h-7 上提 4px)垂直中心平齐。浏览器预览下组件返回 null。 */}
-        <WindowControlsBar />
-        {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
-            下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
-            pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。 */}
-        <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
-          {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。 */}
-          <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
-            <CollapsedSidebarTrigger />
-            <div className="relative flex h-full min-w-0 flex-1 items-end">
-              <ContainerTabBar />
-            </div>
-          </div>
-          {/* 白色圆角内容面板:surface-200 底 + elevation-100,盖住撞色带主体,
-              激活页签经连接条与面板连体;底部圆角与 wrapper 的 18px 对齐。 */}
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
-        <ConversationTabStrip
-          conversations={conversations}
-          onRename={handleUpdateConversationTitle}
-          trailing={
-            canOverrideConversationSystemPrompt ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setSystemPromptDialogOpen(true)}
-                disabled={!hasDetail}
-                aria-label={t("conversations.custom_prompt.edit_aria")}
-                title={t("conversations.custom_prompt.edit_aria")}
-              >
-                <Pencil className="size-4" />
-              </Button>
-            ) : null
-          }
-        />
 
-        {!isMobile ? (
-          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-            <ResizablePanel
-              defaultSize={hasWorkbenchPanel ? 64 : 100}
-              minSize={40}
-              className="flex min-h-0 flex-col"
-            >
-              {chatContent}
-            </ResizablePanel>
-            <ResizableHandle
-              withHandle
-              className={cn(!hasWorkbenchPanel && "pointer-events-none opacity-0")}
-            />
-            <ResizablePanel
-              defaultSize={hasWorkbenchPanel ? 36 : 0}
-              minSize={24}
-              collapsible
-              collapsedSize={0}
-              panelRef={workbenchPanelRef}
-              className="flex min-h-0 flex-col"
-            >
-              {panel ? (
-                <WorkbenchHost panel={panel} onClose={closePanel} className="border-l-0" />
-              ) : null}
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        ) : (
-          chatContent
+      <div
+        className={cn(
+          "flex flex-1 flex-col min-h-0 overflow-hidden",
+          isNewChat && "justify-center",
+        )}
+      >
+        {!isNewChat && (
+          <>
+            {canOverrideConversationSystemPrompt && hasDetail ? (
+              <ConversationSystemPromptButton
+                value={conversationSystemPrompt}
+                onSave={handleSaveConversationSystemPromptValue}
+              />
+            ) : null}
+            <div className="relative flex min-h-0 flex-1">
+              <ConversationTimeline
+                activeId={activeId}
+                isHomeRoute={paneIsHome}
+                settings={settings}
+                onEdit={handleStartEdit}
+                onDelete={handleDeleteMessage}
+                onFork={handleForkMessage}
+                onRegenerate={handleRegenerate}
+                onSelectBranch={handleSelectBranch}
+                onTranslate={handleTranslateMessage}
+                onToolApproval={handleToolApproval}
+              />
+            </div>
+          </>
         )}
 
-        {isMobile && panel ? (
-          <Drawer
-            open={hasWorkbenchPanel}
-            onOpenChange={(open) => {
-              if (!open) {
-                closePanel();
-              }
-            }}
-            direction="bottom"
-          >
-            <DrawerContent className="h-[85vh] max-h-[85vh]">
-              <WorkbenchHost panel={panel} onClose={closePanel} className="border-l-0" />
-            </DrawerContent>
-          </Drawer>
-        ) : null}
-          </div>
+        <div>
+          {isNewChat &&
+            (activeWorkspace ? (
+              <WorkspaceEmptyState workspace={activeWorkspace} onPrompt={handleClickSuggestion} />
+            ) : (
+              <div className="mb-6 text-center">
+                <EmptyGreeting />
+              </div>
+            ))}
+          {/* 分块 TTS 播放条是全局单例状态,只挂在聚焦窗格,避免分栏时重复显示。 */}
+          {focused ? <TtsPlayBar /> : null}
+          <ChatInputArea
+            draftKey={draftKey}
+            isGenerating={conversationIsGenerating}
+            disabled={detailLoading || Boolean(detailError)}
+            isEditing={Boolean(editingSession)}
+            suggestions={displaySuggestions}
+            onSuggestionClick={handleClickSuggestion}
+            onCancelEdit={editingSession ? handleCancelEdit : undefined}
+            shouldDeleteFileOnRemove={shouldDeleteAttachmentFileOnRemove}
+            onSend={handleSend}
+            onStop={activeId ? handleStop : undefined}
+            onExportConversation={
+              hasMessages
+                ? async (includeReasoning: boolean) => {
+                    // 导出需要完整历史:窗口化(I-2)时先拉全量;拿不到完整历史则报错
+                    // 放弃,绝不导出被窗口截断的部分内容。
+                    const detail = activeId ? await ensureFullConversationDetail(activeId) : null;
+                    if (!detail) {
+                      if (activeId) toast.error(t("conversations.errors.load_detail_failed"));
+                      return;
+                    }
+                    const content = await convertConversationToMarkdown(detail, includeReasoning);
+                    const filename = safeMarkdownFilename(detail.title || "conversation");
+                    downloadMarkdown(content, filename);
+                  }
+                : undefined
+            }
+            onCompressConversation={hasMessages ? handleCompressConversation : undefined}
+            getOptimizeContext={getOptimizeContext}
+          />
         </div>
-      </SidebarInset>
+      </div>
+
+      {draggingConversation ? (
+        <div
+          className="absolute inset-x-0 bottom-0 top-9 z-30"
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDropZone(resolveDropZone(event));
+          }}
+          onDragLeave={() => setDropZone(null)}
+          onDrop={handleZoneDrop}
+        >
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-y-1 left-1 w-1/4 rounded-xl transition-colors duration-150",
+              dropZone === "left" && "bg-primary/10 ring-1 ring-primary/30",
+            )}
+          />
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-y-1 left-1/4 right-1/4 rounded-xl transition-colors duration-150",
+              dropZone === "center" && "bg-primary/10 ring-1 ring-primary/30",
+            )}
+          />
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-y-1 right-1 w-1/4 rounded-xl transition-colors duration-150",
+              dropZone === "right" && "bg-primary/10 ring-1 ring-primary/30",
+            )}
+          />
+        </div>
+      ) : null}
 
       <Dialog
         open={compressDialogOpen}
@@ -2210,7 +2000,6 @@ function ConversationsPageInner() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
       <Dialog open={systemPromptDialogOpen} onOpenChange={setSystemPromptDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -2235,6 +2024,422 @@ function ConversationsPageInner() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+});
+
+function ConversationsPageInner() {
+  const { t } = useTranslation("page");
+  const navigate = useNavigate();
+  const { id: routeId } = useParams();
+  const isHomeRoute = !routeId;
+  const isMobile = useIsMobile();
+  const { panel, closePanel } = useWorkbench();
+
+  const { settings, assistants, currentAssistantId, currentAssistant } = useCurrentAssistant();
+  const { conversations, activeId, setActiveId, loading, error, hasMore, loadMore, refreshList } =
+    useConversationList({ currentAssistantId, routeId, autoSelectFirst: !isHomeRoute });
+
+  const [homeDraftId, setHomeDraftId] = React.useState(() => createHomeDraftId());
+
+  const activeConversation = conversations.find((item) => item.id === activeId);
+  // ===== 双层标签页(工作区 M2-1) =====
+  // 路由 /c/:id 是权威:会话的容器归属(列表 meta 或详情快照的 workspaceId)一旦可知,
+  // 就把对应容器与会话标签打开——搜索跨容器命中、外部链接进入都自然切换容器。
+  // J 轮分栏:openConversation 命中已开窗格时聚焦过去,否则进当前聚焦窗格。
+  const detailWorkspaceId = useConversationStore((state) =>
+    activeId ? state.entries[activeId]?.detail?.workspaceId : undefined,
+  );
+  React.useEffect(() => {
+    if (!activeId) return;
+    const workspaceId = activeConversation ? activeConversation.workspaceId : detailWorkspaceId;
+    if (workspaceId === undefined) return; // 归属未知(列表/详情都未到),等下一拍
+    useContainerTabsStore.getState().openConversation(workspaceId ?? CHAT_CONTAINER, activeId);
+  }, [activeId, activeConversation, detailWorkspaceId]);
+  const activeContainer = useContainerTabsStore((state) => state.activeTab);
+  // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)
+  const activeWorkspace = useWorkspaceStore((state) =>
+    activeContainer === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeContainer),
+  );
+  // 侧栏语义随容器切换(方案 §3.1):只列当前容器的会话;完整列表仍用于标题查找等。
+  const containerConversations = React.useMemo(
+    () =>
+      conversations.filter((item) =>
+        activeContainer === CHAT_CONTAINER
+          ? item.workspaceId == null
+          : item.workspaceId === activeContainer,
+      ),
+    [activeContainer, conversations],
+  );
+
+  // J 轮分栏:窗格列表 + 聚焦窗格。聚焦窗格的会话以路由为权威,非聚焦窗格用窗格激活标签。
+  const containerPanes = useContainerTabsStore((state) => state.panes[state.activeTab]);
+  const paneList = containerPanes && containerPanes.length > 0 ? containerPanes : DEFAULT_PANES;
+  const focusedPaneIndex = useContainerTabsStore((state) => {
+    const count = state.panes[state.activeTab]?.length ?? 1;
+    return Math.max(0, Math.min(state.focusedPane[state.activeTab] ?? 0, count - 1));
+  });
+
+  const handleFocusPane = React.useCallback(
+    (index: number) => {
+      const store = useContainerTabsStore.getState();
+      const container = store.activeTab;
+      const count = store.panes[container]?.length ?? 1;
+      const current = Math.max(0, Math.min(store.focusedPane[container] ?? 0, count - 1));
+      if (current === index) return;
+      const target = store.focusPane(container, index);
+      setActiveId(target);
+      navigate(target ? `/c/${target}` : "/");
+    },
+    [navigate, setActiveId],
+  );
+
+  React.useEffect(() => {
+    const base = t("conversations.meta.title");
+    document.title = activeConversation?.title ? `${activeConversation.title} - ${base}` : base;
+    return () => {
+      document.title = base;
+    };
+  }, [activeConversation?.title, t]);
+
+  const handleSelect = React.useCallback(
+    (id: string, messageId?: string) => {
+      setActiveId(id);
+      // 搜索命中带 messageId 时通过 URL query 传给详情页,加载完成后滚到那条消息位置
+      // (对齐安卓);普通点击不带 messageId,维持原"进入会话滚底部"行为。
+      const target = messageId ? `/c/${id}?msg=${messageId}` : `/c/${id}`;
+      // 同会话也要 navigate 以更新 query(搜索当前会话的某条消息)
+      if (routeId !== id || messageId) {
+        navigate(target);
+      }
+    },
+    [navigate, routeId, setActiveId],
+  );
+
+  const handleAssistantChange = React.useCallback(
+    async (assistantId: string) => {
+      await api.post<{ status: string }>("settings/assistant", { assistantId });
+      await refreshSettingsStore();
+      setActiveId(null);
+      if (routeId) {
+        navigate("/", { replace: true });
+      }
+      refreshList();
+    },
+    [navigate, refreshList, routeId, setActiveId],
+  );
+
+  const handleTogglePinConversation = React.useCallback(
+    async (conversationId: string) => {
+      await api.post<{ status: string }>(`conversations/${conversationId}/pin`);
+      refreshList();
+    },
+    [refreshList],
+  );
+
+  const handleRegenerateConversationTitle = React.useCallback(
+    async (conversationId: string) => {
+      // R7-4:标题生成设 120s 客户端上限(原 timeout:false 会让侧栏 spinner 跟着卡死的
+      // 后端无限转)。ky 超时会 abort 底层请求;后端在落库前检查 request.signal,
+      // 超时后的迟到结果不落库。
+      await api.post<{ status: string }>(
+        `conversations/${conversationId}/regenerate-title`,
+        undefined,
+        { timeout: 120_000 },
+      );
+      // 有活跃订阅(当前打开/未来其它页签)才需要重取,refreshConversation 对未订阅 id 空操作
+      refreshConversation(conversationId);
+      refreshList();
+    },
+    [refreshList],
+  );
+
+  const handleMoveConversation = React.useCallback(
+    async (conversationId: string, assistantId: string) => {
+      await api.post<{ status: string }>(`conversations/${conversationId}/move`, { assistantId });
+      if (conversationId === activeId) {
+        setActiveId(null);
+        setHomeDraftId(createHomeDraftId());
+        if (routeId === conversationId) {
+          navigate("/", { replace: true });
+        }
+      }
+      refreshList();
+    },
+    [activeId, navigate, refreshList, routeId, setActiveId],
+  );
+
+  const handleUpdateConversationTitle = React.useCallback(
+    async (conversationId: string, title: string) => {
+      await api.post<{ status: string }>(`conversations/${conversationId}/title`, { title });
+      refreshList();
+    },
+    [refreshList],
+  );
+
+  const handleDeleteConversation = React.useCallback(
+    async (conversationId: string) => {
+      await api.delete<Record<string, never>>(`conversations/${conversationId}`, {
+        parseJson: (raw) => (raw ? JSON.parse(raw) : {}),
+      });
+      evictConversations([conversationId]);
+      useContainerTabsStore.getState().forgetConversation(conversationId);
+      if (conversationId === activeId) {
+        setActiveId(null);
+        setHomeDraftId(createHomeDraftId());
+        if (routeId === conversationId) {
+          navigate("/", { replace: true });
+        }
+      }
+      refreshList();
+    },
+    [activeId, navigate, refreshList, routeId, setActiveId],
+  );
+
+  const handleDeleteConversations = React.useCallback(
+    async (conversationIds: string[]) => {
+      await api.post<{ status: string; deleted: number }>("conversations/batch-delete", {
+        ids: conversationIds,
+      });
+      evictConversations(conversationIds);
+      for (const id of conversationIds) useContainerTabsStore.getState().forgetConversation(id);
+      if (activeId && conversationIds.includes(activeId)) {
+        setActiveId(null);
+        setHomeDraftId(createHomeDraftId());
+        if (routeId && conversationIds.includes(routeId)) {
+          navigate("/", { replace: true });
+        }
+      }
+      refreshList();
+    },
+    [activeId, navigate, refreshList, routeId, setActiveId],
+  );
+
+  const handleCreateConversation = React.useCallback(() => {
+    closePanel();
+    setActiveId(null);
+    setHomeDraftId(createHomeDraftId());
+
+    if (routeId) {
+      navigate("/");
+    }
+  }, [closePanel, navigate, routeId, setActiveId]);
+
+  // 切换到上/下个会话(按侧边栏列表顺序:置顶优先,然后按更新时间降序,与展示一致)。
+  const switchConversation = (direction: -1 | 1) => {
+    if (!activeId || containerConversations.length === 0) return;
+    const index = containerConversations.findIndex((c) => c.id === activeId);
+    if (index === -1) return;
+    const target = containerConversations[index + direction];
+    if (!target) return;
+    setActiveId(target.id);
+    navigate(`/c/${target.id}`);
+  };
+
+  // 重命名当前会话:打开自定义 Dialog(替代 WebView2 原生 prompt —— 其标题栏硬编码
+  // "localhost:8080 显示",无法定制、样式与应用割裂)。Dialog 内部处理输入校验与确认。
+  const [renameOpen, setRenameOpen] = React.useState(false);
+  const renameActiveConversation = () => {
+    if (!activeId) return;
+    if (!conversations.some((c) => c.id === activeId)) return;
+    setRenameOpen(true);
+  };
+
+  // 快捷键事件接入:ref 每次 render 更新最新闭包,useEffect 只挂一次监听,避免重建与陈旧。
+  const hotkeyHandlerRef = React.useRef<(action: HotkeyBusAction) => void>(() => {});
+  hotkeyHandlerRef.current = (action: HotkeyBusAction) => {
+    switch (action) {
+      case "newConversation":
+        handleCreateConversation();
+        break;
+      case "prevConversation":
+        switchConversation(-1);
+        break;
+      case "nextConversation":
+        switchConversation(1);
+        break;
+      case "renameConversation":
+        renameActiveConversation();
+        break;
+      case "searchConversations":
+        break;
+    }
+  };
+
+  React.useEffect(() => {
+    const actions: HotkeyBusAction[] = [
+      "newConversation",
+      "prevConversation",
+      "nextConversation",
+      "renameConversation",
+    ];
+    const offs = actions.map((action) =>
+      onHotkeyAction(action, () => hotkeyHandlerRef.current(action)),
+    );
+    return () => offs.forEach((off) => off());
+  }, []);
+
+  const hasWorkbenchPanel = Boolean(panel);
+  const workbenchPanelRef = React.useRef<PanelImperativeHandle | null>(null);
+
+  React.useEffect(() => {
+    if (isMobile) return;
+
+    const workbenchPanel = workbenchPanelRef.current;
+    if (!workbenchPanel) return;
+
+    if (hasWorkbenchPanel) {
+      workbenchPanel.expand();
+    } else {
+      workbenchPanel.collapse();
+    }
+  }, [hasWorkbenchPanel, isMobile]);
+
+  // 全局拖放附件落进聚焦窗格的草稿(草稿键推导与窗格内 useDraftInputController 一致)。
+  const focusedDraftKey = activeId ?? (isHomeRoute ? homeDraftId : null);
+  const focusedDetailLoading = useConversationStore((state) => {
+    if (!activeId) return false;
+    const entry = state.entries[activeId];
+    return (entry?.subscribing ?? false) && (entry?.detail ?? null) === null;
+  });
+  const focusedDetailError = useConversationStore((state) =>
+    activeId ? (state.entries[activeId]?.error ?? null) : null,
+  );
+
+  const renderPane = (pane: ConversationPane, index: number) => (
+    <ConversationPaneView
+      paneIndex={index}
+      focused={index === focusedPaneIndex}
+      conversationId={index === focusedPaneIndex ? activeId : pane.active}
+      isHomeRoute={isHomeRoute}
+      homeDraftId={homeDraftId}
+      setHomeDraftId={setHomeDraftId}
+      setActiveId={setActiveId}
+      navigate={navigate}
+      refreshList={refreshList}
+      settings={settings}
+      conversations={conversations}
+      activeWorkspace={activeWorkspace}
+      currentAssistantId={currentAssistantId}
+      currentAssistant={currentAssistant}
+      onRenameConversation={handleUpdateConversationTitle}
+      onFocusPane={handleFocusPane}
+    />
+  );
+
+  return (
+    <SidebarProvider defaultOpen className="h-svh overflow-hidden">
+      <GlobalDropZone
+        draftKey={focusedDraftKey}
+        disabled={focusedDetailLoading || Boolean(focusedDetailError)}
+      />
+      <RenameConversationDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        currentTitle={conversations.find((c) => c.id === activeId)?.title ?? ""}
+        onConfirm={(nextTitle) => {
+          if (!activeId) return;
+          void handleUpdateConversationTitle(activeId, nextTitle);
+        }}
+      />
+      <ConversationSidebar
+        conversations={containerConversations}
+        activeId={activeId}
+        loading={loading}
+        error={error}
+        hasMore={hasMore}
+        loadMore={loadMore}
+        userName={
+          settings?.displaySetting.userNickname?.trim() || t("conversations.user.default_name")
+        }
+        userAvatar={settings?.displaySetting.userAvatar}
+        assistants={assistants}
+        assistantTags={settings?.assistantTags ?? []}
+        currentAssistantId={currentAssistantId}
+        onSelect={handleSelect}
+        onAssistantChange={handleAssistantChange}
+        onPin={handleTogglePinConversation}
+        onRegenerateTitle={handleRegenerateConversationTitle}
+        onMoveToAssistant={handleMoveConversation}
+        onUpdateTitle={handleUpdateConversationTitle}
+        onDelete={handleDeleteConversation}
+        onDeleteMany={handleDeleteConversations}
+        onCreateConversation={handleCreateConversation}
+        webAuthEnabled={settings?.webServerJwtEnabled === true}
+      />
+      <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pt-1.5 pr-2 pb-2 pl-2">
+        {/* I1 窗控带:与画布同色(透明露底),右缘窗控钮;I4 减高 1/3(pt-1.5+22=28px),
+            与侧栏品牌行(h-7 上提 4px)垂直中心平齐。浏览器预览下组件返回 null。 */}
+        <WindowControlsBar />
+        {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
+            下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
+            pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。 */}
+        <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
+          {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。 */}
+          <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
+            <CollapsedSidebarTrigger />
+            <div className="relative flex h-full min-w-0 flex-1 items-end">
+              <ContainerTabBar />
+            </div>
+          </div>
+          {/* 白色圆角内容面板:surface-200 底 + elevation-100,盖住撞色带主体,
+              激活页签经连接条与面板连体;底部圆角与 wrapper 的 18px 对齐。
+              J 轮分栏:面板内是 1..MAX_PANES 个会话窗格 + 工作台面板的横向可调组。 */}
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
+            {!isMobile ? (
+              <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+                {paneList.map((pane, index) => (
+                  <React.Fragment key={`pane-${index}`}>
+                    {index > 0 ? <ResizableHandle /> : null}
+                    <ResizablePanel
+                      id={`conversation-pane-${index}`}
+                      minSize={18}
+                      className="flex min-h-0 flex-col"
+                    >
+                      {renderPane(pane, index)}
+                    </ResizablePanel>
+                  </React.Fragment>
+                ))}
+                <ResizableHandle
+                  withHandle
+                  className={cn(!hasWorkbenchPanel && "pointer-events-none opacity-0")}
+                />
+                <ResizablePanel
+                  id="workbench-panel"
+                  defaultSize={hasWorkbenchPanel ? 36 : 0}
+                  minSize={24}
+                  collapsible
+                  collapsedSize={0}
+                  panelRef={workbenchPanelRef}
+                  className="flex min-h-0 flex-col"
+                >
+                  {panel ? (
+                    <WorkbenchHost panel={panel} onClose={closePanel} className="border-l-0" />
+                  ) : null}
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            ) : (
+              renderPane(paneList[focusedPaneIndex] ?? paneList[0]!, focusedPaneIndex)
+            )}
+
+            {isMobile && panel ? (
+              <Drawer
+                open={hasWorkbenchPanel}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    closePanel();
+                  }
+                }}
+                direction="bottom"
+              >
+                <DrawerContent className="h-[85vh] max-h-[85vh]">
+                  <WorkbenchHost panel={panel} onClose={closePanel} className="border-l-0" />
+                </DrawerContent>
+              </Drawer>
+            ) : null}
+          </div>
+        </div>
+      </SidebarInset>
     </SidebarProvider>
   );
 }

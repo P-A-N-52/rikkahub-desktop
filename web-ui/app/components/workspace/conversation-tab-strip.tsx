@@ -24,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip
 import { cn } from "~/lib/utils";
 import { useContainerTabsStore } from "~/stores/container-tabs-store";
 import { useConversationStore } from "~/stores/conversation-store";
+import { useTabDragStore } from "~/stores/tab-drag-store";
 import type { ConversationListDto } from "~/types";
 
 // 二层会话标签(工作区 M2-1;前端重构A1 复刻 NewMax):白色内容面板的顶缘胶囊行,
@@ -70,10 +71,13 @@ function TabTooltipBody({ conversationId, title }: { conversationId: string; tit
 
 export function ConversationTabStrip({
   conversations,
+  paneIndex,
   trailing,
   onRename,
 }: {
   conversations: ConversationListDto[];
+  /** 本标签条所属窗格下标(J 轮分栏:每窗格一条标签条)。 */
+  paneIndex: number;
   trailing?: React.ReactNode;
   /** 重命名会话(G4 右键菜单):由路由层注入 PATCH title 的实现。 */
   onRename?: (conversationId: string, title: string) => Promise<void>;
@@ -82,10 +86,10 @@ export function ConversationTabStrip({
   const navigate = useNavigate();
   const activeTab = useContainerTabsStore((state) => state.activeTab);
   const tabs = useContainerTabsStore(
-    (state) => state.conversationTabs[state.activeTab] ?? EMPTY_TABS,
+    (state) => state.panes[state.activeTab]?.[paneIndex]?.tabs ?? EMPTY_TABS,
   );
   const activeConversation = useContainerTabsStore(
-    (state) => state.activeConversation[state.activeTab] ?? null,
+    (state) => state.panes[state.activeTab]?.[paneIndex]?.active ?? null,
   );
 
   const [renameTarget, setRenameTarget] = React.useState<string | null>(null);
@@ -131,7 +135,20 @@ export function ConversationTabStrip({
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+    <div
+      className="flex h-9 shrink-0 items-center gap-1 px-2"
+      onDragOver={(event) => {
+        if (useTabDragStore.getState().draggingId) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        const draggingId = useTabDragStore.getState().draggingId;
+        if (!draggingId) return;
+        event.preventDefault();
+        useTabDragStore.getState().setDragging(null);
+        useContainerTabsStore.getState().moveConversationToPane(activeTab, draggingId, paneIndex);
+        navigate(`/c/${draggingId}`);
+      }}
+    >
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
       {tabs.map((conversationId, index) => {
         const active = conversationId === activeConversation;
@@ -158,6 +175,14 @@ export function ConversationTabStrip({
                     onAuxClick={(event) => {
                       if (event.button === 1) handleClose(conversationId);
                     }}
+                    draggable
+                    onDragStart={(event) => {
+                      // J 轮分栏:拖拽会话标签 → 窗格 drop 区分栏/移动(id 走内存 store,
+                      // dataTransfer 在 dragover 阶段读不到)。
+                      event.dataTransfer.effectAllowed = "move";
+                      useTabDragStore.getState().setDragging(conversationId);
+                    }}
+                    onDragEnd={() => useTabDragStore.getState().setDragging(null)}
                   >
                     <span className="min-w-0 truncate">{title}</span>
                     <span
@@ -223,6 +248,8 @@ export function ConversationTabStrip({
         type="button"
         aria-label={t("workspace.tabs.new_conversation")}
         onClick={() => {
+          // J 轮分栏:先聚焦本窗格,"新对话"态才落在正确的窗格上。
+          useContainerTabsStore.getState().focusPane(activeTab, paneIndex);
           useContainerTabsStore.getState().clearActiveConversation(activeTab);
           navigate("/");
         }}
