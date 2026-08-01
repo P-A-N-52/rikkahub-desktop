@@ -100,7 +100,11 @@ function buildWorkspaceTool(name: WorkspaceToolName, runtime: WorkspaceRuntime):
   switch (name) {
     case "read":
       // M3-3:skillsDir 作只读根暴露给 read(对齐安卓 /skills 只读挂载);write/edit 仍单根。
-      return createReadTool(runtime.cwd, { operations: createBoundedReadOperations(runtime.root, [skillsDir]) }) as WorkspaceToolDefinition<unknown, unknown>;
+      // M3-4:工作区 tmp/(bash 截断全量落盘处)同为只读根——否则模型拿到
+      // "Full output: <path>" 提示却被边界拒 read,只能绕道 bash。
+      return createReadTool(runtime.cwd, {
+        operations: createBoundedReadOperations(runtime.root, [skillsDir, workspaceTmpDir(runtime.workspace.id)]),
+      }) as WorkspaceToolDefinition<unknown, unknown>;
     case "write":
       return createWriteTool(runtime.cwd, { operations: createBoundedWriteOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
     case "edit":
