@@ -125,7 +125,7 @@ export function WindowControlsBar({ className }: { className?: string }) {
     <div
       {...windowDragRegionProps()}
       className={cn(
-        "flex h-[34px] shrink-0 select-none items-center justify-end",
+        "flex h-[22px] shrink-0 select-none items-center justify-end",
         className,
       )}
     >
@@ -179,7 +179,7 @@ function WindowControlButton({
       aria-label={ariaLabel}
       onClick={onClick}
       className={cn(
-        "flex h-7 w-11 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 active:scale-95",
+        "flex h-5 w-10 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 active:scale-95",
         variant === "default" && "hover:bg-[var(--ds-on-surface)] hover:text-foreground active:bg-[var(--ds-on-surface-active)]",
         variant === "danger" &&
           "hover:bg-destructive hover:text-destructive-foreground active:bg-destructive/80",

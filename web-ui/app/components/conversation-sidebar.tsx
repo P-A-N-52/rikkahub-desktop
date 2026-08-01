@@ -851,16 +851,17 @@ export const ConversationSidebar = React.memo(
     return (
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
-          {/* 品牌行(G8):Logo+应用名居左,折叠钮居右;I1:与右侧窗控带同属
-              顶部窗控行,空白处可拖拽窗口(折叠钮是 button,拖拽闸门放行点击)。 */}
-          <div className="flex h-8 items-center justify-between pl-2 pr-0.5" {...windowDragRegionProps()}>
+          {/* 品牌行(G8/I5):只留 Logo+应用名(折叠钮已挪到用户资料行右侧);
+              I1:与右侧窗控带同属顶部窗控行,整行可拖拽窗口。 */}
+          <div className="-mt-1 flex h-7 items-center pl-2 pr-0.5" {...windowDragRegionProps()}>
             <div className="flex min-w-0 items-center gap-2">
               <Logo className="size-5 shrink-0 text-primary" />
               <span className="truncate text-sm font-semibold text-[var(--ds-text-primary)]">RikkaHub</span>
             </div>
-            <SidebarTrigger className="shrink-0 text-muted-foreground hover:text-foreground" />
           </div>
-          {/* 用户资料行(F1:按用户要求保持顶部,不学 NewMax 的用户归底) */}
+          {/* 用户资料行(F1:按用户要求保持顶部,不学 NewMax 的用户归底);
+              I5:折叠钮居其右侧垂直居中。 */}
+          <div className="flex items-center gap-1">
           <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
             <DialogTrigger asChild>
               <button
@@ -930,6 +931,8 @@ export const ConversationSidebar = React.memo(
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          <SidebarTrigger className="mr-0.5 shrink-0 text-muted-foreground hover:text-foreground" />
+          </div>
         </SidebarHeader>
         <SidebarContent className="min-h-0">
           <SidebarGroup>

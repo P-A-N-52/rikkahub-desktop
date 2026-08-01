@@ -1997,9 +1997,8 @@ function ConversationsPageInner() {
         webAuthEnabled={settings?.webServerJwtEnabled === true}
       />
       <SidebarInset className="flex min-h-svh flex-col overflow-hidden bg-transparent pt-1.5 pr-2 pb-2 pl-2">
-        {/* I1 窗控带:与画布同色(透明露底),右缘窗控钮,高度与侧栏品牌行平齐
-            (pt-1.5 + 34px = 40px = 侧栏 p-2 顶 8px + 品牌行 h-8),内容整体下压。
-            浏览器预览下组件返回 null,布局退回原状。 */}
+        {/* I1 窗控带:与画布同色(透明露底),右缘窗控钮;I4 减高 1/3(pt-1.5+22=28px),
+            与侧栏品牌行(h-7 上提 4px)垂直中心平齐。浏览器预览下组件返回 null。 */}
         <WindowControlsBar />
         {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
             下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
