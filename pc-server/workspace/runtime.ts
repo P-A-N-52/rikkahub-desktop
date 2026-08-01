@@ -14,13 +14,11 @@ import { getWorkspace, touchWorkspaceAccess, workspaceStatus, workspaceTmpDir } 
 import {
   assertInsideWorkspace,
   createBoundedEditOperations,
-  createBoundedReadOperations,
   createBoundedWriteOperations,
   createWideEditOperations,
   createWideReadOperations,
   createWideWriteOperations,
 } from "./boundary";
-import { skillsDir } from "../foundation/paths";
 import { findDangerousCommandReason, isWorkspaceToolName, type WorkspaceToolName } from "./approval";
 import { createReadTool } from "./tools/read";
 import { createWriteTool } from "./tools/write";
@@ -105,42 +103,29 @@ export function mountedWorkspaceToolNames(): WorkspaceToolName[] {
 }
 
 /** 边界宽窄选择(权限档位改版,与 workspace/approval.ts 三档语义配套):
+ *  - read 三档全宽(读不具破坏性,区外读免审,2026-08-01 拍板;skills/tmp 只读挂载
+ *    随之天然可读,原多根机件已删);
  *  - write/edit 走宽界当且仅当"用户显式批准了这次调用"(区外写入的知情同意)或
  *    档位为 full_access(不受限制操作电脑文件);其余走严界(realpath 断言)——
  *    词法审批判定看漏的逃逸(软链指向区外)在严界被兜底拒绝;
- *  - read 恒免审,只有 full_access 才放宽(其余档位维持 root+skills+tmp 只读沙箱);
- *  - 宽界仍硬拒系统目录与应用数据目录(boundary.ts,不给审批放行的机会)。 */
-interface BoundaryChoice {
-  /** write/edit 宽界(userApproved 或 full_access) */
-  wideWrite: boolean;
-  /** read 宽界(仅 full_access) */
-  wideRead: boolean;
-}
-
-const STRICT_BOUNDARY: BoundaryChoice = { wideWrite: false, wideRead: false };
-
+ *  - 宽界区内直通,区外仍硬拒系统目录与应用数据目录(boundary.ts,不给审批放行的机会)。 */
 function buildWorkspaceTool(
   name: WorkspaceToolName,
   runtime: WorkspaceRuntime,
-  boundary: BoundaryChoice = STRICT_BOUNDARY,
+  wideWrite = false,
 ): WorkspaceToolDefinition<unknown, unknown> {
   switch (name) {
     case "read":
-      // M3-3:skillsDir 作只读根暴露给 read(对齐安卓 /skills 只读挂载);write/edit 仍单根。
-      // M3-4:工作区 tmp/(bash 截断全量落盘处)同为只读根——否则模型拿到
-      // "Full output: <path>" 提示却被边界拒 read,只能绕道 bash。
       return createReadTool(runtime.cwd, {
-        operations: boundary.wideRead
-          ? createWideReadOperations()
-          : createBoundedReadOperations(runtime.root, [skillsDir, workspaceTmpDir(runtime.workspace.id)]),
+        operations: createWideReadOperations(),
       }) as WorkspaceToolDefinition<unknown, unknown>;
     case "write":
       return createWriteTool(runtime.cwd, {
-        operations: boundary.wideWrite ? createWideWriteOperations() : createBoundedWriteOperations(runtime.root),
+        operations: wideWrite ? createWideWriteOperations(runtime.root) : createBoundedWriteOperations(runtime.root),
       }) as WorkspaceToolDefinition<unknown, unknown>;
     case "edit":
       return createEditTool(runtime.cwd, {
-        operations: boundary.wideWrite ? createWideEditOperations() : createBoundedEditOperations(runtime.root),
+        operations: wideWrite ? createWideEditOperations(runtime.root) : createBoundedEditOperations(runtime.root),
       }) as WorkspaceToolDefinition<unknown, unknown>;
     case "bash": {
       // tmp/ 放超长输出落盘;声明装配也走本函数(每轮热路径),existsSync 先挡一层
@@ -320,12 +305,12 @@ export async function runWorkspaceTool(
 
   const started = Date.now();
   touchWorkspaceAccess(runtime.workspace.id);
-  const fullAccess = runtime.workspace.permissionPreset === "full_access";
   try {
-    const tool = buildWorkspaceTool(name, runtime, {
-      wideWrite: context?.userApproved === true || fullAccess,
-      wideRead: fullAccess,
-    });
+    const tool = buildWorkspaceTool(
+      name,
+      runtime,
+      context?.userApproved === true || runtime.workspace.permissionPreset === "full_access",
+    );
     let input: unknown;
     switch (name) {
       case "read":

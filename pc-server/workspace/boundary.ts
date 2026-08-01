@@ -92,32 +92,6 @@ async function readWithHardLimit(safePath: string, displayPath: string): Promise
   return fsReadFile(safePath);
 }
 
-/** 多根放行:在任一根内即合法(逐根复用单根断言,realpath/软链/盘符养兄弟目录语义不变)。
- *  只供只读暴露使用(M3-3 skillsDir):写类 Operations 永远单根,技能目录不可写。 */
-export function assertInsideAnyRoot(absolutePath: string, roots: readonly string[]): string {
-  let firstError: WorkspaceBoundaryError | null = null;
-  for (const root of roots) {
-    try {
-      return assertInsideWorkspace(absolutePath, root);
-    } catch (err) {
-      if (!(err instanceof WorkspaceBoundaryError)) throw err;
-      firstError ??= err; // 报错文案报主根(首个):模型心智里的边界是工作区 root
-    }
-  }
-  throw firstError ?? new WorkspaceBoundaryError(absolutePath, roots[0] ?? "");
-}
-
-/** read 工具的有界 Operations:每次操作前过边界断言 + 512KB 读闸门。
- *  extraReadRoots:额外的只读根(M3-3:skillsDir 暴露给 read,对齐安卓 /skills 只读挂载)。 */
-export function createBoundedReadOperations(root: string, extraReadRoots: readonly string[] = []): ReadOperations {
-  const roots = [root, ...extraReadRoots];
-  return {
-    readFile: (absolutePath) => readWithHardLimit(assertInsideAnyRoot(absolutePath, roots), absolutePath),
-    access: (absolutePath) => fsAccess(assertInsideAnyRoot(absolutePath, roots), constants.R_OK),
-    detectImageMimeType: (absolutePath) => detectSupportedImageMimeTypeFromFile(assertInsideAnyRoot(absolutePath, roots)),
-  };
-}
-
 /** write 工具的有界 Operations:边界断言 + 2MB 写闸门;mkdir 同样受界。 */
 export function createBoundedWriteOperations(root: string): WriteOperations {
   return {
@@ -169,10 +143,13 @@ function isUnderAny(canonicalTarget: string, denyRoots: string[]): boolean {
   return false;
 }
 
-/** 宽界写入断言:realpath 化(软链照样揪),命中系统目录/应用数据目录即拒。 */
-export function assertWideWritablePath(absolutePath: string): string {
-  if (absolutePath.includes(String.fromCharCode(0))) {
-    throw new Error(`Access denied: invalid path. Requested: ${absolutePath}`);
+/** 宽界写入断言:区内直通(managed 工作区根就在 dataDir/workspaces/ 下,黑名单不得误伤
+ *  自己的地盘),区外 realpath 化后查黑名单——命中系统目录/应用数据目录即拒。 */
+export function assertWideWritablePath(absolutePath: string, root: string): string {
+  try {
+    return assertInsideWorkspace(absolutePath, root);
+  } catch (err) {
+    if (!(err instanceof WorkspaceBoundaryError)) throw err;
   }
   const canonical = canonicalizeWithNonexistentTail(absolutePath);
   if (isUnderAny(canonical, [...systemDenyDirs(), resolve(dataDir)])) {
@@ -193,7 +170,8 @@ async function writeWithHardLimit(safePath: string, content: string, what: strin
   await fsWriteFile(safePath, content, "utf-8");
 }
 
-/** read 工具的宽界 Operations(full_access 档):无路径限制,512KB 读闸门照旧。 */
+/** read 工具的宽界 Operations(三档通用:读不具破坏性,区外读无需审批,2026-08-01 拍板):
+ *  无路径限制,512KB 读闸门照旧。 */
 export function createWideReadOperations(): ReadOperations {
   return {
     readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
@@ -203,20 +181,20 @@ export function createWideReadOperations(): ReadOperations {
 }
 
 /** write 工具的宽界 Operations(经批准的区外写入 / full_access):系统目录硬拒,2MB 闸门照旧。 */
-export function createWideWriteOperations(): WriteOperations {
+export function createWideWriteOperations(root: string): WriteOperations {
   return {
-    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath), content, "Content"),
+    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Content"),
     mkdir: async (dir) => {
-      await fsMkdir(assertWideWritablePath(dir), { recursive: true });
+      await fsMkdir(assertWideWritablePath(dir, root), { recursive: true });
     },
   };
 }
 
 /** edit 工具的宽界 Operations(经批准的区外编辑 / full_access)。 */
-export function createWideEditOperations(): EditOperations {
+export function createWideEditOperations(root: string): EditOperations {
   return {
     readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
-    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath), content, "Edited content"),
+    writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Edited content"),
     access: (absolutePath) => fsAccess(absolutePath, constants.R_OK | constants.W_OK),
   };
 }

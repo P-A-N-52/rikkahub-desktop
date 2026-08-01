@@ -2,16 +2,16 @@
 // §5.3 要求全覆盖:../ 穿越、绝对路径、符号链接逃逸、Windows 盘符兄弟目录、
 // 不存在尾段(write 新文件)、限额闸门(读 512KB/写 2MB)、经工具全链路的越界拒绝。
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 
 import {
-  assertInsideAnyRoot,
   assertInsideWorkspace,
   createBoundedEditOperations,
-  createBoundedReadOperations,
   createBoundedWriteOperations,
+  createWideReadOperations,
+  createWideWriteOperations,
   READ_HARD_LIMIT_BYTES,
   WorkspaceBoundaryError,
   WRITE_HARD_LIMIT_BYTES,
@@ -88,32 +88,41 @@ describe("assertInsideWorkspace", () => {
   });
 });
 
-describe("多根放行(M3-3 skillsDir 只读暴露)", () => {
+describe("宽界 Operations(read 三档全宽;write 区内直通+黑名单)", () => {
   const skills = join(host, "skills");
   mkdirSync(join(skills, "demo"), { recursive: true });
   writeFileSync(join(skills, "demo", "SKILL.md"), "# demo skill");
 
-  test("任一根内均放行;全部根外拒绝且报主根", () => {
-    expect(assertInsideAnyRoot(join(root, "inside.txt"), [root, skills])).toContain("inside.txt");
-    expect(assertInsideAnyRoot(join(skills, "demo", "SKILL.md"), [root, skills])).toContain("SKILL.md");
-    try {
-      assertInsideAnyRoot(join(outside, "secret.txt"), [root, skills]);
-      throw new Error("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(WorkspaceBoundaryError);
-      expect((err as Error).message).toContain(root);
-    }
-  });
-
-  test("read 可读技能目录;write/edit 仍单根拒绝技能目录", async () => {
-    const readOps = createBoundedReadOperations(root, [skills]);
+  test("宽界 read 任意路径可读(读不具破坏性,三档通用);write/edit 严界仍单根拒绝", async () => {
+    const readOps = createWideReadOperations();
     const text = await readOps.readFile(join(skills, "demo", "SKILL.md"));
     expect(text.toString()).toContain("demo skill");
+    const outsideFile = join(outside, "readable.txt");
+    writeFileSync(outsideFile, "outside-data");
+    expect((await readOps.readFile(outsideFile)).toString()).toContain("outside-data");
     const writeOps = createBoundedWriteOperations(root);
     await expect(writeOps.writeFile(join(skills, "demo", "SKILL.md"), "overwrite")).rejects.toThrow(WorkspaceBoundaryError);
     const editOps = createBoundedEditOperations(root);
     // readFile 在 assert 处同步抛(非 async 函数),统一成 rejected promise 再断言
     await expect(Promise.resolve().then(() => editOps.readFile(join(skills, "demo", "SKILL.md")))).rejects.toThrow(WorkspaceBoundaryError);
+  });
+
+  test("宽界 write:区内直通(managed 根在 dataDir 下不误伤);区外可写;系统目录/数据目录硬拒", async () => {
+    // 回归:managed 工作区根在 dataDir/workspaces/ 之下,宽界黑名单含 dataDir,
+    // 区内直通规则保证 full_access 档区内写不被误拒。
+    const { dataDir } = await import("../foundation/paths");
+    const wsRoot = join(dataDir, "workspaces", "wide-test", "files");
+    mkdirSync(wsRoot, { recursive: true });
+    const wideOps = createWideWriteOperations(wsRoot);
+    await wideOps.writeFile(join(wsRoot, "in-zone.txt"), "in");
+    expect(readFileSync(join(wsRoot, "in-zone.txt"), "utf8")).toBe("in");
+    await wideOps.writeFile(join(outside, "out-zone.txt"), "out");
+    expect(readFileSync(join(outside, "out-zone.txt"), "utf8")).toBe("out");
+    await expect(wideOps.writeFile(join(dataDir, "hijack.txt"), "x")).rejects.toThrow(/application data directory/);
+    const sysTarget = process.platform === "win32"
+      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "rkh-wide.txt")
+      : "/etc/rkh-wide.txt";
+    await expect(wideOps.writeFile(sysTarget, "x")).rejects.toThrow(/operating-system directories/);
   });
 });
 
@@ -121,7 +130,7 @@ describe("限额闸门", () => {
   test("读 512KB:超限文件报错并引导 bash 分段", async () => {
     const big = join(root, "big.txt");
     writeFileSync(big, Buffer.alloc(READ_HARD_LIMIT_BYTES + 1, 0x61));
-    const ops = createBoundedReadOperations(root);
+    const ops = createWideReadOperations();
     await expect(ops.readFile(big)).rejects.toThrow("read limit");
     // 未超限正常读
     const ok = await ops.readFile(join(root, "inside.txt"));
@@ -136,16 +145,14 @@ describe("限额闸门", () => {
 });
 
 describe("工具全链路(内核 pi 原样 + 有界 Operations)", () => {
-  test("read:相对路径 ../ 逃逸被拒;区内正常", async () => {
-    const tool = createReadTool(root, { operations: createBoundedReadOperations(root) });
-    await expect(tool.execute({ path: "../outside/secret.txt" })).rejects.toThrow("Access denied");
+  test("read:区内与区外均可读(三档全宽,2026-08-01 拍板);缺失文件报常规错误", async () => {
+    const tool = createReadTool(root, { operations: createWideReadOperations() });
     const ok = await tool.execute({ path: "inside.txt" });
     expect(ok.content[0]).toEqual({ type: "text", text: "inside content" });
-  });
-
-  test("read:~ 展开指向家目录也被拒(家目录在区外)", async () => {
-    const tool = createReadTool(root, { operations: createBoundedReadOperations(root) });
-    await expect(tool.execute({ path: "~/anything.txt" })).rejects.toThrow("Access denied");
+    const out = await tool.execute({ path: "../outside/secret.txt" });
+    expect(out.content[0]).toEqual({ type: "text", text: "secret" });
+    // 不存在的文件报常规 not-found,而非边界拒绝
+    await expect(tool.execute({ path: "../outside/missing.txt" })).rejects.toThrow(/no such file|not found|ENOENT/i);
   });
 
   test("write:区外绝对路径被拒,mkdir 不落地", async () => {

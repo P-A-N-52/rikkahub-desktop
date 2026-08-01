@@ -165,16 +165,17 @@ describe("宽/严边界选择(权限档位改版:区外写入经批准放行)", 
     expect(readFileSync(target, "utf8")).toBe("hello");
   });
 
-  test("full_access:区外读写免批准;read 沙箱放开", async () => {
+  test("full_access:区外写免批准;区内写不被宽界黑名单误伤(managed 根在 dataDir 下)", async () => {
     const workspace = ws.createWorkspace({ type: "managed", name: "wide-full" });
     ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
     const conversation = bindConversation(workspace.id);
     const outsideDir = mkdtempSync(join(tmpdir(), "rkh-full-out-"));
-    writeFileSync(join(outsideDir, "readable.txt"), "outside-data");
-    const read = await runtime.runWorkspaceTool("read", { path: join(outsideDir, "readable.txt") }, { conversationId: conversation.id });
-    expect(joined(read)).toContain("outside-data");
     await runtime.runWorkspaceTool("write", { path: join(outsideDir, "w.txt"), content: "w" }, { conversationId: conversation.id });
     expect(readFileSync(join(outsideDir, "w.txt"), "utf8")).toBe("w");
+    // 回归:managed 根在 dataDir/workspaces/ 之下,宽界"区内直通"保证区内写照常
+    const inZone = await runtime.runWorkspaceTool("write", { path: "in-zone.txt", content: "in" }, { conversationId: conversation.id });
+    expect(joined(inZone)).toContain("Successfully wrote");
+    expect(readFileSync(join(workspace.root, "in-zone.txt"), "utf8")).toBe("in");
   });
 
   test("宽界不是无界:系统目录与应用数据目录写入仍硬拒", async () => {
@@ -216,11 +217,14 @@ describe("pi 内核全链路(有界 Operations)", () => {
     expect(String(first.metadata?.workspace?.details.diff ?? "")).toContain("const a = 2;");
   });
 
-  test("越界路径被有界 Operations 拒绝", async () => {
-    await expect(runtime.runWorkspaceTool("read", { path: "../../etc/passwd" }, ctx)).rejects.toThrow(/outside the workspace/);
+  test("write 越界被严界拒;read 区外放行(三档全宽,2026-08-01 拍板)", async () => {
     await expect(
       runtime.runWorkspaceTool("write", { path: "../escape.txt", content: "x" }, ctx),
     ).rejects.toThrow(/outside the workspace/);
+    const outsideDir = mkdtempSync(join(tmpdir(), "rkh-read-out-"));
+    writeFileSync(join(outsideDir, "free.txt"), "free-read");
+    const read = await runtime.runWorkspaceTool("read", { path: join(outsideDir, "free.txt") }, ctx);
+    expect(read.output.map((o) => ("text" in o ? o.text : "")).join("")).toContain("free-read");
   });
 
   test("workspaceCwd 生效:相对路径以 cwd 解析", async () => {
