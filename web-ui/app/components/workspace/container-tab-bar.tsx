@@ -190,14 +190,22 @@ export function ContainerTabBar() {
     [navigate],
   );
 
+  // NewMax getTabWidthCalc:页签宽度随数量在 58~172px 间按容器宽均分(容器查询
+  // cqw),预留 64px 给 "+" 钮与边距——多开标签时像浏览器一样逐渐收窄。
+  const tabWidthCalc = `clamp(58px, calc((100cqw - ${64 + Math.max(0, openTabs.length - 1) * 3}px) / ${Math.max(1, openTabs.length)}), 172px)`;
+
   return (
-    <div className="flex h-full min-w-0 flex-1 items-end gap-[3px]">
-      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)]">
+    <div
+      className="flex h-full min-w-0 flex-1 items-end gap-[3px]"
+      style={{ containerType: "inline-size" }}
+    >
+      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto [scrollbar-width:none]">
         {openTabs.map((key, index) => (
           <ContainerTab
             key={key}
             containerKey={key}
             workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
+            width={tabWidthCalc}
             active={key === activeTab}
             closable={openTabs.length > 1}
             dragging={dragKey === key}
@@ -360,6 +368,7 @@ export function ContainerTabBar() {
 function ContainerTab({
   containerKey,
   workspace,
+  width,
   active,
   closable,
   dragging,
@@ -371,6 +380,7 @@ function ContainerTab({
 }: {
   containerKey: ContainerKey;
   workspace: WorkspaceDto | null;
+  width: string;
   active: boolean;
   closable: boolean;
   dragging: boolean;
@@ -411,25 +421,26 @@ function ContainerTab({
         onDragOverTab();
       }}
       className={cn("relative shrink-0 select-none pb-[3px]", dragging && "opacity-60")}
-      style={
-        active
+      style={{
+        width,
+        ...(active
           ? {
               filter: "drop-shadow(rgba(0, 0, 0, 0.08) 0px 0px 0.5px)",
               clipPath: "inset(-2px -15px -2px -15px)",
             }
-          : undefined
-      }
+          : undefined),
+      }}
     >
       <div
         className={cn(
-          "group relative flex h-7 max-w-44 items-center gap-1.5 pl-2.5 pr-1.5 text-[13px] font-medium transition-colors duration-150",
+          "group relative flex h-7 w-full items-center gap-1.5 pl-2.5 pr-1.5 text-[13px] font-medium transition-colors duration-150",
           active
             ? "rounded-t-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-primary)]"
             : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
         )}
       >
         <Icon className="size-4 shrink-0" strokeWidth={1.75} />
-        <span className="min-w-0 truncate">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-left">{label}</span>
         {closable ? (
           <span
             role="button"
