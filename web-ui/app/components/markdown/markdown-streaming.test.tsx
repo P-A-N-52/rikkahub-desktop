@@ -5,9 +5,14 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import Markdown from "./markdown";
+import { TooltipProvider } from "~/components/ui/tooltip";
 
+// G7 后 Button 的 title 渲染 Radix Tooltip(如代码块复制按钮),脱离应用根的
+// TooltipProvider 静态渲染会抛错,测试自己挂一个。
 function render(content: string, isAnimating: boolean): string {
-  return renderToStaticMarkup(React.createElement(Markdown, { content, isAnimating }));
+  return renderToStaticMarkup(
+    React.createElement(TooltipProvider, null, React.createElement(Markdown, { content, isAnimating })),
+  );
 }
 
 // 可见文本(剥标签、压空白):前缀/尾部分属两棵 DOM 树,标签结构允许不同,文本必须一致

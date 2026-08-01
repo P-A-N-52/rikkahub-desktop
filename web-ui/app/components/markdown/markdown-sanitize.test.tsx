@@ -7,9 +7,13 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import Markdown from "./markdown";
+import { TooltipProvider } from "~/components/ui/tooltip";
 
+// 同 markdown-streaming.test:代码块复制按钮的 Tooltip 需要 Provider。
 function render(content: string): string {
-  return renderToStaticMarkup(React.createElement(Markdown, { content }));
+  return renderToStaticMarkup(
+    React.createElement(TooltipProvider, null, React.createElement(Markdown, { content })),
+  );
 }
 
 describe("Markdown 消毒(R7-1)", () => {
