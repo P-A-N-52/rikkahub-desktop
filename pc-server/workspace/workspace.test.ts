@@ -1,7 +1,7 @@
 // workspace/workspace.test.ts — 工作区实体管理单测(M1-1)
 // 覆盖:managed/folder 创建与目录生命周期、folder 根目录准入校验、权限档位、
 // 信任门、删除(目录清理 + 归属会话经 working set 权威实例解绑)、列迁移幂等。
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, sep } from "node:path";
@@ -16,17 +16,23 @@ const { getConversationMeta } = await import("../conversations/read-queries");
 const ws = await import("./index");
 
 const db = conversations.openConversationsDb();
-configureWorkingSet({
-  loadConversation: (convId) => {
-    const meta = getConversationMeta(db, convId);
-    if (!meta) return undefined;
-    meta.messages = conversations.loadConversationNodesFromDb(db, convId);
-    return meta;
-  },
-  isGenerating: () => false,
-  hasSseClients: () => false,
-  hasDirty: () => false,
-});
+// working set 注入是模块级全局,会被其他测试文件覆盖。在本文件 beforeAll 重注入,
+// 保证本文件用例期间 getConversation 走真实 DB(详见 runtime.test.ts 同款注释)。
+function installWorkingSet() {
+  configureWorkingSet({
+    loadConversation: (convId) => {
+      const meta = getConversationMeta(db, convId);
+      if (!meta) return undefined;
+      meta.messages = conversations.loadConversationNodesFromDb(db, convId);
+      return meta;
+    },
+    isGenerating: () => false,
+    hasSseClients: () => false,
+    hasDirty: () => false,
+  });
+}
+installWorkingSet();
+beforeAll(installWorkingSet);
 
 function makeConversation(convId: string, workspaceId: string | null) {
   return {

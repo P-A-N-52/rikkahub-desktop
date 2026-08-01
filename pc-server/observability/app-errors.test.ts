@@ -1,7 +1,13 @@
 // 统一错误上报通道单测(P2-1 批1):环形缓冲、风暴合并、注入广播、广播故障隔离。
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 
 import { clearAppErrors, initAppErrorBroadcast, installProcessSafetyNet, recentAppErrors, reportError } from "./app-errors";
+
+// 环形缓冲是模块级全局:beforeEach 也清一次,隔离先跑的其他测试文件遗留的上报条目(M4-0)。
+beforeEach(() => {
+  clearAppErrors();
+  initAppErrorBroadcast(() => {});
+});
 
 afterEach(() => {
   clearAppErrors();

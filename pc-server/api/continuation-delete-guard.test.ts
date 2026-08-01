@@ -5,19 +5,26 @@
 //   - attachOcrToImageParts → 可控 deferred("删除发生在 OCR 完成前")
 //   - persistConversation / deletePcConversations → 记录桩(无 DB)
 //   - generateAnswer → 记录桩
-// 注意:bun 的 mock.module 全局生效且跨测试文件不回收,必须展开真实模块只覆盖目标导出;
-// 被覆盖的 persistConversation/deletePcConversations/generateAnswer/attachOcrToImageParts
-// 目前仅本文件的用例路径触达(rg 核实),不影响其他测试文件。
+// 注意:bun 的 mock.module 全局生效且跨测试文件不回收——本文件用"闸门委托"式桩
+// (仅 guardActive 时改写,否则透传真实实现),避免桩泄漏污染后续文件(见下方说明)。
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 
 import type { Conversation, State } from "../foundation/types";
-import { configureWorkingSet, registerConversation } from "../conversations/working-set";
+import { configureWorkingSet, registerConversation, removeConversations } from "../conversations/working-set";
 import { generating } from "../conversations/generation-state";
 import { setState, state } from "../persistence/json-store";
 
 import * as actualConversations from "../conversations/index";
 import * as actualAuxiliary from "../conversations/auxiliary";
 import * as actualOrchestrator from "../conversations/orchestrator";
+
+// import * 命名空间是"活绑定":mock.module 替换注册表后 actualConversations.* 会指向桩本身
+// (委托即自我递归)。必须在 mock.module 之前把真实函数对象捕获进常量,委托时调它们。
+const realPersistConversation = actualConversations.persistConversation;
+const realDeletePcConversations = actualConversations.deletePcConversations;
+const realMarkOcrPendingParts = actualAuxiliary.markOcrPendingParts;
+const realAttachOcrToImageParts = actualAuxiliary.attachOcrToImageParts;
+const realGenerateAnswer = actualOrchestrator.generateAnswer;
 
 function deferred() {
   let resolve!: () => void;
@@ -29,19 +36,36 @@ const persistedIds: string[] = [];
 const generatedIds: string[] = [];
 let ocrGate = deferred();
 
+// 闸门委托:仅当本文件用例激活(guardActive)时改写行为,否则透传真实实现。bun 的
+// mock.module 跨文件泄漏且 afterAll 重挂来不及(其他文件在统一加载期已捕获桩),此式让
+// 泄漏出去的桩对后续文件与真实模块等价(M4-0:曾把 persistConversation 打成空桩污染 workspace.test)。
+let guardActive = false;
 mock.module("../conversations/index", () => ({
   ...actualConversations,
-  persistConversation: (conv: Conversation) => { persistedIds.push(conv.id); },
-  deletePcConversations: () => {},
+  persistConversation: (conv: Conversation) => {
+    if (!guardActive) return realPersistConversation(conv);
+    persistedIds.push(conv.id);
+  },
+  deletePcConversations: (...args: Parameters<typeof realDeletePcConversations>) => {
+    if (!guardActive) return realDeletePcConversations(...args);
+  },
 }));
 mock.module("../conversations/auxiliary", () => ({
   ...actualAuxiliary,
-  markOcrPendingParts: (parts: unknown) => parts,
-  attachOcrToImageParts: async (parts: unknown) => { await ocrGate.promise; return parts; },
+  markOcrPendingParts: (...args: Parameters<typeof realMarkOcrPendingParts>) =>
+    guardActive ? args[0] : realMarkOcrPendingParts(...args),
+  attachOcrToImageParts: async (...args: Parameters<typeof realAttachOcrToImageParts>) => {
+    if (!guardActive) return realAttachOcrToImageParts(...args);
+    await ocrGate.promise;
+    return args[0];
+  },
 }));
 mock.module("../conversations/orchestrator", () => ({
   ...actualOrchestrator,
-  generateAnswer: async (conv: Conversation) => { generatedIds.push(conv.id); },
+  generateAnswer: async (conv: Conversation, ...rest: unknown[]) => {
+    if (!guardActive) return realGenerateAnswer(conv, ...(rest as []));
+    generatedIds.push(conv.id);
+  },
 }));
 
 const { handleConversationRoutes } = await import("./handlers/conversations");
@@ -50,6 +74,7 @@ const { deleteConversationsById } = await import("../conversations/helpers");
 const priorState = state;
 
 beforeAll(() => {
+  guardActive = true;
   setState({
     settings: {
       assistantId: "a1",
@@ -67,7 +92,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  guardActive = false;
   setState(priorState);
+  removeConversations(["g1-del", "g1-live"]);
 });
 
 function makeConversation(id: string): Conversation {

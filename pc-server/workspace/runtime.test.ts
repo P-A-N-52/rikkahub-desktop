@@ -2,7 +2,7 @@
 // 覆盖:条件挂载(非工作区/不可用/未信任)、执行守卫链(解绑会话/危险命令/知情同意放行)、
 // pi 内核全链路(write→read→edit 经有界 Operations)、审批矩阵经 tools/approval 联动、
 // 提示词段(结构锚点 + AGENTS.md 冻结快照)。
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,17 +19,24 @@ const prompt = await import("./prompt");
 const approval = await import("../tools/approval");
 
 const db = conversations.openConversationsDb();
-configureWorkingSet({
-  loadConversation: (convId) => {
-    const meta = getConversationMeta(db, convId);
-    if (!meta) return undefined;
-    meta.messages = conversations.loadConversationNodesFromDb(db, convId);
-    return meta;
-  },
-  isGenerating: () => false,
-  hasSseClients: () => false,
-  hasDirty: () => false,
-});
+// working set 注入是模块级全局,会被其他测试文件覆盖(如 continuation-delete-guard 的 beforeAll
+// 把 loadConversation 打成 () => undefined)。在本文件 beforeAll 重注入:bun 各测试文件顺序执行,
+// beforeAll 恰在本文件用例前生效,保证 getConversation 走真实 DB。
+function installWorkingSet() {
+  configureWorkingSet({
+    loadConversation: (convId) => {
+      const meta = getConversationMeta(db, convId);
+      if (!meta) return undefined;
+      meta.messages = conversations.loadConversationNodesFromDb(db, convId);
+      return meta;
+    },
+    isGenerating: () => false,
+    hasSseClients: () => false,
+    hasDirty: () => false,
+  });
+}
+installWorkingSet();
+beforeAll(installWorkingSet);
 
 let seq = 0;
 function bindConversation(workspaceId: string | null, workspaceCwd: string | null = null) {

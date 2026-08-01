@@ -1,0 +1,3 @@
+[test]
+# 测试进程数据目录沙箱:防止任何测试触碰开发者真实 pc-data(详见 pc-server/test-preload.ts)。
+preload = ["./pc-server/test-preload.ts"]
