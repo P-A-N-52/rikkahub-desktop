@@ -797,7 +797,7 @@ function ChatInputInner({
             }}
             placeholder={placeholder}
             disabled={!ready || disabled}
-            className="resize-none border-0 bg-transparent dark:bg-transparent p-2 text-sm shadow-none focus-visible:ring-0"
+            className="resize-none border-0 bg-transparent dark:bg-transparent p-2 text-sm shadow-none hover:shadow-none focus-visible:shadow-none focus-visible:ring-0"
             rows={2}
             style={{ minHeight: `${inputMinHeight}px`, maxHeight: `${inputMaxHeight}px` }}
           />
