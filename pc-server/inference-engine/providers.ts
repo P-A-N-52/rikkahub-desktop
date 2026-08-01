@@ -499,9 +499,9 @@ export async function streamClaudeChatWithTools(
       body: JSON.stringify(requestBody),
       signal: sig,
     }),
-    // R3-1:主对话流式 600s 头超时(与 OpenAI 流式一致),不再裸奔。
-    // 非流式(专题9,助手关闭"流式输出")与 OpenAI 非流式一致取 300s。
-    headerTimeoutMs: (requestBody) => (requestBody.stream === false ? 300_000 : 600_000),
+    // R3-1:头超时统一 600s(流式/非流式同值,用户需求 2026-08-01:非流式对齐流式——
+    // 非流式响应头要等全文生成完,长思考模型 5 分钟以上很常见,300s 会误杀)。
+    headerTimeoutMs: () => 600_000,
     makeNonStreamBody: (requestBody) => ({ ...requestBody, stream: false }),
     async readRound(response, sig, nonStream) {
       const round = nonStream
@@ -884,9 +884,9 @@ export async function streamGoogleChatWithTools(
       body: JSON.stringify(requestBody),
       signal: sig,
     }),
-    // R3-1:主对话流式 600s 头超时(与 OpenAI 流式一致),不再裸奔。
-    // 非流式响应头要等全文生成完,与 OpenAI 非流式一致取 300s(专题7/专题9)。
-    headerTimeoutMs: (_requestBody, nonStream) => (nonStream ? 300_000 : 600_000),
+    // R3-1:头超时统一 600s(流式/非流式同值,用户需求 2026-08-01:非流式对齐流式,
+    // 理由同 Claude/OpenAI 适配器处注释)。
+    headerTimeoutMs: () => 600_000,
     makeNonStreamBody: (requestBody) => requestBody,
     async readRound(response, sig, nonStream) {
       const round = nonStream
@@ -1711,9 +1711,9 @@ export async function fetchOpenAiTextStreaming(
       body: JSON.stringify(requestBody),
       signal: sig,
     }),
-    // R3-1:非流式 300s / 流式 600s 头超时(原 OpenAI 自建包装,现下沉为骨架能力)。
-    // 非流式的响应头要等全文生成完才到,长思考模型思考 5 分钟以上很常见,180s 会误杀(专题7)。
-    headerTimeoutMs: (requestBody) => (requestBody.stream === false ? 300_000 : 600_000),
+    // R3-1:头超时统一 600s(原 OpenAI 自建包装,现下沉为骨架能力;用户需求 2026-08-01:
+    // 非流式从 300s 对齐流式 600s——非流式响应头要等全文生成完,长思考模型误杀风险更高)。
+    headerTimeoutMs: () => 600_000,
     async readRound(response, sig) {
       const r = await readOpenAiResponseIntoMessage(response, hooks, sig);
       // 稀疏数组洞与无名条目过滤:Responses API 流按 output_index 建槽,function_call 与

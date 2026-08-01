@@ -129,7 +129,8 @@ export interface ProviderRoundAdapter {
    *  adapter 只管拼 url/headers/body 并把 signal 透传给 fetch。 */
   fetchRound(requestBody: Record<string, unknown>, round: number, signal: AbortSignal | undefined, nonStream?: boolean): Promise<Response>;
   /** 本轮"响应头超时"预算(ms):上游 TCP 通但迟迟不回响应头时的看门狗;返回 0 表示禁用。
-   *  下沉自 OpenAI(非流式 180s / 流式 600s),三家统一后 Claude/Google 主链路不再无超时裸奔。 */
+   *  下沉自 OpenAI,三家统一后 Claude/Google 主链路不再无超时裸奔;现三家流式/非流式
+   *  均取 600s(2026-08-01 非流式对齐流式)。 */
   headerTimeoutMs(requestBody: Record<string, unknown>, nonStream?: boolean): number;
   /** 读取并解析单轮响应，流内增量经 hooks/sink 下沉。nonStream=true 时响应体是一次性
    *  JSON(非 SSE),reader 需按非流式解析并一次性发出等价事件(专题9)。 */
