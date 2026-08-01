@@ -7,8 +7,9 @@
 // root/cwd(会话字段,变更=有意破缓存)、AGENTS.md(会话级冻结快照,中途改文件不重读,
 // 与 context-snapshots.ts 的记忆冻结同一套论证:改动在工具结果里模型本就看得见)。
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { skillsDir } from "../foundation/paths";
 import type { Conversation } from "../foundation/types";
 import { mountedWorkspaceToolNames, workspaceRuntimeForConversation } from "./runtime";
 import type { WorkspaceToolName } from "./approval";
@@ -82,6 +83,14 @@ export function buildWorkspacePromptSegment(conversation: Conversation): string 
   const guidelines: string[] = [];
   if (tools.includes("bash")) guidelines.push("Use bash for file operations like ls, rg, find");
   for (const name of tools) guidelines.push(...TOOL_GUIDELINES[name]);
+  // M3-3:技能目录教学(对齐安卓 /skills 挂载文案,路径换成 PC 真实 skillsDir)。
+  // 门控在目录存在性上:无技能用户零 token 开销;目录出现/消失是极低频事件,
+  // 缓存破坏可接受(同 cwd 变更的论证,§9.2)。
+  if (existsSync(skillsDir)) {
+    guidelines.push(
+      `Reusable skills are available under \`${skillsDir.replace(/\\/g, "/")}\` (read-only). Each skill is a subdirectory containing a SKILL.md (with name and description frontmatter) plus supporting files. Read a skill's SKILL.md before using it, and follow its instructions.`,
+    );
+  }
   guidelines.push("Be concise in your responses", "Show file paths clearly when working with files");
   const guidelinesList = guidelines.map((g) => `- ${g}`).join("\n");
 

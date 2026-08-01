@@ -91,12 +91,29 @@ async function readWithHardLimit(safePath: string, displayPath: string): Promise
   return fsReadFile(safePath);
 }
 
-/** read 工具的有界 Operations:每次操作前过边界断言 + 512KB 读闸门。 */
-export function createBoundedReadOperations(root: string): ReadOperations {
+/** 多根放行:在任一根内即合法(逐根复用单根断言,realpath/软链/盘符养兄弟目录语义不变)。
+ *  只供只读暴露使用(M3-3 skillsDir):写类 Operations 永远单根,技能目录不可写。 */
+export function assertInsideAnyRoot(absolutePath: string, roots: readonly string[]): string {
+  let firstError: WorkspaceBoundaryError | null = null;
+  for (const root of roots) {
+    try {
+      return assertInsideWorkspace(absolutePath, root);
+    } catch (err) {
+      if (!(err instanceof WorkspaceBoundaryError)) throw err;
+      firstError ??= err; // 报错文案报主根(首个):模型心智里的边界是工作区 root
+    }
+  }
+  throw firstError ?? new WorkspaceBoundaryError(absolutePath, roots[0] ?? "");
+}
+
+/** read 工具的有界 Operations:每次操作前过边界断言 + 512KB 读闸门。
+ *  extraReadRoots:额外的只读根(M3-3:skillsDir 暴露给 read,对齐安卓 /skills 只读挂载)。 */
+export function createBoundedReadOperations(root: string, extraReadRoots: readonly string[] = []): ReadOperations {
+  const roots = [root, ...extraReadRoots];
   return {
-    readFile: (absolutePath) => readWithHardLimit(assertInsideWorkspace(absolutePath, root), absolutePath),
-    access: (absolutePath) => fsAccess(assertInsideWorkspace(absolutePath, root), constants.R_OK),
-    detectImageMimeType: (absolutePath) => detectSupportedImageMimeTypeFromFile(assertInsideWorkspace(absolutePath, root)),
+    readFile: (absolutePath) => readWithHardLimit(assertInsideAnyRoot(absolutePath, roots), absolutePath),
+    access: (absolutePath) => fsAccess(assertInsideAnyRoot(absolutePath, roots), constants.R_OK),
+    detectImageMimeType: (absolutePath) => detectSupportedImageMimeTypeFromFile(assertInsideAnyRoot(absolutePath, roots)),
   };
 }
 

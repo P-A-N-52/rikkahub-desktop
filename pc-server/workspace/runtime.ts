@@ -12,6 +12,7 @@ import { getConversation } from "../conversations";
 import { addLog } from "../api/logs";
 import { getWorkspace, touchWorkspaceAccess, workspaceStatus, workspaceTmpDir } from "./index";
 import { assertInsideWorkspace, createBoundedEditOperations, createBoundedReadOperations, createBoundedWriteOperations } from "./boundary";
+import { skillsDir } from "../foundation/paths";
 import { findDangerousCommandReason, isWorkspaceToolName, type WorkspaceToolName } from "./approval";
 import { createReadTool } from "./tools/read";
 import { createWriteTool } from "./tools/write";
@@ -98,7 +99,8 @@ export function mountedWorkspaceToolNames(): WorkspaceToolName[] {
 function buildWorkspaceTool(name: WorkspaceToolName, runtime: WorkspaceRuntime): WorkspaceToolDefinition<unknown, unknown> {
   switch (name) {
     case "read":
-      return createReadTool(runtime.cwd, { operations: createBoundedReadOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
+      // M3-3:skillsDir 作只读根暴露给 read(对齐安卓 /skills 只读挂载);write/edit 仍单根。
+      return createReadTool(runtime.cwd, { operations: createBoundedReadOperations(runtime.root, [skillsDir]) }) as WorkspaceToolDefinition<unknown, unknown>;
     case "write":
       return createWriteTool(runtime.cwd, { operations: createBoundedWriteOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;
     case "edit":

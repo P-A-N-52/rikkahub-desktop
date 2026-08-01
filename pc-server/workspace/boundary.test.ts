@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 
 import {
+  assertInsideAnyRoot,
   assertInsideWorkspace,
   createBoundedEditOperations,
   createBoundedReadOperations,
@@ -84,6 +85,35 @@ describe("assertInsideWorkspace", () => {
     if (process.platform !== "win32") return;
     const upper = join(root.toUpperCase(), "inside.txt");
     expect(() => assertInsideWorkspace(upper, root)).not.toThrow();
+  });
+});
+
+describe("多根放行(M3-3 skillsDir 只读暴露)", () => {
+  const skills = join(host, "skills");
+  mkdirSync(join(skills, "demo"), { recursive: true });
+  writeFileSync(join(skills, "demo", "SKILL.md"), "# demo skill");
+
+  test("任一根内均放行;全部根外拒绝且报主根", () => {
+    expect(assertInsideAnyRoot(join(root, "inside.txt"), [root, skills])).toContain("inside.txt");
+    expect(assertInsideAnyRoot(join(skills, "demo", "SKILL.md"), [root, skills])).toContain("SKILL.md");
+    try {
+      assertInsideAnyRoot(join(outside, "secret.txt"), [root, skills]);
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WorkspaceBoundaryError);
+      expect((err as Error).message).toContain(root);
+    }
+  });
+
+  test("read 可读技能目录;write/edit 仍单根拒绝技能目录", async () => {
+    const readOps = createBoundedReadOperations(root, [skills]);
+    const text = await readOps.readFile(join(skills, "demo", "SKILL.md"));
+    expect(text.toString()).toContain("demo skill");
+    const writeOps = createBoundedWriteOperations(root);
+    await expect(writeOps.writeFile(join(skills, "demo", "SKILL.md"), "overwrite")).rejects.toThrow(WorkspaceBoundaryError);
+    const editOps = createBoundedEditOperations(root);
+    // readFile 在 assert 处同步抛(非 async 函数),统一成 rejected promise 再断言
+    await expect(Promise.resolve().then(() => editOps.readFile(join(skills, "demo", "SKILL.md")))).rejects.toThrow(WorkspaceBoundaryError);
   });
 });
 
