@@ -65,6 +65,18 @@ describe("managed 工作区", () => {
 });
 
 describe("folder 工作区准入校验", () => {
+  test("操作系统系统目录被拒(等于或位于其内)", () => {
+    if (process.platform === "win32") {
+      const winDir = process.env.SystemRoot ?? "C:\\Windows";
+      expect(() => ws.validateFolderRoot(winDir)).toThrow("不能以操作系统目录作为工作区");
+      expect(() => ws.validateFolderRoot(winDir.toLowerCase())).toThrow("不能以操作系统目录作为工作区");
+      expect(() => ws.validateFolderRoot(join(winDir, "System32"))).toThrow("不能以操作系统目录作为工作区");
+    } else {
+      expect(() => ws.validateFolderRoot("/etc")).toThrow("不能以操作系统目录作为工作区");
+      expect(() => ws.validateFolderRoot("/usr/lib")).toThrow("不能以操作系统目录作为工作区");
+    }
+  });
+
   test("拒绝:相对路径/不存在/文件/盘符根/与数据目录重叠", () => {
     expect(() => ws.createWorkspace({ type: "folder", root: "relative/path" })).toThrow("绝对路径");
     expect(() => ws.createWorkspace({ type: "folder", root: join(tmpdir(), "rkh-definitely-missing-xyz") })).toThrow("不存在");

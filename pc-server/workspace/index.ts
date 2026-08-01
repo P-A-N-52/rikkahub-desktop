@@ -139,7 +139,29 @@ export function validateFolderRoot(rawRoot: unknown): string {
   if (rootPrefixed.startsWith(dataPrefixed) || dataPrefixed.startsWith(rootPrefixed)) {
     throw new Error("工作区不能与应用数据目录重叠");
   }
+  // 操作系统系统目录拒绝(M1 冒烟发现的缺口):这类目录做工作区无正当场景,
+  // 写坏即系统级灾难。只拦"等于或位于系统目录内",不拦包含关系(C:\ 已被盘根规则拦)。
+  // Windows 路径大小写不敏感,比较前统一小写。
+  const comparable = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
+  for (const sysDir of systemDenyDirs()) {
+    if (comparable(root) === comparable(sysDir) || comparable(rootPrefixed).startsWith(comparable(sysDir + sep))) {
+      throw new Error("不能以操作系统目录作为工作区");
+    }
+  }
   return root;
+}
+
+/** 平台系统目录黑名单(规范化绝对路径)。 */
+function systemDenyDirs(): string[] {
+  if (process.platform === "win32") {
+    return [
+      process.env.SystemRoot || "C:\Windows",
+      process.env.ProgramFiles || "C:\Program Files",
+      process.env["ProgramFiles(x86)"] || "C:\Program Files (x86)",
+      process.env.ProgramData || "C:\ProgramData",
+    ].map((dir) => resolve(dir));
+  }
+  return ["/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/var", "/System", "/Library"].map((dir) => resolve(dir));
 }
 
 export function createWorkspace(input: { type: WorkspaceType; name?: unknown; root?: unknown }): Workspace {
