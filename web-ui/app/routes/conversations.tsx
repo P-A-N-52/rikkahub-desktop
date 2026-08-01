@@ -186,6 +186,10 @@ const EMPTY_SUGGESTIONS: string[] = [];
 const VirtuosoListPadding = () => <div className="h-4" />;
 const VIRTUOSO_COMPONENTS = { Header: VirtuosoListPadding, Footer: VirtuosoListPadding };
 const COMPRESS_TOKEN_OPTIONS = [500, 1000, 2000, 4000];
+// 工作台面板宽度(占横向组宽的百分比)。注意 react-resizable-panels v4 的数字按像素
+// 解析,百分比必须传字符串(如 "36%")。
+const WORKBENCH_DEFAULT_WIDTH_PCT = 36;
+const WORKBENCH_MIN_WIDTH_PCT = 20;
 const COMPRESS_KEEP_OPTIONS = [0, 16, 32, 64];
 const TRANSLATION_LANGUAGES = [
   { value: "zh-CN" },
@@ -2281,19 +2285,30 @@ function ConversationsPageInner() {
 
   const hasWorkbenchPanel = Boolean(panel);
   const workbenchPanelRef = React.useRef<PanelImperativeHandle | null>(null);
+  // 用户上次调整的工作台宽度(占组宽百分比),关闭再打开时恢复。
+  const workbenchWidthRef = React.useRef(WORKBENCH_DEFAULT_WIDTH_PCT);
 
+  // 工作台开合的根治方案(用户反馈:关闭后空间不回收/拖到边缘后重开只剩一条缝):
+  // react-resizable-panels v4 的三个坑一起踩过——
+  //   1. 数字尺寸按"像素"解析(字符串才是百分比),原 defaultSize={36}/minSize={24}
+  //      全是像素级碎宽,面板可被拖成任意残缝;
+  //   2. 动态 defaultSize 在 Panel 的重注册依赖里,每次开关都触发 unregister/register,
+  //      清空宽度记忆并与命令式调用竞态——关闭后 collapse() 的结果被重注册布局盖掉;
+  //   3. expand() 仅在当前尺寸"恰好等于 collapsedSize"时动作,残缝宽度让它彻底失灵。
+  // 因此:约束全部改为静态百分比字符串(杜绝重注册),开合一律用无前置条件的 resize()
+  // 显式驱动,宽度记忆由 onResize 维护。
   React.useEffect(() => {
     if (isMobile) return;
 
     const workbenchPanel = workbenchPanelRef.current;
     if (!workbenchPanel) return;
 
-    if (hasWorkbenchPanel) {
-      workbenchPanel.expand();
+    if (panel) {
+      workbenchPanel.resize(`${workbenchWidthRef.current}%`);
     } else {
-      workbenchPanel.collapse();
+      workbenchPanel.resize("0%");
     }
-  }, [hasWorkbenchPanel, isMobile]);
+  }, [panel, isMobile]);
 
   // 全局拖放附件落进聚焦窗格的草稿(草稿键推导与窗格内 useDraftInputController 一致)。
   const focusedDraftKey = activeId ?? (isHomeRoute ? homeDraftId : null);
@@ -2393,7 +2408,7 @@ function ConversationsPageInner() {
                     {index > 0 ? <ResizableHandle /> : null}
                     <ResizablePanel
                       id={`conversation-pane-${index}`}
-                      minSize={18}
+                      minSize="18%"
                       className="flex min-h-0 flex-col"
                     >
                       {renderPane(pane, index)}
@@ -2406,11 +2421,18 @@ function ConversationsPageInner() {
                 />
                 <ResizablePanel
                   id="workbench-panel"
-                  defaultSize={hasWorkbenchPanel ? 36 : 0}
-                  minSize={24}
+                  defaultSize="0%"
+                  minSize={`${WORKBENCH_MIN_WIDTH_PCT}%`}
+                  maxSize="60%"
                   collapsible
-                  collapsedSize={0}
+                  collapsedSize="0%"
                   panelRef={workbenchPanelRef}
+                  onResize={(size) => {
+                    // 只记有效宽度:关闭态/收起吸附产生的 0 不覆盖用户偏好。
+                    if (size.asPercentage >= WORKBENCH_MIN_WIDTH_PCT) {
+                      workbenchWidthRef.current = size.asPercentage;
+                    }
+                  }}
                   className="flex min-h-0 flex-col"
                 >
                   {panel ? (
