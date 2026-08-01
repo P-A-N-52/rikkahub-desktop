@@ -2,7 +2,7 @@
 // 覆盖:managed/folder 创建与目录生命周期、folder 根目录准入校验、权限档位、
 // 信任门、删除(目录清理 + 归属会话经 working set 权威实例解绑)、列迁移幂等。
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, sep } from "node:path";
 
@@ -85,7 +85,7 @@ describe("folder 工作区准入校验", () => {
     expect(workspace.type).toBe("folder");
     expect(workspace.trustedAt).toBeNull();
     expect(workspace.permissionPreset).toBe("confirm_each");
-    expect(workspace.name).toBe(realDir.split(sep).filter(Boolean).pop());
+    expect(workspace.name).toBe(realDir.split(sep).filter(Boolean).pop() ?? "");
     expect(workspace.root).toBe(realDir);
 
     const trusted = ws.trustWorkspace(workspace.id);
