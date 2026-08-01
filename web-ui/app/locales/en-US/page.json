@@ -90,7 +90,15 @@
       "user": "User",
       "assistant": "Assistant"
     },
-    "scroll_to_bottom": "Scroll to bottom"
+    "scroll_to_bottom": "Scroll to bottom",
+    "greeting": {
+      "morning": "Good morning",
+      "noon": "Good afternoon",
+      "afternoon": "Good afternoon",
+      "evening": "Good evening",
+      "night": "Up late"
+    },
+    "greeting_line": "{{greeting}} — how can I help?"
   },
   "workspace": {
     "tabs": {

@@ -81,7 +81,7 @@ import {
   type UIMessagePart,
 } from "~/types";
 import { ArrowDown, Check, ListChecks, Loader2, MessageSquare, Pencil, X } from "lucide-react";
-import Logo from "~/components/logo";
+import { EmptyGreeting } from "~/components/empty-greeting";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -1938,15 +1938,8 @@ function ConversationsPageInner() {
         {isNewChat && (activeWorkspace ? (
           <WorkspaceEmptyState workspace={activeWorkspace} onPrompt={handleClickSuggestion} />
         ) : (
-          <div className="mb-4 text-center">
-            <div className="mb-4 flex justify-center">
-              <div className="[animation:rikkahub-breathe_4s_ease-in-out_infinite] [&>svg]:size-16">
-                <Logo className="size-16 text-primary" />
-              </div>
-            </div>
-            <p className="text-xl font-medium leading-relaxed text-foreground">
-              {t("conversations.welcome_prompt")}
-            </p>
+          <div className="mb-6 text-center">
+            <EmptyGreeting />
           </div>
         ))}
         {/* Floating chunked-TTS play bar — pops in only while a message is being read out

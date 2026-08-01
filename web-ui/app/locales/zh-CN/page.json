@@ -90,7 +90,15 @@
       "user": "用户",
       "assistant": "助手"
     },
-    "scroll_to_bottom": "滚动到底部"
+    "scroll_to_bottom": "滚动到底部",
+    "greeting": {
+      "morning": "早上好",
+      "noon": "中午好",
+      "afternoon": "下午好",
+      "evening": "晚上好",
+      "night": "夜深了"
+    },
+    "greeting_line": "{{greeting}}，有什么可以帮助你的？"
   },
   "workspace": {
     "tabs": {
