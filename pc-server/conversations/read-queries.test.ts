@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { ensureConversationTables } from "./index";
 import {
   conversationExistsInDb,
   countConversations,
@@ -13,14 +14,10 @@ import {
 } from "./read-queries";
 
 function seededDb(): Database {
+  // 真实 schema(ensureConversationTables)而非私有副本:列演进(如工作区列)时私有
+  // schema 会与 META_COLUMNS 漂移导致整批查询报错(2-0 教训的变体)。
   const db = new Database(":memory:");
-  db.exec(`CREATE TABLE pc_conversation (
-    id TEXT PRIMARY KEY NOT NULL, assistant_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
-    system_prompt TEXT NOT NULL DEFAULT '',
-    suggestions TEXT NOT NULL DEFAULT '[]', is_pinned INTEGER NOT NULL DEFAULT 0,
-    create_at INTEGER NOT NULL, update_at INTEGER NOT NULL,
-    mode_injection_ids TEXT NOT NULL DEFAULT '[]', lorebook_ids TEXT NOT NULL DEFAULT '[]'
-  )`);
+  ensureConversationTables(db);
   const ins = db.prepare(
     "INSERT INTO pc_conversation (id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
@@ -92,13 +89,7 @@ describe("pagedConversationMetas(专题2 J 族)", () => {
 
   test("与旧 JS 管线逐元素等价(随机数据,含 updateAt/isPinned 并列)", () => {
     const db = new Database(":memory:");
-    db.exec(`CREATE TABLE pc_conversation (
-      id TEXT PRIMARY KEY NOT NULL, assistant_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
-      system_prompt TEXT NOT NULL DEFAULT '',
-      suggestions TEXT NOT NULL DEFAULT '[]', is_pinned INTEGER NOT NULL DEFAULT 0,
-      create_at INTEGER NOT NULL, update_at INTEGER NOT NULL,
-      mode_injection_ids TEXT NOT NULL DEFAULT '[]', lorebook_ids TEXT NOT NULL DEFAULT '[]'
-    )`);
+    ensureConversationTables(db);
     const ins = db.prepare(
       "INSERT INTO pc_conversation (id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );

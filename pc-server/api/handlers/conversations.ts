@@ -34,6 +34,7 @@ import { attachOcrToImageParts, compressConversation, englishLanguageName, fetch
 import { generateAnswer } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
 import { generating } from "../../conversations/generation-state";
+import { getWorkspace } from "../../workspace";
 
 export async function handleConversationRoutes(request: Request, url: URL, path: string): Promise<Response | null> {
   // 列表失效事件已并入 /api/events 通道(invalidate 事件);会话详情流保持独立端点
@@ -129,8 +130,18 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       deleteConversationsById(new Set([conversationId]));
       return new Response(null, { status: 204 });
     }
+    // messages POST 的 body 在 ensureConversation 之前读:工作区绑定是创建期属性,
+    // 必须随建档请求生效(会话首条消息才建档,事后无绑定时机)。body 只读这一次,
+    // 下方 messages 分支复用。绑定前校验工作区存在,防悬空引用。
+    let messagesBody: { parts?: JsonValue[]; workspaceId?: string } | null = null;
+    if (sub === "messages" && request.method === "POST") {
+      messagesBody = await readJson<{ parts?: JsonValue[]; workspaceId?: string }>(request);
+      if (messagesBody.workspaceId && !getWorkspace(String(messagesBody.workspaceId))) {
+        return error("Workspace not found", 404);
+      }
+    }
     const conversation = (sub === "messages" || sub === "system-prompt") && request.method === "POST"
-      ? ensureConversation(conversationId)
+      ? ensureConversation(conversationId, messagesBody?.workspaceId ? { workspaceId: String(messagesBody.workspaceId) } : undefined)
       : getConversation(conversationId);
     if (!conversation) return error("Conversation not found", 404);
     // DB-first:整个子路由块持有引用——translate/OCR 等长 await 期间实例不得被 sweep
@@ -163,7 +174,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       return json(page);
     }
     if (sub === "messages" && request.method === "POST") {
-      const body = await readJson<{ parts: JsonValue[] }>(request);
+      const body = messagesBody ?? {};
       const assistant = findAssistant(conversation.assistantId);
       const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
       // 用户在 ask_user 等待中直接发新消息时，旧 generation 可能还在跑（不太常

@@ -91,6 +91,22 @@ export type ConversationListDto = {
   createAt: number;
   updateAt: number;
   isGenerating: boolean;
+  /** 工作区归属(agent 模式):null = 对话模式。容器层按此分流会话列表。 */
+  workspaceId: string | null;
+};
+
+/** 工作区(agent 模式):workspaces 路由的元素。status 为运行时计算(missing=根目录丢失)。 */
+export type WorkspaceDto = {
+  id: string;
+  name: string;
+  type: "managed" | "folder";
+  root: string;
+  permissionPreset: "confirm_each" | "balanced" | "full_access";
+  trustedAt: number | null;
+  createAt: number;
+  updateAt: number;
+  lastAccessAt: number;
+  status: "ready" | "missing";
 };
 
 /** conversations/paged 响应包装。 */
@@ -149,6 +165,7 @@ export type AppErrorDomain =
   | "backup"
   | "network"
   | "tool"
+  | "workspace"
   | "media"
   | "update"
   | "internal";

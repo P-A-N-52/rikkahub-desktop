@@ -16,6 +16,10 @@ export const dataDir = resolve(process.env.RIKKAHUB_PC_DATA_DIR ?? join(rootDir,
 
 export const filesDir = join(dataDir, "files");
 export const skillsDir = join(dataDir, "skills");
+// 工作区宿主目录(agent 模式)。managed 型工作区在 workspaces/<id>/{files/, tmp/} 下托管:
+// files/ 是模型可见的边界根,tmp/ 放超长 shell 输出落盘等 PC 侧杂物;folder 型工作区
+// root 指向用户真实目录,但 tmp/ 仍在这里(不污染用户目录)。
+export const workspacesDir = join(dataDir, "workspaces");
 // 用户上传的自定义字体。跟 files/skills 同级，落在 pc-data/ 下，gitignored 且应用更新不覆盖。
 export const customFontsDir = join(dataDir, "fonts");
 export const statePath = join(dataDir, "state.json");

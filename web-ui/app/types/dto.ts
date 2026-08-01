@@ -21,4 +21,5 @@ export type {
   PagedResult,
   UploadedFileDto,
   UploadFilesResponseDto,
+  WorkspaceDto,
 } from "@server/foundation/types/dto";

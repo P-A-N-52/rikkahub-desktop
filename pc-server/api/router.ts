@@ -13,12 +13,14 @@ import { handleSettingsRoutes } from "./handlers/settings";
 import { handleSkillRoutes } from "./handlers/skills";
 import { handleSystemRoutes } from "./handlers/system";
 import { handleUpdateRoutes } from "./handlers/update";
+import { handleWorkspaceRoutes } from "./handlers/workspaces";
 
 const handlers = [
   handleSystemRoutes,
   handleSettingsRoutes,
   handleMemoryRoutes,
   handleConversationRoutes,
+  handleWorkspaceRoutes,
   handleFileRoutes,
   handleSkillRoutes,
   handleDataRoutes,

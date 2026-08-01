@@ -57,7 +57,9 @@ export function seedConversationInjectionBinding(conversation: Conversation, ass
   conversation.lorebookIds = getStringArray(assistant.lorebookIds);
 }
 
-export function ensureConversation(idValue: string) {
+/** init 仅在会话创建时刻生效(已存在的会话原样返回)——PC 会话首条消息才建档,
+ *  工作区归属等创建期属性只能随首个建档请求进来,事后不可改绑。 */
+export function ensureConversation(idValue: string, init?: { workspaceId?: string | null }) {
   let conversation = getConversation(idValue);
   if (!conversation) {
     const now = Date.now();
@@ -72,6 +74,8 @@ export function ensureConversation(idValue: string) {
       isPinned: false,
       createAt: now,
       updateAt: now,
+      workspaceId: init?.workspaceId ?? null,
+      workspaceCwd: null,
     };
     seedConversationInjectionBinding(conversation, assistant);
     registerConversation(conversation); // 新建:内存即权威,防 checkout 从活库读空树反向覆盖

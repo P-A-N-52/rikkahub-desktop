@@ -236,6 +236,49 @@ export interface Conversation {
    *  对齐安卓 Conversation.modeInjectionIds/lorebookIds)。缺省 = 空集。 */
   modeInjectionIds?: string[];
   lorebookIds?: string[];
+  /** 工作区归属(agent 模式)。null/缺省 = 对话模式。创建时绑定,不随会话迁移。
+   *  仅存 PC 自有库;跨端导出白名单不含此列(工作区会话到安卓降级为普通对话,§9.1)。 */
+  workspaceId?: string | null;
+  /** 会话级工作目录(绝对路径,必须在 workspace root 边界内)。null = workspace root。 */
+  workspaceCwd?: string | null;
+}
+
+// ----- 工作区(agent 模式)领域模型 -----
+
+export type WorkspaceType = "managed" | "folder";
+
+/** 审批档位(§3.2):read 恒免审;confirm_each=write/edit/bash 全审批;
+ *  balanced=区内写免审、bash 审批;full_access=全免审(危险命令拦截独立于档位,恒生效)。 */
+export type WorkspacePermissionPreset = "confirm_each" | "balanced" | "full_access";
+
+/** 运行时健康状态(计算属性,不落库):missing = 根目录丢失(对齐安卓 BROKEN 语义,不静默删记录)。 */
+export type WorkspaceStatus = "ready" | "missing";
+
+export interface Workspace {
+  id: string;
+  name: string;
+  type: WorkspaceType;
+  /** 边界根(绝对路径)。managed 型指向 dataDir/workspaces/<id>/files(载入时由 dataDir 计算,
+   *  DB 存空串——数据目录整体搬迁后自愈);folder 型为用户选择的真实目录(DB 存绝对路径)。 */
+  root: string;
+  permissionPreset: WorkspacePermissionPreset;
+  /** 信任门通过时间(§3.3)。managed 型创建即信任;folder 型 null = 未过信任门。 */
+  trustedAt: number | null;
+  createAt: number;
+  updateAt: number;
+  lastAccessAt: number;
+}
+
+export interface PcWorkspaceRow {
+  id: string;
+  name: string;
+  type: string;
+  root: string;
+  permission_preset: string;
+  trusted_at: number | null;
+  create_at: number;
+  update_at: number;
+  last_access_at: number;
 }
 
 export interface RequestLog {
@@ -432,6 +475,8 @@ export interface PcConversationRow {
   update_at: number;
   mode_injection_ids?: string;
   lorebook_ids?: string;
+  workspace_id?: string | null;
+  workspace_cwd?: string | null;
 }
 export interface PcMessageNodeRow {
   id: string;

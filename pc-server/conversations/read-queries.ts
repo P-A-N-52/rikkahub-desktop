@@ -24,6 +24,8 @@ interface MetaRow {
   update_at: number;
   mode_injection_ids: string;
   lorebook_ids: string;
+  workspace_id: string | null;
+  workspace_cwd: string | null;
 }
 
 function parseIdArray(raw: string | undefined): string[] {
@@ -53,10 +55,12 @@ function rowToMeta(row: MetaRow): ConversationMeta {
     updateAt: row.update_at,
     modeInjectionIds: parseIdArray(row.mode_injection_ids),
     lorebookIds: parseIdArray(row.lorebook_ids),
+    workspaceId: row.workspace_id ?? null,
+    workspaceCwd: row.workspace_cwd ?? null,
   };
 }
 
-const META_COLUMNS = "id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids";
+const META_COLUMNS = "id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd";
 
 /**
  * 某助手的全部会话元数据，ORDER BY create_at DESC, id DESC——
