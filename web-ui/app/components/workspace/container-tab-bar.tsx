@@ -1,15 +1,27 @@
 import * as React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, MessageSquare, Plus, X } from "lucide-react";
+import { Folder, FolderOpen, MessageSquare, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { Button } from "~/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
+import { Input } from "~/components/ui/input";
+import { confirmDialog } from "~/stores/confirm-store";
 import { cn } from "~/lib/utils";
 import {
   CreateFolderWorkspaceDialog,
@@ -49,6 +61,10 @@ export function ContainerTabBar() {
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false);
   // 信任门目标 + 拒绝语义:创建流拒绝=删除记录;重开已有未信任工作区拒绝=仅关门。
   const [trustTarget, setTrustTarget] = React.useState<{ workspace: WorkspaceDto; fromCreate: boolean } | null>(null);
+  // R7 工作区管理:重命名对话框目标 + 输入值(提交 PATCH workspaces/:id)。
+  const [renameTarget, setRenameTarget] = React.useState<WorkspaceDto | null>(null);
+  const [renameValue, setRenameValue] = React.useState("");
+  const [renameSaving, setRenameSaving] = React.useState(false);
 
   React.useEffect(() => {
     void refresh();
@@ -102,6 +118,57 @@ export function ContainerTabBar() {
       toast.error(err instanceof Error ? err.message : t("workspace.create.failed"));
     }
   }, [navigate, refresh, t]);
+
+  // R7:从菜单激活已有工作区——folder 型未信任先过信任门,其余直接开标签并导航。
+  const openWorkspaceFromMenu = React.useCallback(
+    (workspace: WorkspaceDto) => {
+      if (workspace.type === "folder" && workspace.trustedAt == null) {
+        setTrustTarget({ workspace, fromCreate: false });
+        return;
+      }
+      useContainerTabsStore.getState().openContainer(workspace.id);
+      navigateToContainer(workspace.id, navigate);
+    },
+    [navigate],
+  );
+
+  const submitRename = React.useCallback(async () => {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name || name === renameTarget.name) {
+      setRenameTarget(null);
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await api.patch<{ workspace: WorkspaceDto }>(`workspaces/${renameTarget.id}`, { name });
+      await refresh();
+      setRenameTarget(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("workspace.menu.rename_failed"));
+    } finally {
+      setRenameSaving(false);
+    }
+  }, [refresh, renameTarget, renameValue, t]);
+
+  // 删除仅移除工作区记录与会话索引,不碰磁盘文件(folder 型的真实目录保持原样)。
+  const deleteWorkspace = React.useCallback(
+    async (workspace: WorkspaceDto) => {
+      const ok = await confirmDialog({
+        title: t("workspace.menu.delete_confirm_title", { name: workspace.name }),
+        description: t("workspace.menu.delete_confirm_desc"),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api.delete(`workspaces/${workspace.id}`);
+        await refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t("workspace.menu.delete_failed"));
+      }
+    },
+    [refresh, t],
+  );
 
   const openChatContainer = React.useCallback(() => {
     useContainerTabsStore.getState().openContainer(CHAT_CONTAINER);
@@ -158,6 +225,57 @@ export function ContainerTabBar() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
+          {/* R7:已有工作区列表——点击激活;行尾悬浮出重命名/删除(阻断 item 选中) */}
+          {workspaces.length > 0 ? (
+            <>
+              <DropdownMenuLabel>{t("workspace.menu.existing")}</DropdownMenuLabel>
+              {workspaces.map((workspace) => {
+                const WsIcon = workspace.type === "folder" ? FolderOpen : Folder;
+                return (
+                  <DropdownMenuItem
+                    key={workspace.id}
+                    className="group/ws"
+                    data-active={workspace.id === activeTab || undefined}
+                    onSelect={() => openWorkspaceFromMenu(workspace)}
+                  >
+                    <WsIcon className="size-4" strokeWidth={1.75} />
+                    <span className="min-w-0 flex-1 truncate" title={workspace.type === "folder" ? workspace.root : undefined}>
+                      {workspace.name}
+                    </span>
+                    <span
+                      className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/ws:opacity-100"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        title={t("workspace.menu.rename")}
+                        className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-foreground"
+                        onClick={() => {
+                          setRenameValue(workspace.name);
+                          setRenameTarget(workspace);
+                        }}
+                      >
+                        <Pencil className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        title={t("workspace.menu.delete")}
+                        className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-destructive"
+                        onClick={() => void deleteWorkspace(workspace)}
+                      >
+                        <Trash2 className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                    </span>
+                  </DropdownMenuItem>
+                );
+              })}
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           <DropdownMenuItem onSelect={() => void createManagedWorkspace()}>
             <Folder className="size-4" />
             <div className="min-w-0">
@@ -187,6 +305,37 @@ export function ContainerTabBar() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* R7 重命名工作区 */}
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("workspace.menu.rename_title")}</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={renameValue}
+            autoFocus
+            placeholder={t("workspace.menu.rename_placeholder")}
+            onChange={(event) => setRenameValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void submitRename();
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameTarget(null)}>
+              {t("workspace.create.cancel")}
+            </Button>
+            <Button onClick={() => void submitRename()} disabled={renameSaving || !renameValue.trim()}>
+              {t("workspace.menu.rename_confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CreateFolderWorkspaceDialog
         open={folderDialogOpen}

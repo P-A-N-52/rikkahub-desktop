@@ -140,6 +140,18 @@
       "example_1": "Look around this directory and give me a structural overview",
       "example_2": "Create a TODO.md and break my upcoming tasks into a checklist",
       "example_3": "Organize what I paste next into a note and save it as a file"
+    },
+    "menu": {
+      "existing": "Workspaces",
+      "rename": "Rename",
+      "delete": "Delete",
+      "rename_title": "Rename workspace",
+      "rename_placeholder": "Enter a new name…",
+      "rename_confirm": "Save",
+      "rename_failed": "Failed to rename workspace",
+      "delete_confirm_title": "Delete workspace \"{{name}}\"?",
+      "delete_confirm_desc": "Only removes the workspace record and conversations; files on disk are untouched.",
+      "delete_failed": "Failed to delete workspace"
     }
   }
 }

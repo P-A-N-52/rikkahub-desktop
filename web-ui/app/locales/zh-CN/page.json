@@ -140,6 +140,18 @@
       "example_1": "看看这个目录里有什么，给我一份结构概览",
       "example_2": "创建一份 TODO.md，帮我把接下来的任务拆成清单",
       "example_3": "把我接下来粘贴的内容整理成一篇笔记存成文件"
+    },
+    "menu": {
+      "existing": "工作区",
+      "rename": "重命名",
+      "delete": "删除",
+      "rename_title": "重命名工作区",
+      "rename_placeholder": "输入新名称…",
+      "rename_confirm": "保存",
+      "rename_failed": "重命名失败",
+      "delete_confirm_title": "删除工作区「{{name}}」？",
+      "delete_confirm_desc": "仅移除工作区记录与会话，不会删除磁盘上的文件。",
+      "delete_failed": "删除工作区失败"
     }
   }
 }
