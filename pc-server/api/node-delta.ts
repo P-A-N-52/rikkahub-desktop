@@ -16,6 +16,14 @@
 
 import type { MessageNode } from "../foundation/types";
 
+/** 可增量的 tool part:output 恰为单个 text 条目(bash 部分输出回写的常态形状)。 */
+function isStreamableToolPart(part: Record<string, unknown>): boolean {
+  if (part.type !== "tool" || !Array.isArray(part.output) || part.output.length !== 1) return false;
+  const entry = part.output[0] as Record<string, unknown> | null;
+  return !!entry && typeof entry === "object" && !Array.isArray(entry)
+    && entry.type === "text" && typeof entry.text === "string";
+}
+
 export interface TextDeltaEntry {
   partIndex: number;
   baseLen: number;
@@ -47,6 +55,13 @@ export function fingerprintNode(node: MessageNode): NodeBroadcastFingerprint | n
     } else if (part.type === "reasoning" && typeof part.reasoning === "string") {
       const { reasoning, ...meta } = part;
       parts.push({ kind: "string", type: "reasoning", value: reasoning, meta: JSON.stringify(meta) });
+    } else if (isStreamableToolPart(part)) {
+      // 工作区 bash 流式输出(M2-2):tool part 的 output 为单 text 条目时,把该文本作为
+      // 可增量载体,其余字段(input/approvalState/条目 metadata…)全部进 meta 指纹——
+      // meta 一变(如截断后挂 details)自动回退关键帧,正确性不依赖追加假设。
+      const output = (part as unknown as { output: [{ type: "text"; text: string }] }).output;
+      const metaShape = { ...part, output: [{ ...output[0], text: "" }] };
+      parts.push({ kind: "string", type: "tool", value: output[0].text, meta: JSON.stringify(metaShape) });
     } else {
       parts.push({ kind: "json", type: String(part.type ?? ""), value: JSON.stringify(part) });
     }

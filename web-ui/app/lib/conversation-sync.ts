@@ -12,6 +12,7 @@ import type {
   ConversationNodesPageDto,
   ConversationNodeUpdateEventDto,
   ConversationTextDeltaEventDto,
+  MessagePart,
 } from "~/types";
 
 export function applyNodeUpdate(
@@ -220,11 +221,21 @@ export function applyTextDelta(
   for (const delta of event.deltas) {
     const part = parts[delta.partIndex];
     if (!part || typeof part !== "object") return "resync";
+    // tool part 增量(M2-2):载体是 output 唯一 text 条目的文本(bash 流式输出)。
+    const toolEntry =
+      part.type === "tool" && Array.isArray(part.output) && part.output.length === 1
+        && part.output[0] && typeof part.output[0] === "object" && !Array.isArray(part.output[0])
+        && (part.output[0] as { type?: unknown }).type === "text"
+        && typeof (part.output[0] as { text?: unknown }).text === "string"
+        ? (part.output[0] as { type: "text"; text: string })
+        : null;
     let current: string;
     if (part.type === "text" && typeof part.text === "string") {
       current = part.text;
     } else if (part.type === "reasoning" && typeof part.reasoning === "string") {
       current = part.reasoning;
+    } else if (toolEntry) {
+      current = toolEntry.text;
     } else {
       return "resync";
     }
@@ -236,7 +247,9 @@ export function applyTextDelta(
     parts[delta.partIndex] =
       part.type === "text"
         ? { ...part, text: current + suffix }
-        : { ...part, reasoning: current + suffix };
+        : part.type === "reasoning"
+          ? { ...part, reasoning: current + suffix }
+          : ({ ...part, output: [{ ...toolEntry!, text: current + suffix }] } as MessagePart);
     changed = true;
   }
   if (!changed && conversation.updateAt === event.updateAt && conversation.isGenerating === event.isGenerating) {

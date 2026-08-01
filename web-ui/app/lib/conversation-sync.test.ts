@@ -149,6 +149,29 @@ describe("applyTextDelta(专题2 H-b)", () => {
     expect(next.messages[0]!.messages[0]!.parts).toEqual([{ type: "reasoning", reasoning: "想了想" }]);
   });
 
+  test("tool part 单 text 输出追加(M2-2 bash 流式)", () => {
+    const base = node("n1", "x");
+    base.messages[0]!.parts = [{
+      type: "tool", toolCallId: "c1", toolName: "bash", input: {},
+      output: [{ type: "text", text: "first\n" }], approvalState: { type: "auto" },
+    }];
+    const conv = conversation([base]);
+    const next = applyTextDelta(conv, deltaEvent({ deltas: [{ partIndex: 0, baseLen: 6, text: "second\n" }] }));
+    if (next === "resync") throw new Error("unexpected resync");
+    const part = next.messages[0]!.messages[0]!.parts[0] as { output: [{ text: string }] };
+    expect(part.output[0].text).toBe("first\nsecond\n");
+  });
+
+  test("tool part 多条目 output → resync(非可增量形状)", () => {
+    const base = node("n1", "x");
+    base.messages[0]!.parts = [{
+      type: "tool", toolCallId: "c1", toolName: "bash", input: {},
+      output: [{ type: "text", text: "a" }, { type: "text", text: "b" }], approvalState: { type: "auto" },
+    }];
+    const conv = conversation([base]);
+    expect(applyTextDelta(conv, deltaEvent({ deltas: [{ partIndex: 0, baseLen: 1, text: "x" }] }))).toBe("resync");
+  });
+
   test("快照重叠容忍:本地已含部分增量时只追加缺口(幂等)", () => {
     const conv = conversation([node("n1", "你好")]);
     const evt = deltaEvent({ deltas: [{ partIndex: 0, baseLen: 1, text: "好世界" }] });

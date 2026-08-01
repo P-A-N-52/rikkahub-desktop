@@ -100,6 +100,40 @@ describe("diffFingerprints", () => {
     expect(diffFingerprints(fingerprintNode(a)!, fingerprintNode(b)!)).toBeNull();
   });
 
+  test("tool 单 text 输出前缀增长 → 增量(M2-2 bash 流式)", () => {
+    const tool = {
+      type: "tool", toolCallId: "c1", toolName: "bash", input: { command: "ls" },
+      output: [{ type: "text", text: "first\n" }], approvalState: { type: "auto" },
+    } as unknown as MessagePart;
+    const a = node([tool]);
+    const b = clone(a);
+    ((b.messages[0]!.parts[0] as unknown as { output: [{ text: string }] }).output[0]).text += "second\n";
+    const deltas = diffFingerprints(fingerprintNode(a)!, fingerprintNode(b)!)!;
+    expect(deltas).toEqual([{ partIndex: 0, baseLen: 6, text: "second\n" }]);
+  });
+
+  test("tool 输出条目 metadata 变化(截断后挂 details)→ null", () => {
+    const tool = {
+      type: "tool", toolCallId: "c1", toolName: "bash", input: {},
+      output: [{ type: "text", text: "x" }], approvalState: { type: "auto" },
+    } as unknown as MessagePart;
+    const a = node([tool]);
+    const b = clone(a);
+    const entry = (b.messages[0]!.parts[0] as unknown as { output: [{ text: string; metadata?: object }] }).output[0];
+    entry.text += "y";
+    entry.metadata = { workspace: { tool: "bash", details: { exitCode: 0 } } };
+    expect(diffFingerprints(fingerprintNode(a)!, fingerprintNode(b)!)).toBeNull();
+  });
+
+  test("tool 输出从空变单条目(建卡→首帧)→ null(kind 变化回退关键帧)", () => {
+    const mk = (output: unknown[]) => ({
+      type: "tool", toolCallId: "c1", toolName: "bash", input: {}, output, approvalState: { type: "auto" },
+    }) as unknown as MessagePart;
+    const a = node([mk([])]);
+    const b = node([mk([{ type: "text", text: "hi" }])]);
+    expect(diffFingerprints(fingerprintNode(a)!, fingerprintNode(b)!)).toBeNull();
+  });
+
   test("message 增加(regenerate 新分支)→ null", () => {
     const a = node([{ type: "text", text: "t" }]);
     const b = clone(a);
