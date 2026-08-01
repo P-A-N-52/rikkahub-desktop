@@ -506,6 +506,10 @@ function ContainerTab({
     <button
       type="button"
       draggable
+      ref={(node) => {
+        // I3:激活标签滚入视野(超过容量收缩下限后靠横向滚动兜底)
+        if (node && active) node.scrollIntoView({ inline: "nearest", block: "nearest" });
+      }}
       onClick={onActivate}
       onAuxClick={(event) => {
         if (event.button === 1 && closable) onClose();
