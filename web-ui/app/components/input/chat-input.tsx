@@ -6,9 +6,7 @@ import { toast } from "sonner";
 
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
 import { ModelList } from "~/components/input/model-list";
-import { ReasoningPickerButton } from "~/components/input/reasoning-picker";
 import { SearchPickerButton } from "~/components/input/search-picker";
-import { McpPickerButton } from "~/components/input/mcp-picker";
 import { MemoryBadge } from "~/components/memory/memory-badge";
 import { ExtensionPickerButton } from "~/components/input/extension-picker";
 import { WorkspacePermissionPicker } from "~/components/input/workspace-permission-picker";
@@ -693,12 +691,7 @@ function ChatInputInner({
   const placeholder = ready ? t("chat.placeholder_ready") : t("chat.placeholder_not_ready");
 
   return (
-    <div
-      className={cn(
-        "bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60",
-        className,
-      )}
-    >
+    <div className={className}>
       <div className="mx-auto w-full max-w-3xl px-4 py-4">
         {/* 可拖拽的上沿手柄：上下拖改变输入框高度（左右锁定）。对标微信等桌面聊天
             应用，让用户按需放大/收起输入区，尺寸跨会话与重启保留。 */}
@@ -713,7 +706,7 @@ function ChatInputInner({
         >
           <div className="h-1 w-10 rounded-full bg-border/70 transition-colors hover:bg-primary/50" />
         </div>
-        <div className="relative flex flex-col gap-2 rounded-2xl border bg-card p-3 shadow-lg transition-shadow focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-ring">
+        <div className="relative flex flex-col gap-2 rounded-[var(--ds-chat-composer-radius)] bg-card p-3 shadow-[var(--ds-chat-composer-shadow)] transition-shadow focus-within:shadow-[var(--ds-chat-composer-shadow-focus)]">
           {/* 待确认记忆提醒角标:浮在输入框右上角外沿,像消息提醒。仅有待确认项时渲染。 */}
           <div className="absolute -top-4 right-2 z-10">
             <MemoryBadge />
@@ -910,8 +903,6 @@ function ChatInputInner({
               </DropdownMenu>
               <ModelList disabled={!canSwitchModel} className="max-w-64" />
               <SearchPickerButton disabled={!canSwitchModel} />
-              <ReasoningPickerButton disabled={!canSwitchModel} />
-              <McpPickerButton disabled={!canSwitchModel} />
               <ExtensionPickerButton disabled={!canSwitchModel} />
               <WorkspacePermissionPicker />
               <WorkspaceFilesButton />
@@ -920,24 +911,6 @@ function ChatInputInner({
                 disabled={!canUseQuickMessage}
                 onSelect={handleQuickMessageSelect}
               />
-              <Button
-                type="button"
-                variant={asrListening ? "secondary" : "ghost"}
-                size="icon"
-                disabled={!canUseAsr && !asrListening}
-                className={cn(
-                  "size-8 rounded-full text-muted-foreground hover:text-foreground",
-                  asrListening && "text-primary shadow-sm",
-                )}
-                title={asrListening ? t("asr.stop") : t("asr.start")}
-                onClick={toggleAsr}
-              >
-                {asrListening ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Mic className="size-4" />
-                )}
-              </Button>
             </div>
             <div className="relative flex items-center gap-1.5">
               {/* 优化较慢提示:浮在按钮组上方,绝对定位不挤占布局(原方案放底部会把整个输入区往下顶)。 */}
@@ -979,6 +952,24 @@ function ChatInputInner({
                   {t("optimize.undo")}
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                variant={asrListening ? "secondary" : "ghost"}
+                size="icon"
+                disabled={!canUseAsr && !asrListening}
+                className={cn(
+                  "size-8 rounded-full text-muted-foreground hover:text-foreground",
+                  asrListening && "text-primary shadow-sm",
+                )}
+                title={asrListening ? t("asr.stop") : t("asr.start")}
+                onClick={toggleAsr}
+              >
+                {asrListening ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Mic className="size-4" />
+                )}
+              </Button>
               <Button
                 onClick={() => {
                   void handlePrimaryAction();

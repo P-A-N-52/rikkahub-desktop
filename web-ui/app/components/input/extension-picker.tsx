@@ -28,7 +28,11 @@ import {
 } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 
+import { McpPanel, useMcpBadge } from "./mcp-picker";
 import { PickerErrorAlert } from "./picker-error-alert";
+
+// 拓展选择器(前端重构A2,用户拍板"MCP和拓展入口合一"):MCP 以第一个标签页并入,
+// 本组件成为输入行上 MCP+拓展 的唯一入口;徽标计数 = 拓展选中数 + MCP 选中数。
 
 export interface ExtensionPickerButtonProps {
   disabled?: boolean;
@@ -71,9 +75,10 @@ function getQuickMessages(source: unknown): QuickMessage[] {
   );
 }
 
-type ActiveTab = "quickmessages" | "mode" | "lorebook" | "skills";
+type ActiveTab = "mcp" | "quickmessages" | "mode" | "lorebook" | "skills";
 
 const SETTINGS_TAB_BY_ACTIVE_TAB: Record<ActiveTab, string> = {
+  mcp: "mcp",
   quickmessages: "quick",
   mode: "mode",
   lorebook: "lorebook",
@@ -114,7 +119,10 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
   const useConversationInjections =
     currentAssistant?.allowConversationPromptInjection === true && conversationExists;
 
-  const [activeTab, setActiveTab] = React.useState<ActiveTab>("quickmessages");
+  const mcpBadge = useMcpBadge();
+  const [activeTab, setActiveTab] = React.useState<ActiveTab>(
+    mcpBadge.hasServers ? "mcp" : "quickmessages",
+  );
   const [skills, setSkills] = React.useState<SkillProfile[]>([]);
 
   const canUse = Boolean(settings && currentAssistant && !disabled);
@@ -168,8 +176,10 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
     selectedModeInjectionIds.length +
     selectedLorebookIds.length +
     selectedQuickMessageIds.length +
-    selectedSkillNames.length;
+    selectedSkillNames.length +
+    mcpBadge.count;
   const hasData =
+    mcpBadge.hasServers ||
     quickMessages.length > 0 ||
     modeInjections.length > 0 ||
     lorebooks.length > 0 ||
@@ -190,7 +200,9 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
   }, [canUse, hasData]);
 
   React.useEffect(() => {
-    if (quickMessages.length > 0) {
+    if (mcpBadge.hasServers) {
+      setActiveTab("mcp");
+    } else if (quickMessages.length > 0) {
       setActiveTab("quickmessages");
     } else if (modeInjections.length > 0) {
       setActiveTab("mode");
@@ -199,7 +211,13 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
     } else if (skills.length > 0) {
       setActiveTab("skills");
     }
-  }, [quickMessages.length, modeInjections.length, lorebooks.length, skills.length]);
+  }, [
+    mcpBadge.hasServers,
+    quickMessages.length,
+    modeInjections.length,
+    lorebooks.length,
+    skills.length,
+  ]);
 
   // 助手级写入。端点为部分更新语义:只覆盖提交的数组,省略字段不动——
   // 调用方只发自己改的那一个集,无需回填其余现值(回填取错作用域曾导致交叉污染)。
@@ -420,8 +438,8 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
 
       <PopoverContent align="end" className="w-[min(92vw,26rem)] gap-0 p-0">
         <PopoverHeader className="border-b px-6 py-4">
-          <PopoverTitle>{t("injection.title")}</PopoverTitle>
-          <PopoverDescription>{t("injection.description")}</PopoverDescription>
+          <PopoverTitle>{t("integrations.title")}</PopoverTitle>
+          <PopoverDescription>{t("integrations.description")}</PopoverDescription>
         </PopoverHeader>
 
         <div className="space-y-4 px-4 py-4">
@@ -429,6 +447,22 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
 
           <div className="flex items-center gap-2">
             <div className="bg-muted inline-flex min-w-0 flex-1 rounded-full p-1">
+              {mcpBadge.hasServers && (
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs transition",
+                    activeTab === "mcp"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
+                  onClick={() => {
+                    setActiveTab("mcp");
+                  }}
+                >
+                  {t("integrations.tab_mcp")}
+                </button>
+              )}
               {quickMessages.length > 0 && (
                 <button
                   type="button"
@@ -499,6 +533,9 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
             </Button>
           </div>
 
+          {activeTab === "mcp" ? (
+            <McpPanel disabled={disabled} />
+          ) : (
           <ScrollArea className="h-[16rem] pr-3">
             {activeTab === "quickmessages" ? (
               quickMessages.length > 0 ? (
@@ -687,6 +724,7 @@ export function ExtensionPickerButtonImpl({ disabled = false, className }: Exten
               </div>
             )}
           </ScrollArea>
+          )}
         </div>
       </PopoverContent>
     </Popover>

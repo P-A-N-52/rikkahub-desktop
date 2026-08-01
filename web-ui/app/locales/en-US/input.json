@@ -144,5 +144,10 @@
     "full_access": "Full access",
     "full_access_hint": "Unrestricted access to files on this computer",
     "save_failed": "Failed to save permission preset"
+  },
+  "integrations": {
+    "title": "MCP & Extensions",
+    "description": "Pick MCP tools and extensions for this assistant",
+    "tab_mcp": "MCP"
   }
 }

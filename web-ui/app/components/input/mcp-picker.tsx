@@ -1,35 +1,51 @@
 import * as React from "react";
 
 import { useMutation } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, LoaderCircle, Terminal } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
-import { usePickerPopover } from "~/hooks/use-picker-popover";
 import { getDisplayName } from "~/lib/display";
 import { extractErrorMessage } from "~/lib/error";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { safeStringArray } from "~/lib/type-guards";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
-import type { McpServerConfig, McpToolOption, McpToolOverride } from "~/types";
-import { Button } from "~/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "~/components/ui/popover";
+import type { McpToolOption, McpToolOverride } from "~/types";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Switch } from "~/components/ui/switch";
 
 import { PickerErrorAlert } from "./picker-error-alert";
 
-export interface McpPickerButtonProps {
+// MCP 选择器(前端重构A2,用户拍板"MCP和拓展入口合一"):不再是输入行的独立
+// Popover 按钮,而是拓展弹层(extension-picker)里 MCP 标签页的内容面板。
+
+export interface McpPanelProps {
   disabled?: boolean;
-  className?: string;
+}
+
+/** 合一入口的徽标数据:已选中且全局启用的 MCP 服务器数 + 是否有可选服务器。 */
+export function useMcpBadge(): { count: number; hasServers: boolean } {
+  const { settings, currentAssistant } = useCurrentAssistant();
+  const allServers = settings?.mcpServers ?? [];
+  const enabledServerIdSet = React.useMemo(
+    () =>
+      new Set(
+        allServers
+          .filter((server) => server.commonOptions?.enable)
+          .map((server) => server.id),
+      ),
+    [allServers],
+  );
+  const selectedServerIds = React.useMemo(
+    () => safeStringArray(currentAssistant?.mcpServers),
+    [currentAssistant?.mcpServers],
+  );
+  const count = React.useMemo(
+    () => selectedServerIds.filter((serverId) => enabledServerIdSet.has(serverId)).length,
+    [enabledServerIdSet, selectedServerIds],
+  );
+  return { count, hasServers: enabledServerIdSet.size > 0 };
 }
 
 function getEnabledToolsCount(tools: McpToolOption[] | undefined): {
@@ -45,12 +61,12 @@ function getEnabledToolsCount(tools: McpToolOption[] | undefined): {
   return { enabled, total };
 }
 
-export function McpPickerButtonImpl({ disabled = false, className }: McpPickerButtonProps) {
+function McpPanelImpl({ disabled = false }: McpPanelProps) {
   const { t } = useTranslation("input");
   const { settings, currentAssistant } = useCurrentAssistant();
 
   const canUse = Boolean(settings && currentAssistant && !disabled);
-  const { error, setError, popoverProps } = usePickerPopover(canUse);
+  const [error, setError] = React.useState<string | null>(null);
 
   const allServers = settings?.mcpServers ?? [];
   const knownServerIdSet = React.useMemo(
@@ -61,10 +77,6 @@ export function McpPickerButtonImpl({ disabled = false, className }: McpPickerBu
     () => allServers.filter((server) => server.commonOptions?.enable),
     [allServers],
   );
-  const enabledServerIdSet = React.useMemo(
-    () => new Set(enabledServers.map((server) => server.id)),
-    [enabledServers],
-  );
 
   const selectedServerIds = React.useMemo(
     () => safeStringArray(currentAssistant?.mcpServers),
@@ -72,16 +84,6 @@ export function McpPickerButtonImpl({ disabled = false, className }: McpPickerBu
   );
 
   const selectedServerIdSet = React.useMemo(() => new Set(selectedServerIds), [selectedServerIds]);
-  const selectedEnabledCount = React.useMemo(
-    () => selectedServerIds.filter((serverId) => enabledServerIdSet.has(serverId)).length,
-    [enabledServerIdSet, selectedServerIds],
-  );
-
-  React.useEffect(() => {
-    if (!canUse) {
-      popoverProps.onOpenChange(false);
-    }
-  }, [canUse]);
 
   const updateMcpMutation = useMutation({
     mutationFn: ({
@@ -171,42 +173,10 @@ export function McpPickerButtonImpl({ disabled = false, className }: McpPickerBu
   };
 
   return (
-    <Popover {...popoverProps}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={!canUse || updateMcpMutation.isPending}
-          className={cn(
-            "h-8 rounded-full px-2 text-muted-foreground hover:text-foreground",
-            selectedEnabledCount > 0 && "text-primary hover:bg-primary/10",
-            className,
-          )}
-        >
-          {updateMcpMutation.isPending ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <Terminal className="size-3.5" />
-          )}
-          {selectedEnabledCount > 0 ? (
-            <span className="rounded-full bg-primary/10 px-1 py-0.5 text-[0.5625rem] text-primary">
-              {selectedEnabledCount}
-            </span>
-          ) : null}
-        </Button>
-      </PopoverTrigger>
+    <div className="space-y-2">
+      <PickerErrorAlert error={error} />
 
-      <PopoverContent align="end" className="w-[min(92vw,22rem)] gap-0 p-0">
-        <PopoverHeader className="border-b px-3 py-2.5">
-          <PopoverTitle className="text-sm">{t("mcp.title")}</PopoverTitle>
-          <PopoverDescription className="text-[0.6875rem]">{t("mcp.description")}</PopoverDescription>
-        </PopoverHeader>
-
-        <div className="space-y-2 px-2.5 py-2.5">
-          <PickerErrorAlert error={error} />
-
-          <ScrollArea className="h-[32vh] pr-1.5">
+      <ScrollArea className="h-[16rem] pr-1.5">
             {enabledServers.length > 0 ? (
               <div className="space-y-1">
                 {enabledServers.map((server) => {
@@ -377,12 +347,10 @@ export function McpPickerButtonImpl({ disabled = false, className }: McpPickerBu
                 {t("mcp.empty")}
               </div>
             )}
-          </ScrollArea>
-        </div>
-      </PopoverContent>
-    </Popover>
+      </ScrollArea>
+    </div>
   );
 }
 
-// memo:disabled/className 在打字时不变,跳过重渲染。
-export const McpPickerButton = React.memo(McpPickerButtonImpl);
+// memo:disabled 在打字时不变,跳过重渲染。
+export const McpPanel = React.memo(McpPanelImpl);

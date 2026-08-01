@@ -14,24 +14,20 @@ import { useTranslation } from "react-i18next";
 
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
 import { useCurrentModel } from "~/hooks/use-current-model";
-import { usePickerPopover } from "~/hooks/use-picker-popover";
 import { extractErrorMessage } from "~/lib/error";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
 import type { ProviderModel } from "~/types";
-import { Button } from "~/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "~/components/ui/popover";
 import { Slider } from "~/components/ui/slider";
 
 import { PickerErrorAlert } from "./picker-error-alert";
+
+// 思考强度(前端重构A2,用户拍板"模型选择入口与思维强度合一"):不再是输入行的独立
+// 按钮,而是模型选择弹层底部的内联折叠区(ReasoningInlineSection)。刻意不用嵌套
+// Popover——Radix 外层 dismiss 层对 portal 出去的内层内容判定为"外部点击",嵌套
+// 关闭行为不可靠;内联展开无此风险。模型胶囊经 useCurrentReasoningLabel 显示
+// "模型名 · 强度"后缀(NewMax 形态)。
 
 type ReasoningLevel = "off" | "auto" | "low" | "medium" | "high" | "xhigh";
 
@@ -41,11 +37,6 @@ interface ReasoningPreset {
   key: ReasoningLevel;
   label: string;
   description: string;
-}
-
-export interface ReasoningPickerButtonProps {
-  disabled?: boolean;
-  className?: string;
 }
 
 function isReasoningModel(model: ProviderModel | null): boolean {
@@ -75,50 +66,45 @@ function ReasoningIcon({ level, className }: { level: ReasoningLevel; className?
   }
 }
 
-export function ReasoningPickerButtonImpl({ disabled = false, className }: ReasoningPickerButtonProps) {
+function useReasoningPresets(): ReasoningPreset[] {
   const { t } = useTranslation("input");
-  const { settings, currentAssistant } = useCurrentAssistant();
-  const { currentModel } = useCurrentModel();
-
-  const canUse = Boolean(settings && currentAssistant && !disabled);
-  const canReasoning = isReasoningModel(currentModel);
-  const { open, error, setError, popoverProps } = usePickerPopover(canUse);
-
-  const reasoningPresets = React.useMemo<ReasoningPreset[]>(
-    () => [
-      {
-        key: "off",
-        label: t("reasoning.presets.off.label"),
-        description: t("reasoning.presets.off.description"),
-      },
-      {
-        key: "auto",
-        label: t("reasoning.presets.auto.label"),
-        description: t("reasoning.presets.auto.description"),
-      },
-      {
-        key: "low",
-        label: t("reasoning.presets.low.label"),
-        description: t("reasoning.presets.low.description"),
-      },
-      {
-        key: "medium",
-        label: t("reasoning.presets.medium.label"),
-        description: t("reasoning.presets.medium.description"),
-      },
-      {
-        key: "high",
-        label: t("reasoning.presets.high.label"),
-        description: t("reasoning.presets.high.description"),
-      },
-      {
-        key: "xhigh",
-        label: t("reasoning.presets.xhigh.label"),
-        description: t("reasoning.presets.xhigh.description"),
-      },
-    ],
+  return React.useMemo<ReasoningPreset[]>(
+    () =>
+      REASONING_LEVELS.map((key) => ({
+        key,
+        label: t(`reasoning.presets.${key}.label`),
+        description: t(`reasoning.presets.${key}.description`),
+      })),
     [t],
   );
+}
+
+/** 当前思考强度的展示标签;模型不支持推理时返回 null(模型胶囊隐藏后缀)。 */
+export function useCurrentReasoningLabel(): string | null {
+  const { t } = useTranslation("input");
+  const { currentAssistant } = useCurrentAssistant();
+  const { currentModel } = useCurrentModel();
+  if (!isReasoningModel(currentModel)) return null;
+  const level = (currentAssistant?.reasoningLevel as ReasoningLevel | null | undefined) ?? "auto";
+  return t(`reasoning.presets.${level}.label`);
+}
+
+export interface ReasoningInlineSectionProps {
+  disabled?: boolean;
+}
+
+/** 模型弹层底部的思考强度折叠区:收起时一行摘要,展开后是原滑杆控件。 */
+export function ReasoningInlineSection({ disabled = false }: ReasoningInlineSectionProps) {
+  const { t } = useTranslation("input");
+  const { currentAssistant } = useCurrentAssistant();
+  const { currentModel } = useCurrentModel();
+  const reasoningPresets = useReasoningPresets();
+
+  const [expanded, setExpanded] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const canUse = Boolean(currentAssistant && !disabled);
+  const canReasoning = isReasoningModel(currentModel);
 
   const currentLevel =
     (currentAssistant?.reasoningLevel as ReasoningLevel | null | undefined) ?? "auto";
@@ -130,18 +116,6 @@ export function ReasoningPickerButtonImpl({ disabled = false, className }: Reaso
   React.useEffect(() => {
     setLocalIndex(currentIndex);
   }, [currentIndex]);
-
-  React.useEffect(() => {
-    if (!canUse || !canReasoning) {
-      popoverProps.onOpenChange(false);
-    }
-  }, [canReasoning, canUse]);
-
-  React.useEffect(() => {
-    if (open) {
-      setLocalIndex(currentIndex);
-    }
-  }, [open]);
 
   const updateReasoningLevelMutation = useMutation({
     mutationFn: ({
@@ -173,62 +147,39 @@ export function ReasoningPickerButtonImpl({ disabled = false, className }: Reaso
   if (!canReasoning) return null;
 
   return (
-    <Popover {...popoverProps}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={!canUse || loading}
-          className={cn(
-            "h-8 rounded-full px-2.5 text-sm font-normal text-muted-foreground hover:text-foreground",
-            className,
-          )}
-        >
-          <ReasoningIcon level={currentLevel} className="size-3.5" />
-          <span className="hidden sm:block">{currentPreset.label}</span>
-          <span className="hidden sm:block">
-            {loading ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <ChevronDown className="size-3.5" />
-            )}
-          </span>
-        </Button>
-      </PopoverTrigger>
+    <div className="border-t">
+      <button
+        type="button"
+        disabled={!canUse || loading}
+        onClick={() => setExpanded((prev) => !prev)}
+        className="flex h-10 w-full items-center justify-between px-4 text-sm transition-colors hover:bg-accent disabled:opacity-50"
+      >
+        <span className="flex items-center gap-2 text-muted-foreground">
+          <ReasoningIcon
+            level={currentLevel}
+            className={cn("size-4", currentLevel !== "off" && "text-primary")}
+          />
+          {t("reasoning.title")}
+        </span>
+        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+          {loading ? <LoaderCircle className="size-3.5 animate-spin" /> : currentPreset.label}
+          <ChevronDown className={cn("size-3.5 transition-transform", expanded && "rotate-180")} />
+        </span>
+      </button>
 
-      <PopoverContent align="end" className="w-[min(92vw,22rem)] gap-0 p-0">
-        <PopoverHeader className="border-b px-6 py-4">
-          <PopoverTitle>{t("reasoning.title")}</PopoverTitle>
-          <PopoverDescription>{t("reasoning.description")}</PopoverDescription>
-        </PopoverHeader>
-
-        <div className="space-y-5 px-6 py-5">
+      {expanded ? (
+        <div className="space-y-4 px-4 pb-4 pt-1">
           <PickerErrorAlert error={error} />
 
-          {/* Current level display */}
-          <div className="flex flex-col items-center gap-1.5">
-            <ReasoningIcon
-              level={localLevel}
-              className={cn(
-                "size-8 transition-colors",
-                isEnabled ? "text-primary" : "text-muted-foreground",
-              )}
-            />
-            <span
-              className={cn(
-                "text-sm font-medium transition-colors",
-                isEnabled ? "text-primary" : "text-foreground",
-              )}
-            >
-              {localPreset.label}
-            </span>
-            <span className="text-xs text-muted-foreground text-center min-h-[2.5em]">
-              {localPreset.description}
-            </span>
+          <div
+            className={cn(
+              "min-h-[2.5em] text-center text-xs transition-colors",
+              isEnabled ? "text-muted-foreground" : "text-muted-foreground/70",
+            )}
+          >
+            {localPreset.description}
           </div>
 
-          {/* Slider */}
           <div className="space-y-2">
             <Slider
               value={[localIndex]}
@@ -273,10 +224,7 @@ export function ReasoningPickerButtonImpl({ disabled = false, className }: Reaso
             </div>
           </div>
         </div>
-      </PopoverContent>
-    </Popover>
+      ) : null}
+    </div>
   );
 }
-
-// memo:disabled/className 在打字时不变,跳过重渲染(同 SearchPickerButton)。
-export const ReasoningPickerButton = React.memo(ReasoningPickerButtonImpl);

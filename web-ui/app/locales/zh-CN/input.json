@@ -144,5 +144,10 @@
     "full_access": "完全访问",
     "full_access_hint": "不受限制操作电脑文件",
     "save_failed": "保存权限档位失败"
+  },
+  "integrations": {
+    "title": "MCP 与拓展",
+    "description": "为当前助手选择 MCP 工具与拓展能力",
+    "tab_mcp": "MCP"
   }
 }

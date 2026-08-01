@@ -5,6 +5,7 @@ import { Check, ChevronDown, CircleDollarSign, Heart, LoaderCircle, Search } fro
 import { useTranslation } from "react-i18next";
 
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
+import { ReasoningInlineSection, useCurrentReasoningLabel } from "~/components/input/reasoning-picker";
 import { getModelDisplayName } from "~/lib/display";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
@@ -174,6 +175,8 @@ function ModelOptionRow({
 export function ModelListImpl({ disabled = false, className, onChanged }: ModelListProps) {
   const { t } = useTranslation("input");
   const { settings, currentAssistant } = useCurrentAssistant();
+  // 模型与思考强度合一(前端重构A2):胶囊尾缀展示当前强度,弹层底部内联调节。
+  const reasoningLabel = useCurrentReasoningLabel();
 
   const [open, setOpen] = React.useState(false);
   const [searchKeywords, setSearchKeywords] = React.useState("");
@@ -452,6 +455,11 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
           <span className="hidden min-w-0 flex-1 truncate text-left sm:block">
             {currentModelLabel}
           </span>
+          {reasoningLabel ? (
+            <span className="hidden shrink-0 text-xs text-muted-foreground/80 sm:block">
+              {reasoningLabel}
+            </span>
+          ) : null}
           <ChevronDown className="hidden size-3.5 shrink-0 sm:block" />
         </Button>
       </PopoverTrigger>
@@ -578,6 +586,8 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
             )}
           </div>
         </div>
+
+        <ReasoningInlineSection disabled={disabled} />
       </PopoverContent>
     </Popover>
   );
