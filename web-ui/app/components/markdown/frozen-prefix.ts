@@ -26,14 +26,23 @@ export interface FrozenPrefix {
   raw: string;
   /** 前缀的预处理产物(随晋升增量累积,避免每次晋升重扫整个前缀)。 */
   processed: string;
+  /**
+   * 上次晋升尝试失败时的尾部长度(0 = 无失败记录)。生长中的巨型单块(流式表格/
+   * 长代码围栏)尾部超阈值却永远切不出可晋升块,若每帧都重试,等于每帧对整个尾部
+   * 白跑一次 marked lex——1.5.0 内测实测反而加剧了流式表格时的滚动卡顿。记录失败
+   * 水位,尾部再涨 RETRY_GROWTH 才重试,把探测成本从 O(尾部)/帧摊薄到 O(尾部)/KB。
+   */
+  attemptedTailLength: number;
 }
 
-export const EMPTY_FROZEN_PREFIX: FrozenPrefix = { raw: "", processed: "" };
+export const EMPTY_FROZEN_PREFIX: FrozenPrefix = { raw: "", processed: "", attemptedTailLength: 0 };
 
 /** 活动尾部超过该长度才尝试晋升:太小则晋升过频(每次晋升要对尾部做一次块切分)。 */
 export const STREAM_TAIL_PROMOTE_THRESHOLD = 3072;
 /** 永不晋升的尾部块数(见文件头"保守锚点")。 */
 export const STREAM_PROMOTE_HOLDBACK_BLOCKS = 2;
+/** 晋升尝试失败后,尾部需再增长这么多才重试(见 attemptedTailLength)。 */
+export const STREAM_PROMOTE_RETRY_GROWTH = 1024;
 
 /**
  * 纯函数推进:(旧前缀, 最新全文, 预处理器) → 新前缀。
@@ -47,11 +56,26 @@ export function advanceFrozenPrefix(
   const base = content.startsWith(previous.raw) ? previous : EMPTY_FROZEN_PREFIX;
   const tail = content.slice(base.raw.length);
   if (tail.length <= STREAM_TAIL_PROMOTE_THRESHOLD) return base;
+  // 失败水位闸门:距上次失败尝试增长不足 RETRY_GROWTH 则不重试(不重复白 lex)
+  if (
+    base.attemptedTailLength > 0 &&
+    tail.length - base.attemptedTailLength < STREAM_PROMOTE_RETRY_GROWTH
+  ) {
+    return base;
+  }
   const blocks = parseMarkdownIntoBlocks(tail);
-  if (blocks.length <= STREAM_PROMOTE_HOLDBACK_BLOCKS) return base;
+  if (blocks.length <= STREAM_PROMOTE_HOLDBACK_BLOCKS) {
+    return { ...base, attemptedTailLength: tail.length };
+  }
   const promoted = blocks.slice(0, blocks.length - STREAM_PROMOTE_HOLDBACK_BLOCKS).join("");
   // 防御:块切分保拼接(token.raw 串接)是 marked 的既有行为;若上游漂移导致拼不回
   // 原文,放弃本次晋升——"前缀是 content 字面前缀"的不变式优先于性能。
-  if (!tail.startsWith(promoted)) return base;
-  return { raw: base.raw + promoted, processed: base.processed + preProcess(promoted) };
+  if (!tail.startsWith(promoted)) {
+    return { ...base, attemptedTailLength: tail.length };
+  }
+  return {
+    raw: base.raw + promoted,
+    processed: base.processed + preProcess(promoted),
+    attemptedTailLength: 0,
+  };
 }

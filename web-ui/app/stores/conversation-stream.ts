@@ -310,7 +310,16 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
             if (record.deltaFlushTimer === null) {
               record.deltaFlushTimer = setTimeout(() => {
                 record.deltaFlushTimer = null;
-                if (records.get(id) === record) flushPendingDeltas(id, record);
+                const run = () => {
+                  if (records.get(id) === record) flushPendingDeltas(id, record);
+                };
+                // 到点后再让一个空闲片:落地渲染(巨型块整块重渲)避开正在进行的
+                // 滚动帧,消除有节奏的顿挫;浏览器持续无空闲则按同长兜底强刷。
+                if (typeof requestIdleCallback === "function") {
+                  requestIdleCallback(run, { timeout: UNFOCUSED_DELTA_FLUSH_MS });
+                } else {
+                  run();
+                }
               }, UNFOCUSED_DELTA_FLUSH_MS);
             }
             return;

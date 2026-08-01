@@ -6,6 +6,7 @@ import {
   advanceFrozenPrefix,
   EMPTY_FROZEN_PREFIX,
   STREAM_PROMOTE_HOLDBACK_BLOCKS,
+  STREAM_PROMOTE_RETRY_GROWTH,
   STREAM_TAIL_PROMOTE_THRESHOLD,
 } from "./frozen-prefix";
 
@@ -77,9 +78,32 @@ describe("advanceFrozenPrefix", () => {
     expect(content.slice(next.raw.length)).toContain("| 行199 |");
   });
 
-  test("含脚注时整文单块(Streamdown 语义),不晋升", () => {
+  test("含脚注时整文单块(Streamdown 语义),不晋升且记录失败水位", () => {
     const content = `${paragraphs(10)}\n\n引用脚注[^1]\n\n[^1]: 脚注内容`;
-    expect(advanceFrozenPrefix(EMPTY_FROZEN_PREFIX, content, identity)).toBe(EMPTY_FROZEN_PREFIX);
+    const next = advanceFrozenPrefix(EMPTY_FROZEN_PREFIX, content, identity);
+    expect(next.raw).toBe("");
+    expect(next.attemptedTailLength).toBe(content.length);
+  });
+
+  test("失败水位闸门:巨型单块尾部不逐帧重试块切分,涨够 RETRY_GROWTH 才再试", () => {
+    // 单个未闭合围栏 = 永远切不出可晋升块的巨型尾部(流式表格同类)
+    const fence = (lines: number) => `\`\`\`ts\n${"const x = 1;\n".repeat(lines)}`;
+    const first = advanceFrozenPrefix(EMPTY_FROZEN_PREFIX, fence(400), identity);
+    expect(first.raw).toBe("");
+    expect(first.attemptedTailLength).toBeGreaterThan(0);
+    // 小步增长(不足 RETRY_GROWTH):原对象直接返回 = 未做任何块切分
+    const slightly = fence(400) + "y";
+    expect(advanceFrozenPrefix(first, slightly, identity)).toBe(first);
+    // 涨够 RETRY_GROWTH:重试并刷新失败水位
+    const grown = fence(400 + Math.ceil(STREAM_PROMOTE_RETRY_GROWTH / 13) + 1);
+    const retried = advanceFrozenPrefix(first, grown, identity);
+    expect(retried.attemptedTailLength).toBe(grown.length);
+  });
+
+  test("晋升成功后失败水位复位", () => {
+    const next = advanceFrozenPrefix(EMPTY_FROZEN_PREFIX, paragraphs(10), identity);
+    expect(next.raw.length).toBeGreaterThan(0);
+    expect(next.attemptedTailLength).toBe(0);
   });
 
   test("processed 是各晋升段预处理产物的累积", () => {
