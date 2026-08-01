@@ -17,6 +17,7 @@ import { DEFAULT_ASSISTANT_ID, exportPcConversationsDump, flushConvDirtyNow, get
 import { listAllConversationMetas } from "../conversations/read-queries";
 import { collectPcFileRefs, hashFileSha256 } from "./file-refs";
 import { createZipFromDirectory } from "./zip";
+import { adaptWorkspaceToolPartForAndroid } from "./workspace-android-export";
 import androidSchemaV24 from "./android-schema-v24.json";
 import { exportSkills } from "../tools";
 
@@ -496,12 +497,16 @@ function insertConversationsIntoDb(db: InstanceType<typeof Database>, backupName
           const toInstant = (v: any) => typeof v === "string" && v && !v.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(v) ? v + "Z" : v;
           const fixParts = (parts: any[]) => parts.map((p: any) => {
             if (!p || typeof p !== "object") return p;
-            const fixed = { ...p };
+            let fixed = { ...p };
             if (fixed.createdAt) fixed.createdAt = toInstant(fixed.createdAt);
             if (fixed.finishedAt) fixed.finishedAt = toInstant(fixed.finishedAt);
-            // 安卓对齐批6(审查A P0):无判别符工具载荷包装成 text part,详见 wrapToolOutputEntriesForAndroid。
-            if (fixed.type === "tool" && Array.isArray(fixed.output)) {
-              fixed.output = wrapToolOutputEntriesForAndroid(fixed.output);
+            if (fixed.type === "tool") {
+              // M3-2(§9.1B 增强层):pi 形状 → 安卓 workspace_* 原生形状,换原生 diff/终端卡渲染。
+              fixed = adaptWorkspaceToolPartForAndroid(fixed);
+              // 安卓对齐批6(审查A P0):无判别符工具载荷包装成 text part,详见 wrapToolOutputEntriesForAndroid。
+              if (Array.isArray(fixed.output)) {
+                fixed.output = wrapToolOutputEntriesForAndroid(fixed.output);
+              }
             }
             return fixed;
           });
