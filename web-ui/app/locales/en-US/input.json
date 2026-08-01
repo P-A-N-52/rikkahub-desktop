@@ -134,5 +134,15 @@
     "mic_denied": "Cannot access the microphone",
     "start": "Voice input",
     "stop": "Stop voice input"
+  },
+  "workspace_permission": {
+    "title": "Workspace permission preset",
+    "confirm_each": "Confirm each",
+    "confirm_each_hint": "Write, edit and shell commands each require your approval",
+    "balanced": "Balanced",
+    "balanced_hint": "Reads and writes inside the workspace are auto-approved; shell requires approval",
+    "full_access": "Full access",
+    "full_access_hint": "Everything auto-approved (dangerous commands are still blocked)",
+    "save_failed": "Failed to save permission preset"
   }
 }

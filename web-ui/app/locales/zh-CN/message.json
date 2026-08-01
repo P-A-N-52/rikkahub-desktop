@@ -126,5 +126,29 @@
     "open_video_in_new_window": "在新窗口打开视频",
     "audio_load_failed": "加载音频失败：{{url}}",
     "open_audio_in_new_window": "在新窗口打开音频"
+  },
+  "workspace_tool": {
+    "read": "读取文件",
+    "read_title": "读取 {{path}}",
+    "read_range_both": "第 {{offset}} 行起 · {{limit}} 行",
+    "read_range_offset": "第 {{offset}} 行起",
+    "read_range_limit": "前 {{limit}} 行",
+    "write_title": "写入文件",
+    "write_title_with_path": "写入 {{path}}",
+    "edit_title": "编辑文件",
+    "edit_title_with_path": "编辑 {{path}}",
+    "bytes": "{{bytes}} 字节",
+    "no_output": "（无输出）",
+    "open_details": "查看详情",
+    "patch": "补丁（unified diff）",
+    "write_preview_more": "…其余 {{count}} 行见详情",
+    "diff_empty": "无变更",
+    "diff_show_more": "展开其余 {{count}} 行",
+    "terminal_hidden_lines": "已隐藏前 {{count}} 行，完整输出见详情",
+    "approval_read": "AI 请求读取文件",
+    "approval_write": "AI 请求写入文件",
+    "approval_edit": "AI 请求编辑文件",
+    "approval_bash": "AI 请求执行命令",
+    "approval_hint": "请确认后批准，AI 将在你的工作区内执行该操作"
   }
 }

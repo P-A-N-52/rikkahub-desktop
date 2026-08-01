@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import {
+  FilePen,
+  SquareTerminal,
   Brain,
   FileText,
   Film,
@@ -11,6 +13,7 @@ import {
 } from "lucide-react";
 
 import Markdown from "~/components/markdown/markdown";
+import { workspaceToolExportLabel, workspaceToolKind } from "~/components/message/parts/workspace-tool-part";
 import { AIIcon } from "~/components/ui/ai-icon";
 import { UIAvatar } from "~/components/ui/ui-avatar";
 import { useSettingsStore } from "~/stores";
@@ -114,6 +117,10 @@ function reasoningSeconds(createdAt?: string, finishedAt?: string | null): numbe
 
 function ToolIcon({ toolName }: { toolName: string }) {
   const cls = "size-3.5 shrink-0";
+  const workspaceKind = workspaceToolKind(toolName);
+  if (workspaceKind === "bash") return <SquareTerminal className={cls} />;
+  if (workspaceKind === "read") return <FileText className={cls} />;
+  if (workspaceKind) return <FilePen className={cls} />;
   switch (toolName) {
     case "search_web":
       return <Search className={cls} />;
@@ -129,6 +136,9 @@ function ToolIcon({ toolName }: { toolName: string }) {
 // 工具卡片的简短标签:与主界面 ToolStepPart 同源语义,但导出图只展示标题不展开参数/结果,
 // 保持长图紧凑。search_web 带上 query,其它只显示本地化工具名。
 function toolCardLabel(tool: ToolPart, t: (k: string, p?: Record<string, unknown>) => string): string {
+  // 工作区工具(M2-3):导出图必须有可读形态——$ 命令 / 路径 + diff 摘要(§9.8)。
+  const workspaceLabel = workspaceToolExportLabel(tool, t as never);
+  if (workspaceLabel) return workspaceLabel;
   switch (tool.toolName) {
     case "search_web": {
       let query = "";

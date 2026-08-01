@@ -9,6 +9,7 @@ import {
   Clipboard,
   ClipboardPaste,
   Clock3,
+  FileText,
   Globe,
   Loader2,
   MessageCircleQuestion,
@@ -30,6 +31,11 @@ import { cn } from "~/lib/utils";
 import type { TextPart as UITextPart, ToolPart as UIToolPart } from "~/types";
 
 import { ControlledChainOfThoughtStep } from "../chain-of-thought";
+import {
+  WorkspaceApprovalCard,
+  workspaceReadTitle,
+  workspaceToolKind,
+} from "./workspace-tool-part";
 import { AudioPart as AudioPartRenderer } from "./audio-part";
 import { ImagePart as ImagePartRenderer } from "./image-part";
 import { VideoPart as VideoPartRenderer } from "./video-part";
@@ -233,6 +239,8 @@ function SearchResultMiniList({ items }: { items: unknown[] }) {
 }
 
 function getToolIcon(toolName: string, action?: string) {
+  // 工作区 read(M2-3):文件图标。write/edit/bash 已被抽出为顶层动作卡,不走本分派。
+  if (workspaceToolKind(toolName) === "read") return FileText;
   if (toolName === TOOL_NAMES.MEMORY) {
     if (action === MEMORY_ACTIONS.CREATE || action === MEMORY_ACTIONS.EDIT) {
       return BookHeart;
@@ -260,6 +268,12 @@ function getToolIcon(toolName: string, action?: string) {
 
 function getToolTitle(toolName: string, args: unknown, t: TFunction): string {
   const action = getStringField(args, "action");
+
+  {
+    // 工作区 read(M2-3):相对路径+offset/limit 徽标(方案 §4.3 单行步骤形态)。
+    const readTitle = workspaceReadTitle(toolName, JSON.stringify(args ?? {}), t);
+    if (readTitle) return readTitle;
+  }
 
   if (toolName === TOOL_NAMES.MEMORY) {
     if (action === MEMORY_ACTIONS.CREATE) return t("tool_part.memory_create");
@@ -949,6 +963,11 @@ export function PendingToolAttentionCard({
   // 不需要再多套一层 banner。
   if (tool.toolName === TOOL_NAMES.ASK_USER) {
     return <AskUserToolStep tool={tool} loading={loading} onToolApproval={onToolApproval} />;
+  }
+
+  // 工作区工具(M2-3):专属审批卡——琥珀色左边条,完整展示将执行的命令/写入路径。
+  if (workspaceToolKind(tool.toolName)) {
+    return <WorkspaceApprovalCard tool={tool} onToolApproval={onToolApproval} />;
   }
 
   const args = (() => {

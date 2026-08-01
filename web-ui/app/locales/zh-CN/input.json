@@ -134,5 +134,15 @@
     "mic_denied": "无法访问麦克风",
     "start": "语音识别",
     "stop": "停止语音识别"
+  },
+  "workspace_permission": {
+    "title": "工作区权限档位",
+    "confirm_each": "每步确认",
+    "confirm_each_hint": "写入、编辑、执行命令均需你逐项批准",
+    "balanced": "平衡",
+    "balanced_hint": "工作区内读写免审，执行命令需批准",
+    "full_access": "完全访问",
+    "full_access_hint": "全部免审（危险命令仍会被拦截）",
+    "save_failed": "保存权限档位失败"
   }
 }

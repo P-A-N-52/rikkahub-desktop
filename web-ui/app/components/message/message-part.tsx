@@ -12,6 +12,7 @@ import { ReasoningPart as ReasoningFallbackPart } from "./parts/reasoning-part";
 import { ReasoningStepPart } from "./parts/reasoning-step-part";
 import { TextPart } from "./parts/text-part";
 import { ToolPart as ToolStepPart, PendingToolAttentionCard } from "./parts/tool-part";
+import { isWorkspaceActionTool, WorkspaceActionCard } from "./parts/workspace-tool-part";
 import { VideoPart } from "./parts/video-part";
 import { TypingIndicator } from "~/components/ui/typing-indicator";
 import { applyAssistantRegexes } from "~/lib/assistant-regex";
@@ -42,6 +43,14 @@ type MessagePartBlock =
       // "展开 N 个步骤"按钮后面，用户根本意识不到 AI 正在等待审批，
       // 误以为生成意外中止了。
       type: "pendingTool";
+      tool: ToolPart;
+      index: number;
+    }
+  | {
+      // 工作区"改变世界"的动作(write/edit/bash,M2-3):从折叠组抽出为顶层动作卡。
+      // 可见性分层(方案 §4.3):read 与思维链同认知层级留折叠;修改动作用户会看,
+      // 必须是消息流一等公民。复用 pendingTool 的抽出机制,不新造流。
+      type: "workspaceAction";
       tool: ToolPart;
       index: number;
     };
@@ -76,6 +85,11 @@ export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
       if (isPendingTool(part)) {
         flushThinkingSteps();
         result.push({ type: "pendingTool", tool: part, index });
+        return;
+      }
+      if (isWorkspaceActionTool(part.toolName)) {
+        flushThinkingSteps();
+        result.push({ type: "workspaceAction", tool: part, index });
         return;
       }
       currentThinkingSteps.push({ type: "tool", tool: part });
@@ -199,6 +213,16 @@ export const MessageParts = React.memo(
                 tool={block.tool}
                 loading={loading && block.tool.output.length === 0}
                 onToolApproval={onToolApproval}
+              />
+            );
+          }
+
+          if (block.type === "workspaceAction") {
+            return (
+              <WorkspaceActionCard
+                key={`workspace-action-${block.tool.toolCallId || block.index}`}
+                tool={block.tool}
+                loading={loading}
               />
             );
           }
