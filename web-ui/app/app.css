@@ -126,6 +126,26 @@
   --ds-motion-soft: var(--ds-duration-base) var(--ds-ease-soft);
   --ds-motion-spring: var(--ds-duration-base) var(--ds-ease-spring);
   --ds-font-display-number: "Spline Sans Mono", ui-monospace, monospace;
+  --ds-font-kbd: "Inter Variable", "Inter", sans-serif;
+  /* 文字层级/品牌/图标(语义派生:花色主题自动跟随) */
+  --ds-text-primary: var(--foreground);
+  --ds-text-secondary: color-mix(in srgb, var(--foreground) 64%, transparent);
+  --ds-text-tertiary: color-mix(in srgb, var(--foreground) 48%, transparent);
+  --ds-brand-primary: var(--primary);
+  --ds-brand-primary-text: var(--primary-foreground);
+  --ds-action-primary: var(--ds-brand-primary);
+  --ds-action-primary-text: var(--ds-brand-primary-text);
+  /* 图标灰:NewMax 明暗共用中性灰,不随品牌色染色 */
+  --ds-icon: #7e7f7e;
+  --ds-selection-bg: color-mix(in srgb, var(--primary) 85%, transparent);
+  --ds-surface-input: var(--ds-surface-100);
+  --ds-popover: var(--popover);
+  --ds-menu-bg: color-mix(in oklch, var(--popover) 96%, white);
+  --ds-menu-shadow-plate: none;
+  --ds-divider: var(--divider);
+  --ds-overlay: rgba(0, 0, 0, 0.3);
+  --ds-duration-bounce: 400ms;
+  --ds-motion-bounce: var(--ds-duration-bounce) var(--ds-ease-bounce);
 }
 
 .dark {
@@ -215,6 +235,9 @@
   --ds-input-shadow-focus: 0 0 1px 0.5px color-mix(in srgb, var(--primary) 56%, transparent), 0 0 0 4px color-mix(in srgb, var(--primary) 10%, transparent);
   --ds-menu-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 0 9px -4px rgba(0, 0, 0, 0.5), 0 0 32px -8px rgba(0, 0, 0, 0.2);
   --ds-menu-shadow-inset: none;
+  --ds-surface-input: var(--ds-surface-300);
+  --ds-menu-bg: var(--ds-surface-400);
+  --ds-overlay: rgba(0, 0, 0, 0.6);
 }
 
 :root[data-theme="claude"] {
@@ -1131,6 +1154,94 @@
   --shadow-2xl: 0px 10px 20px 0px hsl(0, 0, 0 / 1.25);
 }
 
+
+/* ===== 花色主题的 NewMax 令牌自适应(前端重构 R1) =====
+   默认主题(default)用上面的手调值;其余预置/自定义主题统一从语义变量派生,
+   并去掉所有白色内衬阴影(在深色/花色底上会发灰),换成前景色描边+柔和投影。
+   注意选择器特异度:必须高于 .dark 的 ds 块,且暗色派生块在亮色派生块之后。 */
+:root[data-theme]:not([data-theme="default"]) {
+  --ds-surface-100: var(--card);
+  --ds-surface-200: color-mix(in srgb, var(--card) 55%, var(--background));
+  --ds-surface-300: color-mix(in srgb, var(--card) 25%, var(--background));
+  --ds-surface-400: var(--background);
+  --ds-surface-input: var(--card);
+  --ds-on-surface: color-mix(in srgb, var(--foreground) 6%, transparent);
+  --ds-on-surface-active: color-mix(in srgb, var(--foreground) 9%, transparent);
+  --ds-pill-bg: color-mix(in srgb, var(--primary) 12%, transparent);
+  --ds-icon: color-mix(in srgb, var(--foreground) 58%, var(--background));
+  --ds-popover: var(--popover);
+  --ds-menu-bg: var(--popover);
+  --ds-text-primary: var(--foreground);
+  --ds-text-secondary: color-mix(in srgb, var(--foreground) 64%, transparent);
+  --ds-text-tertiary: color-mix(in srgb, var(--foreground) 48%, transparent);
+  --ds-elevation-100:
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 9%, transparent),
+    0.5px 0.5px 1px rgba(0, 0, 0, 0.06);
+  --ds-elevation-200:
+    0 0 0 0.5px color-mix(in srgb, var(--primary) 14%, transparent),
+    0px 5px 3px rgba(0, 0, 0, 0.02), 0px 2px 2px rgba(0, 0, 0, 0.03),
+    0px 1px 1px rgba(0, 0, 0, 0.04);
+  --ds-elevation-300:
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0px 3px 6px rgba(0, 0, 0, 0.05), 0px 11px 11px rgba(0, 0, 0, 0.04),
+    0px 24px 15px rgba(0, 0, 0, 0.02);
+  --ds-chat-composer-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 12%, transparent),
+    0 0 4px -1px rgba(0, 0, 0, 0.05), 0 0 14px -5px rgba(0, 0, 0, 0.07),
+    0 0 28px -10px rgba(0, 0, 0, 0.07);
+  --ds-chat-composer-shadow-focus:
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 18%, transparent),
+    0 0 6px -2px rgba(0, 0, 0, 0.07), 0 0 18px -6px rgba(0, 0, 0, 0.09),
+    0 0 34px -12px rgba(0, 0, 0, 0.1);
+  --ds-input-shadow: 0 0 0 0.5px color-mix(in srgb, var(--foreground) 12%, transparent);
+  --ds-input-shadow-inset: none;
+  --ds-input-shadow-hover: 0 0 0 0.5px color-mix(in srgb, var(--primary) 30%, transparent);
+  --ds-input-shadow-focus:
+    0 0 1px 0.5px color-mix(in srgb, var(--primary) 45%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
+  --ds-menu-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 14%, transparent),
+    2px 1px 5px 0 rgba(0, 0, 0, 0.06), 8px 6px 10px 0 rgba(0, 0, 0, 0.05),
+    18px 13px 13px 0 rgba(0, 0, 0, 0.03);
+  --ds-menu-shadow-inset: none;
+}
+
+:root.dark[data-theme]:not([data-theme="default"]) {
+  --ds-surface-100: color-mix(in srgb, var(--background) 92%, black);
+  --ds-surface-200: var(--background);
+  --ds-surface-300: var(--card);
+  --ds-surface-400: color-mix(in srgb, var(--card) 88%, white);
+  --ds-surface-input: var(--card);
+  --ds-on-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --ds-on-surface-active: color-mix(in srgb, var(--foreground) 14%, transparent);
+  --ds-pill-bg: color-mix(in srgb, var(--primary) 10%, transparent);
+  --ds-icon: color-mix(in srgb, var(--foreground) 55%, var(--background));
+  --ds-menu-bg: var(--popover);
+  --ds-elevation-100: 0 0 0 0.5px color-mix(in srgb, var(--foreground) 10%, transparent);
+  --ds-elevation-200:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 0 9px -4px rgba(0, 0, 0, 0.4), 0 0 32px -8px rgba(0, 0, 0, 0.16);
+  --ds-elevation-300:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 2px 12px -6px rgba(0, 0, 0, 0.44), 0 5px 36px -12px rgba(0, 0, 0, 0.2);
+  --ds-chat-composer-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 0 20px -10px rgba(0, 0, 0, 0.08);
+  --ds-chat-composer-shadow-focus:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 16%, transparent),
+    0 0 24px -12px rgba(0, 0, 0, 0.1);
+  --ds-input-shadow: 0 0 0 0.5px color-mix(in srgb, var(--foreground) 10%, transparent);
+  --ds-input-shadow-inset: none;
+  --ds-input-shadow-hover: 0 0 0 0.5px color-mix(in srgb, var(--foreground) 18%, transparent);
+  --ds-input-shadow-focus:
+    0 0 1px 0.5px color-mix(in srgb, var(--primary) 56%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--primary) 10%, transparent);
+  --ds-menu-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 0 9px -4px rgba(0, 0, 0, 0.5), 0 0 32px -8px rgba(0, 0, 0, 0.2);
+  --ds-menu-shadow-inset: none;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -1507,4 +1618,161 @@
 [data-theme="mx-brutalist"] [data-slot="sidebar-footer"] button[variant="ghost"]:hover {
   background: var(--sidebar-accent);
   color: var(--sidebar-accent-foreground);
+}
+
+
+@layer components {
+/* ===== NewMax DS 组件样式类(前端重构 R1,自参考项目原样移植) =====
+   这些类是视觉还原的通用基座:菜单/弹层容器、工具条按钮、胶囊、语音发送钮等。
+   组件侧(shadcn/Radix)通过挂这些类获得 NewMax 的材质与动效。 */
+
+/* 菜单容器:所有下拉/右键/弹出面板共用。三层结构由 ::before(垫板)与
+   ::after(白内衬)完成,与 NewMax 的三 div 结构等效。 */
+.ds-menu {
+  position: relative;
+  border-radius: 18px;
+  padding: 6px;
+  background-color: var(--ds-menu-bg);
+  box-shadow: var(--ds-menu-shadow);
+}
+.ds-menu::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--ds-menu-shadow-inset);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 菜单项:32px 高、12px 圆角、13px 字号;active 用品牌色+500 字重。 */
+.ds-menu-item {
+  display: flex;
+  min-height: 32px;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  border-radius: 12px;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--ds-text-primary);
+  cursor: pointer;
+  transition: background-color var(--ds-motion-swift);
+}
+.ds-menu-item:hover,
+.ds-menu-item[data-highlighted] {
+  background-color: var(--ds-on-surface);
+}
+.ds-menu-item > svg {
+  color: var(--ds-icon);
+  flex-shrink: 0;
+}
+.ds-menu-item[data-active="true"] {
+  color: var(--ds-brand-primary);
+  font-weight: 500;
+}
+.ds-menu-item[data-active="true"] > svg {
+  color: currentColor;
+}
+.ds-menu-item[data-disabled] {
+  color: var(--ds-text-tertiary);
+  cursor: not-allowed;
+  background: none;
+}
+.ds-menu-item-danger,
+.ds-menu-item-danger > svg {
+  color: #e54d42 !important;
+}
+.ds-menu-item-danger:hover {
+  background: color-mix(in srgb, var(--ds-danger, var(--destructive)) 6%, transparent) !important;
+}
+.ds-menu-divider {
+  margin: 4px 0;
+  height: 1px;
+  background-color: var(--ds-on-surface);
+}
+
+/* 工具条图标钮:输入卡底行的常驻底色钮(NewMax .toolbar-btn) */
+.toolbar-btn {
+  background-color: var(--ds-on-surface) !important;
+}
+.toolbar-btn:hover {
+  background-color: var(--ds-on-surface-active) !important;
+}
+
+/* 品牌色胶囊(权限模式/技能 pill) */
+.skill-pill:not(.skill-pill-solid):hover {
+  background-color: color-mix(in srgb, var(--ds-brand-primary) 5%, transparent) !important;
+}
+
+/* 按钮/图标继承文字色(覆盖 lucide 默认) */
+.ds-btn svg,
+.ds-icon-inherit svg {
+  color: inherit;
+}
+
+/* 输入卡外壳:层叠环形阴影 + focus 抬升(NewMax .chat-input-box) */
+.chat-input-box {
+  box-shadow: var(--ds-chat-composer-shadow);
+  transition: box-shadow var(--ds-motion-soft);
+}
+.chat-input-box:focus-within {
+  box-shadow: var(--ds-chat-composer-shadow-focus);
+}
+
+/* 语音/发送动作钮:32px 圆钮,发送态品牌色填充,录音态展开(NewMax .cpd-action-btn) */
+.cpd-action-btn {
+  transition:
+    background-color var(--ds-duration-slow) var(--ds-ease-soft),
+    color var(--ds-duration-slow) var(--ds-ease-soft),
+    width var(--ds-duration-slow) var(--ds-ease-soft),
+    padding var(--ds-duration-slow) var(--ds-ease-soft);
+  overflow: hidden;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cpd-action-btn--idle,
+.cpd-action-btn--send {
+  width: 32px;
+  padding: 0 !important;
+  justify-content: center;
+}
+.cpd-action-btn--send {
+  background-color: var(--ds-brand-primary) !important;
+  color: var(--ds-brand-primary-text) !important;
+}
+.cpd-action-btn--recording {
+  background-color: var(--destructive) !important;
+  color: #fff !important;
+  width: 72px;
+  padding-left: 11px !important;
+  padding-right: 11px !important;
+  gap: 5px;
+  justify-content: center;
+}
+@keyframes cpd-icon-in {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+.cpd-icon-enter {
+  display: flex;
+  animation: cpd-icon-in var(--ds-motion-soft) both;
+}
+
+/* 白内衬浮层:面板悬浮材质(NewMax .ds-inset-overlay) */
+.ds-inset-overlay {
+  position: relative;
+}
+.ds-inset-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--ds-menu-shadow-inset);
+  pointer-events: none;
+}
 }
