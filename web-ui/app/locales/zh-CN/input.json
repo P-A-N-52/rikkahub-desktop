@@ -136,13 +136,13 @@
     "stop": "停止语音识别"
   },
   "workspace_permission": {
-    "title": "工作区权限档位",
-    "confirm_each": "每步确认",
-    "confirm_each_hint": "写入、编辑、执行命令均需你逐项批准",
-    "balanced": "平衡",
-    "balanced_hint": "工作区内读写免审，执行命令需批准",
+    "title": "工作区权限",
+    "confirm_each": "询问批准",
+    "confirm_each_hint": "总是询问是否允许工具操作",
+    "balanced": "默认权限",
+    "balanced_hint": "仅对潜在不安全操作询问",
     "full_access": "完全访问",
-    "full_access_hint": "全部免审（危险命令仍会被拦截）",
+    "full_access_hint": "不受限制操作电脑文件",
     "save_failed": "保存权限档位失败"
   }
 }

@@ -149,6 +149,7 @@
     "approval_write": "AI 请求写入文件",
     "approval_edit": "AI 请求编辑文件",
     "approval_bash": "AI 请求执行命令",
-    "approval_hint": "请确认后批准，AI 将在你的工作区内执行该操作"
+    "approval_hint": "请确认后批准，AI 将在你的工作区内执行该操作",
+    "approval_reason": "触发审批：{{reason}}"
   }
 }

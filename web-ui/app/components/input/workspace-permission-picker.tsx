@@ -17,12 +17,12 @@ import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-s
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
-// 权限档位下拉(工作区 M2-3,方案 §3.2):输入框旁,映射到按工具粒度的审批矩阵,
+// 权限档位下拉(工作区 M2-3):输入框旁,映射到按工具粒度的审批矩阵,
 // workspace 级持久化(PATCH workspaces/:id),可随时切换。仅工作区容器内显示。
-// 档位语义(与 pc-server/workspace/approval.ts 矩阵一致):
-// - confirm_each:write/edit/bash 均审批;read 免审
-// - balanced:仅 bash 审批(managed 默认)
-// - full_access:全部免审(危险命令仍在执行层拦截)
+// 三档语义(与 pc-server/workspace/approval.ts 一致,2026-08-01 改版):
+// - confirm_each 询问批准:write/edit/bash 均审批;read 免审
+// - balanced 默认权限(新建默认,并记住上次选择):区内写免审,仅危险命令/区外写入审批
+// - full_access 完全访问:全部免审,读写不限于区内(系统目录仍硬拒)
 
 type Preset = WorkspaceDto["permissionPreset"];
 

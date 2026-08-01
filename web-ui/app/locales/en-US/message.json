@@ -149,6 +149,7 @@
     "approval_write": "AI requests to write a file",
     "approval_edit": "AI requests to edit a file",
     "approval_bash": "AI requests to run a command",
-    "approval_hint": "Review and approve; AI will perform this action inside your workspace"
+    "approval_hint": "Review and approve; AI will perform this action inside your workspace",
+    "approval_reason": "Approval required: {{reason}}"
   }
 }

@@ -121,7 +121,7 @@
       "description": "Once granted, AI gains the following abilities (revocable in Settings at any time):",
       "point_rw": "Read and modify all files inside this directory",
       "point_shell": "Run shell commands in this directory (commands can reach beyond it)",
-      "point_revoke": "Dangerous commands are always blocked; sensitive actions follow the permission preset",
+      "point_revoke": "Dangerous commands and writes outside the workspace require your approval by default; permissions are adjustable anytime",
       "decline": "Not now",
       "confirm": "Trust and continue",
       "failed": "Operation failed"

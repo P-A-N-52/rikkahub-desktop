@@ -136,13 +136,13 @@
     "stop": "Stop voice input"
   },
   "workspace_permission": {
-    "title": "Workspace permission preset",
-    "confirm_each": "Confirm each",
-    "confirm_each_hint": "Write, edit and shell commands each require your approval",
-    "balanced": "Balanced",
-    "balanced_hint": "Reads and writes inside the workspace are auto-approved; shell requires approval",
+    "title": "Workspace permissions",
+    "confirm_each": "Ask to approve",
+    "confirm_each_hint": "Always ask before tool actions",
+    "balanced": "Default permissions",
+    "balanced_hint": "Only ask for potentially unsafe actions",
     "full_access": "Full access",
-    "full_access_hint": "Everything auto-approved (dangerous commands are still blocked)",
+    "full_access_hint": "Unrestricted access to files on this computer",
     "save_failed": "Failed to save permission preset"
   }
 }

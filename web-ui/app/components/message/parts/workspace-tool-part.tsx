@@ -378,6 +378,9 @@ export function WorkspaceApprovalCard({
   const args = React.useMemo(() => parseArgs(tool.input), [tool.input]);
   const command = str(args, "command");
   const path = str(args, "path");
+  // 审批缘由(后端 workspace/approval.ts 终局判定给出:危险命令说明/区外写入目标)。
+  // "默认权限"档下用户只会在不安全操作时见到审批卡,必须告诉他为什么被拦。
+  const pendingReason = tool.approvalState.type === "pending" ? (tool.approvalState.reason ?? "") : "";
 
   const handleApprove = async () => {
     if (!onToolApproval) return;
@@ -414,6 +417,11 @@ export function WorkspaceApprovalCard({
             <span className="size-1.5 animate-pulse rounded-full bg-amber-500" aria-hidden />
           </div>
           <p className="text-xs text-muted-foreground">{t("workspace_tool.approval_hint")}</p>
+          {pendingReason ? (
+            <p className="break-all text-xs font-medium text-amber-600 dark:text-amber-400">
+              {t("workspace_tool.approval_reason", { reason: pendingReason })}
+            </p>
+          ) : null}
         </div>
       </div>
 
