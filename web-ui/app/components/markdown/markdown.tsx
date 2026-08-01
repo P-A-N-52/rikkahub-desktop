@@ -6,6 +6,11 @@ import rehypeKatex from "rehype-katex";
 import { cn } from "~/lib/utils";
 import { useSettingsStore } from "~/stores";
 import { CodeBlock } from "./code-block";
+import {
+  advanceFrozenPrefix,
+  EMPTY_FROZEN_PREFIX,
+  type FrozenPrefix,
+} from "./frozen-prefix";
 import "katex/dist/katex.min.css";
 import "./markdown.css";
 import "streamdown/styles.css";
@@ -25,6 +30,13 @@ const STREAMDOWN_PLUGINS: PluginConfig = {
   cjk,
   math: { name: "katex", type: "math", remarkPlugin: remarkMath, rehypePlugin: rehypeKatex },
 };
+
+// controls/linkSafety 会进 Streamdown 的内部 context;内联字面量每次渲染都是新引用,
+// context 值恒变会穿透其块级 memo,逼所有 context 消费者(表格包装等)逐帧重渲。
+// linkSafety 必须显式传稳定引用:不传时上游用默认参数 {enabled:true},每次渲染同样
+// 新建对象,一样击穿 context memo(已核实 dist 实现)。
+const STREAMDOWN_CONTROLS = { code: false, mermaid: false } as const;
+const STREAMDOWN_LINK_SAFETY = { enabled: true } as const;
 
 // Regex patterns for preprocessing
 const INLINE_LATEX_REGEX = /\\\((.+?)\\\)/g;
@@ -89,6 +101,19 @@ function preProcess(content: string): string {
   );
 }
 
+// 流式前缀冻结:每帧渲染成本从 O(全文) 降到 O(活动尾部)。纯函数核心与保守锚点见
+// frozen-prefix.ts,此处只做 ref 载体。渲染期推进 ref 是幂等推导((旧值, content) →
+// 新值),StrictMode 双调安全(同 code-block.tsx rawLinesRef 先例)。
+function useFrozenPrefix(content: string, isAnimating: boolean): FrozenPrefix {
+  const ref = React.useRef<FrozenPrefix>(EMPTY_FROZEN_PREFIX);
+  if (!isAnimating) {
+    ref.current = EMPTY_FROZEN_PREFIX;
+    return EMPTY_FROZEN_PREFIX;
+  }
+  ref.current = advanceFrozenPrefix(ref.current, content, preProcess);
+  return ref.current;
+}
+
 type MarkdownProps = {
   content: string;
   className?: string;
@@ -120,7 +145,11 @@ export default function Markdown({
   isAnimating = false,
 }: MarkdownProps) {
   const displaySetting = useSettingsStore((state) => state.settings?.displaySetting);
-  const processedContent = React.useMemo(() => preProcess(content), [content]);
+  const frozenPrefix = useFrozenPrefix(content, isAnimating);
+  const activeTail = frozenPrefix.raw ? content.slice(frozenPrefix.raw.length) : content;
+  // 流式中只预处理活动尾部(前缀的预处理产物随晋升增量累积,见 frozen-prefix.ts);
+  // 完成态前缀恒为空,此处即整文,与旧管线逐字节一致。
+  const processedTail = React.useMemo(() => preProcess(activeTail), [activeTail]);
 
   // Streamdown 的 custom components 提到 useMemo:流式输出时 Markdown 每个 token delta 都会
   // re-render,内联的 components 对象每次都是新引用,Streamdown 内部 memo 失效、重建自定义
@@ -219,6 +248,24 @@ export default function Markdown({
 
   return (
     <div className={cn("markdown", className)}>
+      {frozenPrefix.raw ? (
+        <Streamdown
+          plugins={STREAMDOWN_PLUGINS}
+          animated={false}
+          isAnimating={isAnimating}
+          // 冻结前缀走 streaming 形态的块级 memo 通道、关掉 remend(前缀只含完整块):
+          // 晋升时仅新增块真正解析(Block 按 content+index 命中);其余帧前缀字符串不变,
+          // Streamdown 自身 memo 整树跳过。不用 static 形态——它是整文单次 ReactMarkdown,
+          // 每次晋升都会重解析整个前缀。
+          mode="streaming"
+          parseIncompleteMarkdown={false}
+          controls={STREAMDOWN_CONTROLS}
+          linkSafety={STREAMDOWN_LINK_SAFETY}
+          components={components}
+        >
+          {frozenPrefix.processed}
+        </Streamdown>
+      ) : null}
       <Streamdown
         plugins={STREAMDOWN_PLUGINS}
         animated={false}
@@ -229,10 +276,11 @@ export default function Markdown({
         // 中途终止的残破 markdown(未闭合围栏等)从“静默修补”变为按原文渲染——与安卓
         // 端完成态渲染行为一致。
         mode={isAnimating ? "streaming" : "static"}
-        controls={{ code: false, mermaid: false }}
+        controls={STREAMDOWN_CONTROLS}
+        linkSafety={STREAMDOWN_LINK_SAFETY}
         components={components}
       >
-        {processedContent}
+        {processedTail}
       </Streamdown>
     </div>
   );
