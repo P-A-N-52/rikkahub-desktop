@@ -108,7 +108,23 @@
       "folder_hint": "AI will operate on this directory; requires your trust",
       "chat": "Chat mode",
       "chat_hint": "Conversation only, never touches files",
-      "failed": "Failed to create workspace"
+      "failed": "Failed to create workspace",
+      "folder_dialog_desc": "Pick a real directory as the workspace root. After you grant trust, AI can read, write and run commands in it.",
+      "folder_path_placeholder": "Type or pick a directory path…",
+      "browse": "Browse…",
+      "cancel": "Cancel",
+      "confirm": "Create",
+      "pick_failed": "Failed to open directory picker"
+    },
+    "trust": {
+      "title": "Trust this folder?",
+      "description": "Once granted, AI gains the following abilities (revocable in Settings at any time):",
+      "point_rw": "Read and modify all files inside this directory",
+      "point_shell": "Run shell commands in this directory (commands can reach beyond it)",
+      "point_revoke": "Dangerous commands are always blocked; sensitive actions follow the permission preset",
+      "decline": "Not now",
+      "confirm": "Trust and continue",
+      "failed": "Operation failed"
     }
   }
 }

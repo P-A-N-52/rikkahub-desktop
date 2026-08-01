@@ -11,6 +11,10 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { cn } from "~/lib/utils";
+import {
+  CreateFolderWorkspaceDialog,
+  WorkspaceTrustDialog,
+} from "~/components/workspace/workspace-create-dialogs";
 import api from "~/services/api";
 import {
   CHAT_CONTAINER,
@@ -42,6 +46,9 @@ export function ContainerTabBar() {
   const openTabs = useContainerTabsStore((state) => state.openTabs);
   const activeTab = useContainerTabsStore((state) => state.activeTab);
   const [dragKey, setDragKey] = React.useState<ContainerKey | null>(null);
+  const [folderDialogOpen, setFolderDialogOpen] = React.useState(false);
+  // 信任门目标 + 拒绝语义:创建流拒绝=删除记录;重开已有未信任工作区拒绝=仅关门。
+  const [trustTarget, setTrustTarget] = React.useState<{ workspace: WorkspaceDto; fromCreate: boolean } | null>(null);
 
   React.useEffect(() => {
     void refresh();
@@ -101,6 +108,21 @@ export function ContainerTabBar() {
     navigateToContainer(CHAT_CONTAINER, navigate);
   }, [navigate]);
 
+  // 激活容器前的信任门(§3.3):folder 型未信任(含设置里撤销信任后)先过门,
+  // 授权成功才真正进入;拒绝仅关门,不删已有工作区。
+  const activateGuarded = React.useCallback(
+    (key: ContainerKey) => {
+      const workspace =
+        key === CHAT_CONTAINER ? null : useWorkspaceStore.getState().workspaces.find((item) => item.id === key);
+      if (workspace && workspace.type === "folder" && workspace.trustedAt == null) {
+        setTrustTarget({ workspace, fromCreate: false });
+        return;
+      }
+      navigateToContainer(key, navigate);
+    },
+    [navigate],
+  );
+
   return (
     <div className="flex h-full min-w-0 flex-1 items-center gap-1">
       <div
@@ -115,7 +137,7 @@ export function ContainerTabBar() {
             active={key === activeTab}
             closable={openTabs.length > 1}
             dragging={dragKey === key}
-            onActivate={() => navigateToContainer(key, navigate)}
+            onActivate={() => activateGuarded(key)}
             onClose={() => closeTab(key)}
             onDragStart={() => setDragKey(key)}
             onDragEnd={() => setDragKey(null)}
@@ -148,6 +170,15 @@ export function ContainerTabBar() {
               </div>
             </div>
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)}>
+            <FolderOpen className="size-4" />
+            <div className="min-w-0">
+              <div className="text-sm">{t("workspace.create.folder")}</div>
+              <div className="truncate text-xs text-muted-foreground">
+                {t("workspace.create.folder_hint")}
+              </div>
+            </div>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={openChatContainer}>
             <MessageSquare className="size-4" />
             <div className="min-w-0">
@@ -159,6 +190,23 @@ export function ContainerTabBar() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <CreateFolderWorkspaceDialog
+        open={folderDialogOpen}
+        onOpenChange={setFolderDialogOpen}
+        onCreated={(workspace) => setTrustTarget({ workspace, fromCreate: true })}
+      />
+      <WorkspaceTrustDialog
+        workspace={trustTarget?.workspace ?? null}
+        onOpenChange={(open) => {
+          if (!open) setTrustTarget(null);
+        }}
+        onDeclinedDelete={trustTarget?.fromCreate ?? false}
+        onTrusted={(workspace) => {
+          useContainerTabsStore.getState().openContainer(workspace.id);
+          navigateToContainer(workspace.id, navigate);
+        }}
+      />
     </div>
   );
 }

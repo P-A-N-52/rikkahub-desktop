@@ -108,7 +108,23 @@
       "folder_hint": "AI 将操作该目录，需要你的信任授权",
       "chat": "对话模式",
       "chat_hint": "纯对话，不触碰文件",
-      "failed": "创建工作区失败"
+      "failed": "创建工作区失败",
+      "folder_dialog_desc": "选择一个真实目录作为工作区根目录。AI 将在你授权后读写该目录并执行命令。",
+      "folder_path_placeholder": "输入或选择目录路径…",
+      "browse": "浏览…",
+      "cancel": "取消",
+      "confirm": "创建",
+      "pick_failed": "打开目录选择器失败"
+    },
+    "trust": {
+      "title": "信任此文件夹？",
+      "description": "授权后，AI 将获得以下能力（可随时在设置中撤销）：",
+      "point_rw": "读取和修改该目录内的所有文件",
+      "point_shell": "在该目录下执行 shell 命令（命令可访问目录之外的系统资源）",
+      "point_revoke": "危险命令始终会被拦截；敏感操作按权限档位审批",
+      "decline": "暂不信任",
+      "confirm": "信任并开始",
+      "failed": "操作失败"
     }
   }
 }
