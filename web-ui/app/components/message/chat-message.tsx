@@ -826,7 +826,6 @@ const ChatMessageActionsRow = React.memo(
               disabled={actionDisabled}
               className={actionButtonClass}
               size="icon-xs"
-              title={t("chat_message.more_actions")}
               type="button"
               variant="ghost"
             >

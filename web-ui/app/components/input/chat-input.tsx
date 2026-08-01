@@ -15,6 +15,7 @@ import { useChatInputStore, useSettingsStore } from "~/stores";
 import { Button } from "~/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 import { Textarea } from "~/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { resolveFileUrl } from "~/lib/files";
 import { DOCUMENT_UPLOAD_ACCEPT, uploadFilesToDraft } from "~/lib/upload";
 import { cn } from "~/lib/utils";
@@ -209,17 +210,27 @@ function ExtractionBadge({ part }: { part: UIMessagePart }) {
       ? t("chat.parsing_progress", { done: status.done, total: status.total })
       : t("chat.parsing");
     return (
-      <span className="inline-flex items-center" title={title}>
-        <ProgressRing percent={percent} />
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center">
+            <ProgressRing percent={percent} />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{title}</TooltipContent>
+      </Tooltip>
     );
   }
   if (status.status === "failed" || status.status === "empty") {
     const title = t(status.status === "failed" ? "chat.extraction_failed" : "chat.extraction_empty");
     return (
-      <span className="inline-flex items-center text-amber-500" title={title}>
-        <TriangleAlert className="size-3.5 shrink-0" />
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center text-amber-500">
+            <TriangleAlert className="size-3.5 shrink-0" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{title}</TooltipContent>
+      </Tooltip>
     );
   }
   return null;

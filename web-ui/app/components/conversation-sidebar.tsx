@@ -563,7 +563,6 @@ export function LanguageSwitcher() {
           className="text-muted-foreground hover:text-foreground"
           type="button"
           aria-label={`Language: ${currentOption.label}`}
-          title={`Language: ${currentOption.label}`}
         >
           <Languages className="size-4" />
         </Button>
@@ -1236,9 +1235,6 @@ export const ConversationSidebar = React.memo(
                   className="text-muted-foreground hover:text-foreground"
                   type="button"
                   aria-label={t("conversation_sidebar.theme_color_label", {
-                    label: currentColorLabel,
-                  })}
-                  title={t("conversation_sidebar.theme_color_label", {
                     label: currentColorLabel,
                   })}
                 >

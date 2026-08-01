@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
 import { cn } from "~/lib/utils"
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
 
 // 前端重构R4:通用按钮换 NewMax DsButton 交互语言——胶囊圆角、transition-all、
 // 按压 opacity-70(替代 scale 缩放)、实底钮 hover opacity-80、ghost hover 走
@@ -46,6 +47,8 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  title,
+  disabled,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
@@ -53,14 +56,29 @@ function Button({
   }) {
   const Comp = asChild ? Slot.Root : "button"
 
-  return (
+  const element = (
     <Comp
       data-slot="button"
       data-variant={variant}
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
+      disabled={disabled}
+      title={disabled ? title : undefined}
       {...props}
     />
+  )
+
+  // G7:title 统一升级为 DS Tooltip(替代 Windows 原生黄条,对齐 NewMax)。
+  // disabled 按钮收不到 hover 事件,保留原生 title 兜底。
+  // 注意:被 XxxTrigger asChild 包裹的 Button 不能带 title(Slot 属性会合并到
+  //   Tooltip 根组件上而丢失)——此类调用点一律只留 aria-label。
+  if (!title || disabled) return element
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{element}</TooltipTrigger>
+      <TooltipContent side="bottom">{title}</TooltipContent>
+    </Tooltip>
   )
 }
 

@@ -71,7 +71,6 @@ export function WorkspacePermissionPicker({ className }: { className?: string })
             "skill-pill h-8 gap-1.5 whitespace-nowrap rounded-full bg-[var(--ds-pill-bg)] px-2.5 !text-[var(--ds-brand-primary)]",
             className,
           )}
-          title={t("workspace_permission.title")}
         >
           <CurrentIcon className="size-4" strokeWidth={1.75} />
           <span className="max-w-24 truncate text-xs font-medium">{t(`workspace_permission.${current.value}`)}</span>

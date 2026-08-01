@@ -313,25 +313,33 @@ export function ContainerTabBar() {
                       }}
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <button
-                        type="button"
-                        title={t("workspace.menu.rename")}
-                        className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-foreground"
-                        onClick={() => {
-                          setRenameValue(workspace.name);
-                          setRenameTarget(workspace);
-                        }}
-                      >
-                        <Pencil className="size-3.5" strokeWidth={1.75} />
-                      </button>
-                      <button
-                        type="button"
-                        title={t("workspace.menu.delete")}
-                        className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-destructive"
-                        onClick={() => void deleteWorkspace(workspace)}
-                      >
-                        <Trash2 className="size-3.5" strokeWidth={1.75} />
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-foreground"
+                            onClick={() => {
+                              setRenameValue(workspace.name);
+                              setRenameTarget(workspace);
+                            }}
+                          >
+                            <Pencil className="size-3.5" strokeWidth={1.75} />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{t("workspace.menu.rename")}</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-destructive"
+                            onClick={() => void deleteWorkspace(workspace)}
+                          >
+                            <Trash2 className="size-3.5" strokeWidth={1.75} />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{t("workspace.menu.delete")}</TooltipContent>
+                      </Tooltip>
                     </span>
                   </DropdownMenuItem>
                 );
@@ -402,7 +410,7 @@ export function ContainerTabBar() {
               <button
                 type="button"
                 onClick={() => renameTarget && revealWorkspace(renameTarget)}
-                title={t("workspace.menu.reveal")}
+                aria-label={t("workspace.menu.reveal")}
                 className="flex h-9 w-full items-center gap-2 rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
               >
                 <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
