@@ -2,6 +2,7 @@ import * as React from "react";
 import { Minus, Square, Copy, X } from "lucide-react";
 
 import { cn } from "~/lib/utils";
+import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
 
 // Detect Tauri at runtime so the same component is harmless when the dev preview
 // runs in a normal browser (it returns null in that case).
@@ -74,9 +75,9 @@ export function TitleBar({ className }: { className?: string }) {
     };
   }, []);
 
-  // Outside of Tauri (normal browser, e.g. during `bun run dev`) skip rendering entirely
-  // so the page doesn't reserve titlebar space it doesn't need.
-  if (!tauri) return null;
+  // M2-1 起标题栏常驻:它同时是一层容器标签栏的宿主,浏览器开发预览也需要同样的
+  // 顶部让位(app.css 以 :has([data-tauri-drag-region]) 为门,本组件渲染即生效)。
+  // 窗口控制按钮与拖拽仍只在 Tauri 下有意义(runWindowAction 在浏览器里静默为空)。
 
   const runWindowAction = (fn: (api: WindowApi) => Promise<void>) => {
     const api = apiRef.current;
@@ -121,50 +122,47 @@ export function TitleBar({ className }: { className?: string }) {
         className,
       )}
     >
-      {/* Pure drag region. The sidebar's top is pushed below the titlebar by a CSS rule
-          in app.css, so the app name here no longer collides with the sidebar header. */}
-      <div
-        data-tauri-drag-region
-        className="flex h-full flex-1 items-center gap-2 pl-3 text-xs font-medium text-muted-foreground"
-      >
+      {/* 中央区 = 一层容器标签栏(工作区 M2-1)。标签是 button,上面的 mousedown
+          处理器会跳过 button 目标,拖拽窗口与点击标签互不干扰;标签间空白仍可拖拽。 */}
+      <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2 pl-3">
         <img
           src="/app-icon.png"
           alt=""
           data-tauri-drag-region
-          className="size-4 rounded-sm opacity-90 pointer-events-none"
+          className="size-4 shrink-0 rounded-sm opacity-90 pointer-events-none"
         />
-        <span data-tauri-drag-region className="pointer-events-none">
-          Rikkahub
-        </span>
+        <ContainerTabBar />
       </div>
 
-      <div className="flex h-full items-stretch">
-        <TitleBarButton
-          variant="default"
-          ariaLabel="最小化"
-          onClick={() => runWindowAction((api) => api.minimize())}
-        >
-          <Minus className="size-3.5" strokeWidth={1.5} />
-        </TitleBarButton>
-        <TitleBarButton
-          variant="default"
-          ariaLabel={maximized ? "还原" : "最大化"}
-          onClick={() => runWindowAction((api) => api.toggleMaximize())}
-        >
-          {maximized ? (
-            <Copy className="size-3 -scale-x-100" strokeWidth={1.5} />
-          ) : (
-            <Square className="size-3" strokeWidth={1.5} />
-          )}
-        </TitleBarButton>
-        <TitleBarButton
-          variant="danger"
-          ariaLabel="关闭"
-          onClick={() => runWindowAction((api) => api.close())}
-        >
-          <X className="size-3.5" strokeWidth={1.75} />
-        </TitleBarButton>
-      </div>
+      {tauri ? (
+        <div className="flex h-full items-stretch">
+          <TitleBarButton
+            variant="default"
+            ariaLabel="最小化"
+            onClick={() => runWindowAction((api) => api.minimize())}
+          >
+            <Minus className="size-3.5" strokeWidth={1.5} />
+          </TitleBarButton>
+          <TitleBarButton
+            variant="default"
+            ariaLabel={maximized ? "还原" : "最大化"}
+            onClick={() => runWindowAction((api) => api.toggleMaximize())}
+          >
+            {maximized ? (
+              <Copy className="size-3 -scale-x-100" strokeWidth={1.5} />
+            ) : (
+              <Square className="size-3" strokeWidth={1.5} />
+            )}
+          </TitleBarButton>
+          <TitleBarButton
+            variant="danger"
+            ariaLabel="关闭"
+            onClick={() => runWindowAction((api) => api.close())}
+          >
+            <X className="size-3.5" strokeWidth={1.75} />
+          </TitleBarButton>
+        </div>
+      ) : null}
     </div>
   );
 }

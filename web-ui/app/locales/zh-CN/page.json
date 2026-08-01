@@ -91,5 +91,24 @@
       "assistant": "助手"
     },
     "scroll_to_bottom": "滚动到底部"
+  },
+  "workspace": {
+    "tabs": {
+      "chat": "对话",
+      "close": "关闭标签",
+      "missing": "已删除的工作区",
+      "untitled": "新对话",
+      "new_container": "新建容器",
+      "new_conversation": "新对话"
+    },
+    "create": {
+      "managed": "默认工作区",
+      "managed_hint": "应用为你托管，开箱即用",
+      "folder": "打开现有文件夹",
+      "folder_hint": "AI 将操作该目录，需要你的信任授权",
+      "chat": "对话模式",
+      "chat_hint": "纯对话，不触碰文件",
+      "failed": "创建工作区失败"
+    }
   }
 }

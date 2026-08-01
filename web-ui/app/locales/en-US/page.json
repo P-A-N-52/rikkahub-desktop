@@ -91,5 +91,24 @@
       "assistant": "Assistant"
     },
     "scroll_to_bottom": "Scroll to bottom"
+  },
+  "workspace": {
+    "tabs": {
+      "chat": "Chat",
+      "close": "Close tab",
+      "missing": "Deleted workspace",
+      "untitled": "New chat",
+      "new_container": "New container",
+      "new_conversation": "New chat"
+    },
+    "create": {
+      "managed": "Default workspace",
+      "managed_hint": "Managed by the app, ready to use",
+      "folder": "Open existing folder",
+      "folder_hint": "AI will operate on this directory; requires your trust",
+      "chat": "Chat mode",
+      "chat_hint": "Conversation only, never touches files",
+      "failed": "Failed to create workspace"
+    }
   }
 }

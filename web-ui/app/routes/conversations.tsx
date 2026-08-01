@@ -58,8 +58,15 @@ import {
   useConversationEntry,
   useConversationStore,
 } from "~/stores/conversation-store";
-import { ensureFullConversationDetail, loadOlderConversationNodes, refreshConversation, useConversationSubscription } from "~/stores/conversation-stream";
+import {
+  ensureFullConversationDetail,
+  loadOlderConversationNodes,
+  refreshConversation,
+  useConversationSubscription,
+} from "~/stores/conversation-stream";
 import { WorkbenchHost } from "~/components/workbench/workbench-host";
+import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
+import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-store";
 import {
   useWorkbench,
   useWorkbenchController,
@@ -72,7 +79,17 @@ import {
   type Settings,
   type UIMessagePart,
 } from "~/types";
-import { ArrowDown, Check, ListChecks, Loader2, MessageSquare, Moon, Pencil, Sun, X } from "lucide-react";
+import {
+  ArrowDown,
+  Check,
+  ListChecks,
+  Loader2,
+  MessageSquare,
+  Moon,
+  Pencil,
+  Sun,
+  X,
+} from "lucide-react";
 import Logo from "~/components/logo";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { useTranslation } from "react-i18next";
@@ -123,7 +140,11 @@ function ConversationSystemPromptButton({
         onClick={() => setExpanded((current) => !current)}
       >
         <Pencil className="size-3.5" />
-        <span>{hasCustomPrompt ? t("conversations.custom_prompt.button_active") : t("conversations.custom_prompt.button")}</span>
+        <span>
+          {hasCustomPrompt
+            ? t("conversations.custom_prompt.button_active")
+            : t("conversations.custom_prompt.button")}
+        </span>
       </Button>
       {expanded ? (
         <div className="mt-2 w-full max-w-3xl space-y-2">
@@ -207,8 +228,12 @@ function ThemeToggleButton() {
       variant="ghost"
       size="icon-sm"
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
-      title={isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")}
+      aria-label={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
+      title={
+        isDark ? t("conversations.theme_toggle.to_light") : t("conversations.theme_toggle.to_dark")
+      }
     >
       {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
     </Button>
@@ -410,7 +435,6 @@ function buildEditedParts(session: EditingSession, draftParts: UIMessagePart[]):
   return [...preservedParts, ...appendedAttachments];
 }
 
-
 function useDraftInputController({
   activeId,
   isHomeRoute,
@@ -455,8 +479,15 @@ function useDraftInputController({
     // Send the message BEFORE setting activeId so the detail fetcher doesn't race
     // (`POST /messages` calls ensureConversation on the server; only then does the
     // subsequent `GET /api/conversations/{id}` succeed).
-    await api.post<{ status: string }>(`conversations/${conversationId}/messages`, { parts });
+    // 双层标签(M2-1):新会话归属当前激活容器——工作区容器时把 workspaceId 一并送给
+    // ensureConversation,服务端据此挂载工作区工具与提示词段。
+    const container = useContainerTabsStore.getState().activeTab;
+    await api.post<{ status: string }>(
+      `conversations/${conversationId}/messages`,
+      container !== CHAT_CONTAINER ? { parts, workspaceId: container } : { parts },
+    );
     clearDraft(draftKey);
+    useContainerTabsStore.getState().openConversation(container, conversationId);
 
     setActiveId(conversationId);
     navigate(`/c/${conversationId}`);
@@ -639,7 +670,9 @@ const QuickJumpOverlay = React.forwardRef<
     : isAtTop
       ? 0
       : Math.round((range.start + range.end) / 2);
-  return <ConversationQuickJump items={items} activeIndex={activeIndex} onItemClick={onItemClick} />;
+  return (
+    <ConversationQuickJump items={items} activeIndex={activeIndex} onItemClick={onItemClick} />
+  );
 });
 
 const ConversationTimeline = React.memo(
@@ -856,9 +889,7 @@ const ConversationTimeline = React.memo(
     // 会话内分享: 点消息"分享"进入选择模式, 默认选中该消息及之前所有(对齐 APP).
     // 确认后弹出导出格式选择 (Markdown / 图片). 切换会话时清理, 避免残留选中态.
     const [shareSelecting, setShareSelecting] = React.useState(false);
-    const [shareSelectedIds, setShareSelectedIds] = React.useState<Set<string>>(
-      () => new Set(),
-    );
+    const [shareSelectedIds, setShareSelectedIds] = React.useState<Set<string>>(() => new Set());
     const [shareDialogOpen, setShareDialogOpen] = React.useState(false);
 
     const handleShare = React.useCallback(
@@ -1012,9 +1043,7 @@ const ConversationTimeline = React.memo(
     // "轮次条刚进来指第一轮,闪动后跳末轮"。播种值与 initialLocation 同源:无聚焦消息
     // = 末条+贴底;有聚焦消息 = 该条+非贴底。详情延迟到达(切换时列表为空、快照后才有
     // 消息)的场景在消息首次出现时补播种一次(wasEmpty 分支,同 knownIdsRef 第三条件)。
-    const scrollSeedRef = React.useRef<{ activeId: string | null; wasEmpty: boolean } | null>(
-      null,
-    );
+    const scrollSeedRef = React.useRef<{ activeId: string | null; wasEmpty: boolean } | null>(null);
     if (
       scrollSeedRef.current === null ||
       scrollSeedRef.current.activeId !== activeId ||
@@ -1293,16 +1322,8 @@ function ConversationsPageInner() {
 
   const { settings, assistants, currentAssistantId, currentAssistant } = useCurrentAssistant();
   const { currentModel, currentProvider } = useCurrentModel();
-  const {
-    conversations,
-    activeId,
-    setActiveId,
-    loading,
-    error,
-    hasMore,
-    loadMore,
-    refreshList,
-  } = useConversationList({ currentAssistantId, routeId, autoSelectFirst: !isHomeRoute });
+  const { conversations, activeId, setActiveId, loading, error, hasMore, loadMore, refreshList } =
+    useConversationList({ currentAssistantId, routeId, autoSelectFirst: !isHomeRoute });
 
   const [homeDraftId, setHomeDraftId] = React.useState(() => createHomeDraftId());
   const [editingSession, setEditingSession] = React.useState<EditingSession | null>(null);
@@ -1391,6 +1412,32 @@ function ConversationsPageInner() {
   });
 
   const activeConversation = conversations.find((item) => item.id === activeId);
+  // ===== 双层标签页(工作区 M2-1) =====
+  // 路由 /c/:id 是权威:会话的容器归属(列表 meta 或详情快照的 workspaceId)一旦可知,
+  // 就把对应容器与会话标签打开——搜索跨容器命中、外部链接进入都自然切换容器。
+  const detailWorkspaceId = useConversationStore((state) =>
+    activeId ? state.entries[activeId]?.detail?.workspaceId : undefined,
+  );
+  React.useEffect(() => {
+    if (!activeId) return;
+    const workspaceId = activeConversation ? activeConversation.workspaceId : detailWorkspaceId;
+    if (workspaceId === undefined) return; // 归属未知(列表/详情都未到),等下一拍
+    useContainerTabsStore.getState().openConversation(workspaceId ?? CHAT_CONTAINER, activeId);
+  }, [activeId, activeConversation, detailWorkspaceId]);
+  const activeContainer = useContainerTabsStore((state) => state.activeTab);
+  const hasConversationTabs = useContainerTabsStore(
+    (state) => (state.conversationTabs[state.activeTab]?.length ?? 0) > 0,
+  );
+  // 侧栏语义随容器切换(方案 §3.1):只列当前容器的会话;完整列表仍用于标题查找等。
+  const containerConversations = React.useMemo(
+    () =>
+      conversations.filter((item) =>
+        activeContainer === CHAT_CONTAINER
+          ? item.workspaceId == null
+          : item.workspaceId === activeContainer,
+      ),
+    [activeContainer, conversations],
+  );
   // 快照整体替换时才换引用;node_update 展开会话对象时该字段引用原样带过,流式期间稳定
   const chatSuggestions =
     useConversationStore((state) =>
@@ -1666,6 +1713,7 @@ function ConversationsPageInner() {
         parseJson: (raw) => (raw ? JSON.parse(raw) : {}),
       });
       evictConversations([conversationId]);
+      useContainerTabsStore.getState().forgetConversation(conversationId);
       if (conversationId === activeId) {
         setActiveId(null);
         setHomeDraftId(createHomeDraftId());
@@ -1684,6 +1732,7 @@ function ConversationsPageInner() {
         ids: conversationIds,
       });
       evictConversations(conversationIds);
+      for (const id of conversationIds) useContainerTabsStore.getState().forgetConversation(id);
       if (activeId && conversationIds.includes(activeId)) {
         setActiveId(null);
         setHomeDraftId(createHomeDraftId());
@@ -1721,7 +1770,9 @@ function ConversationsPageInner() {
         .join("")
         .trim();
       if (!text) continue;
-      lines.push(`${message.role === "USER" ? t("conversations.optimize_context.user") : t("conversations.optimize_context.assistant")}: ${text}`);
+      lines.push(
+        `${message.role === "USER" ? t("conversations.optimize_context.user") : t("conversations.optimize_context.assistant")}: ${text}`,
+      );
     }
     return lines.join("\n\n").slice(0, 4000);
   }, [activeId]);
@@ -1754,13 +1805,7 @@ function ConversationsPageInner() {
       compressAbortRef.current = null;
       setCompressing(false);
     }
-  }, [
-    activeId,
-    compressAdditionalPrompt,
-    compressKeepRecent,
-    compressTargetTokens,
-    refreshList,
-  ]);
+  }, [activeId, compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, refreshList]);
 
   const handleCreateConversation = React.useCallback(() => {
     closePanel();
@@ -1774,10 +1819,10 @@ function ConversationsPageInner() {
 
   // 切换到上/下个会话(按侧边栏列表顺序:置顶优先,然后按更新时间降序,与展示一致)。
   const switchConversation = (direction: -1 | 1) => {
-    if (!activeId || conversations.length === 0) return;
-    const index = conversations.findIndex((c) => c.id === activeId);
+    if (!activeId || containerConversations.length === 0) return;
+    const index = containerConversations.findIndex((c) => c.id === activeId);
     if (index === -1) return;
-    const target = conversations[index + direction];
+    const target = containerConversations[index + direction];
     if (!target) return;
     setActiveId(target.id);
     navigate(`/c/${target.id}`);
@@ -1820,7 +1865,9 @@ function ConversationsPageInner() {
       "nextConversation",
       "renameConversation",
     ];
-    const offs = actions.map((action) => onHotkeyAction(action, () => hotkeyHandlerRef.current(action)));
+    const offs = actions.map((action) =>
+      onHotkeyAction(action, () => hotkeyHandlerRef.current(action)),
+    );
     return () => offs.forEach((off) => off());
   }, []);
 
@@ -1857,11 +1904,7 @@ function ConversationsPageInner() {
       refreshList();
       toast.success(t("conversations.custom_prompt.saved"));
     },
-    [
-      activeAssistantForConversation?.allowConversationSystemPrompt,
-      activeId,
-      refreshList,
-    ],
+    [activeAssistantForConversation?.allowConversationSystemPrompt, activeId, refreshList],
   );
 
   const hasWorkbenchPanel = Boolean(panel);
@@ -1962,17 +2005,17 @@ function ConversationsPageInner() {
   return (
     <SidebarProvider defaultOpen className="h-svh overflow-hidden">
       <GlobalDropZone draftKey={draftKey} disabled={detailLoading || Boolean(detailError)} />
-    <RenameConversationDialog
-      open={renameOpen}
-      onOpenChange={setRenameOpen}
-      currentTitle={conversations.find((c) => c.id === activeId)?.title ?? ""}
-      onConfirm={(nextTitle) => {
-        if (!activeId) return;
-        void handleUpdateConversationTitle(activeId, nextTitle);
-      }}
-    />
+      <RenameConversationDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        currentTitle={conversations.find((c) => c.id === activeId)?.title ?? ""}
+        onConfirm={(nextTitle) => {
+          if (!activeId) return;
+          void handleUpdateConversationTitle(activeId, nextTitle);
+        }}
+      />
       <ConversationSidebar
-        conversations={conversations}
+        conversations={containerConversations}
         activeId={activeId}
         loading={loading}
         error={error}
@@ -1999,8 +2042,19 @@ function ConversationsPageInner() {
       <SidebarInset className="flex min-h-svh flex-col overflow-hidden">
         {/* pt-9 (36px) 让出沉浸式标题栏的高度,避免 SidebarTrigger / 标题被透明标题栏盖住。
             背景色仍由 SidebarInset 继承(--background),顶到窗口顶,和透明标题栏无缝衔接。
-            border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。 */}
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-divider bg-background/95 px-4 pb-3 pt-9 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/60">
+            border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。
+            有二层会话标签时(M2-1)让位职责上移到标签条,头部退回常规内边距。 */}
+        {hasConversationTabs ? (
+          <div className="pt-9">
+            <ConversationTabStrip conversations={conversations} />
+          </div>
+        ) : null}
+        <div
+          className={cn(
+            "sticky top-0 z-10 flex items-center gap-2 border-b border-divider bg-background/95 px-4 pb-3 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/60",
+            hasConversationTabs ? "pt-3" : "pt-9",
+          )}
+        >
           <SidebarTrigger />
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium text-muted-foreground">
@@ -2088,9 +2142,7 @@ function ConversationsPageInner() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("conversations.compress.dialog_title")}</DialogTitle>
-            <DialogDescription>
-              {t("conversations.compress.dialog_description")}
-            </DialogDescription>
+            <DialogDescription>{t("conversations.compress.dialog_description")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             <div className="space-y-2">
@@ -2132,7 +2184,9 @@ function ConversationsPageInner() {
               </div>
             </div>
             <label className="block space-y-2">
-              <span className="text-sm font-medium">{t("conversations.compress.additional_prompt")}</span>
+              <span className="text-sm font-medium">
+                {t("conversations.compress.additional_prompt")}
+              </span>
               <Textarea
                 value={compressAdditionalPrompt}
                 onChange={(event) => setCompressAdditionalPrompt(event.target.value)}
