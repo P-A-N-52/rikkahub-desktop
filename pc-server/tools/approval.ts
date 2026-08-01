@@ -1,9 +1,14 @@
 // tools/approval.ts — 工具审批状态判断
-// 纪律：纯函数，只读取 assistant / settings，不读写 state 运行时副作用。
+// 纪律：纯函数，只读取 assistant / settings / 工作区档位，不读写 state 运行时副作用。
+// M1-4：workspace 工具（read/write/edit/bash）按会话绑定工作区的 permissionPreset 走
+// 审批矩阵（workspace/approval.ts 纯函数）。判定只依赖 (工具名, 档位)，不依赖参数——
+// 这是流式建卡态与批内预扫描一致性的硬前提（见 workspace/approval.ts 头注）。
 
 import { getStringArray, isRecord } from "../foundation/utils";
-import type { Assistant, ToolApprovalState } from "../foundation/types";
+import type { Assistant, Conversation, ToolApprovalState } from "../foundation/types";
 import { state } from "../persistence/json-store";
+import { isWorkspaceToolName, workspaceToolNeedsApproval } from "../workspace/approval";
+import { getWorkspace } from "../workspace";
 
 export function getMcpToolOverride(
   assistant: Assistant,
@@ -50,9 +55,22 @@ export function isMcpToolApprovalRequiredForAssistant(
 // PC scope: `ask_user` is always pending (it's literally a "ask the user" prompt), and any
 // MCP tool whose effective needsApproval (override-resolved) is true gets pending too. Local
 // built-ins (search/scrape/memory/etc.) currently never need approval — Android matches.
-export function toolNeedsApproval(toolName: string, assistant: Assistant): boolean {
+export function toolNeedsApproval(
+  toolName: string,
+  assistant: Assistant,
+  conversation?: Pick<Conversation, "workspaceId"> | null,
+): boolean {
   if (!toolName) return false;
   if (toolName === "ask_user") return true;
+  if (isWorkspaceToolName(toolName)) {
+    // 工作区工具只在 workspaceId 非空的会话挂载；非工作区会话的残留调用在
+    // 执行层被拒（workspace/runtime.ts 守卫），这里不挂审批。工作区记录丢失
+    // → 按最严档处理（同样会在执行层拒掉，pending 卡只是多一道门）。
+    const workspaceId = conversation?.workspaceId;
+    if (!workspaceId) return false;
+    const preset = getWorkspace(workspaceId)?.permissionPreset ?? "confirm_each";
+    return workspaceToolNeedsApproval(toolName, preset);
+  }
   if (!toolName.startsWith("mcp__")) return false;
   const selected = new Set(getStringArray(assistant.mcpServers));
   const servers = (state.settings.mcpServers as Array<Record<string, unknown>>)
@@ -70,6 +88,10 @@ export function toolNeedsApproval(toolName: string, assistant: Assistant): boole
   return false;
 }
 
-export function initialApprovalState(toolName: string, assistant: Assistant): ToolApprovalState {
-  return toolNeedsApproval(toolName, assistant) ? { type: "pending" } : { type: "auto" };
+export function initialApprovalState(
+  toolName: string,
+  assistant: Assistant,
+  conversation?: Pick<Conversation, "workspaceId"> | null,
+): ToolApprovalState {
+  return toolNeedsApproval(toolName, assistant, conversation) ? { type: "pending" } : { type: "auto" };
 }

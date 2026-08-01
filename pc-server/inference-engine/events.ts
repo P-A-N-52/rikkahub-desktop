@@ -36,11 +36,15 @@ export interface ToolCall {
   };
 }
 
-/** 传给工具执行的上下文信息，仅用于 tracing / 记忆来源。 */
+/** 传给工具执行的上下文信息。tracing / 记忆来源之外，M1-4 起承载工作区执行语境：
+ *  signal 由协调器注入（bash 取消杀进程树的前提）；userApproved 仅在审批恢复路径
+ *  为 true（危险命令拦截的知情同意放行门，workspace/runtime.ts）。 */
 export interface ToolContext {
   conversationId?: string;
   conversationTitle?: string;
   messageNodeId?: string;
+  signal?: AbortSignal;
+  userApproved?: boolean;
 }
 
 /** 工具执行的标准化返回值。

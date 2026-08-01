@@ -17,6 +17,8 @@ import { callMcpTool, resolveMcpToolServer } from "./mcp";
 import { ensureFreshMcpToken } from "./mcp-oauth";
 import { runAskUserTool, runClipboardTool, runGetTimeInfoTool, runTextToSpeechTool } from "./local";
 import { readSkillBody, safeSkillFile } from "./skills";
+import { isWorkspaceToolName } from "../workspace/approval";
+import { runWorkspaceTool } from "../workspace/runtime";
 
 /** save_memory 工具执行(1.3.2)。模型只提议 content,应用按 writeStrategy 决定落地方式:
  *  - always_assistant + 助手层启用 → 直接存助手层
@@ -64,7 +66,7 @@ async function runSaveMemoryTool(
 export async function executeToolCall(
   toolCall: any,
   assistant: Assistant,
-  context?: { conversationId?: string; conversationTitle?: string; messageNodeId?: string },
+  context?: { conversationId?: string; conversationTitle?: string; messageNodeId?: string; signal?: AbortSignal; userApproved?: boolean },
 ) {
   const name = String(toolCall.function?.name ?? "");
   let args: Record<string, JsonValue> = {};
@@ -78,6 +80,9 @@ export async function executeToolCall(
     throw new Error(`Invalid tool arguments JSON for ${name}: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (name === "save_memory") return runSaveMemoryTool(assistant, args, context);
+  // 工作区工具（pi 移植层）：会话必须绑定工作区，守卫链在 runtime 内（同 search_web
+  // 关闭后拒执的语义：历史残留调用招拒绝文案回灌模型）。
+  if (isWorkspaceToolName(name)) return runWorkspaceTool(name, args, context);
   // 联网搜索是可关闭的工具(全局 enableWebSearch 开关)。关闭后,tools 数组里不再声明
   // search_web,但历史消息里残留的 search tool_call 仍会诱导模型再次调用——而本函数原本
   // 无条件执行真搜索,造成"关了搜索 AI 照样搜"的 bug。加守卫与 use_skill(6266) /

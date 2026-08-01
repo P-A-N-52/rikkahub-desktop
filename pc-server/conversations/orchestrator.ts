@@ -53,7 +53,7 @@ import {
   streamStartedMessages,
 } from "../inference-engine/parts";
 import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
-import { openAiLocalTools, openAiMcpTools, openAiSearchTools, openAiSkillTools } from "../tools/bound";
+import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
@@ -109,7 +109,7 @@ export async function callProvider(
     // 此前用 ?key= query，官方两者都收，但主流中转网关只解析 header，query 会被判 invalid key。
     headers["x-goog-api-key"] = providerItem.apiKey;
     const baseUrl = providerItem.baseUrl;
-    body = buildGoogleRequestBody(messagesForApi, picked.model, assistant);
+    body = buildGoogleRequestBody(messagesForApi, picked.model, assistant, conversation);
     const finalBody = applyCustomBody(body, assistant, picked.model);
     // 有 hooks（来自会话）时走 SSE 流式 + 工具循环；辅助调用无 hooks 时退回非流式。
     if (hooks?.message != null) {
@@ -125,7 +125,7 @@ export async function callProvider(
     const messages = messagesForApi;
     const systemContent = messages.find((item) => item.role === "system")?.content;
     const functionTools = supportsAbility(picked.model, "TOOL")
-      ? [...openAiSearchTools(), ...openAiLocalTools(assistant), ...openAiSkillTools(assistant), ...openAiMcpTools(assistant)]
+      ? conversationFunctionTools(assistant, conversation)
       : [];
     const claudeTools = claudeToolsFromOpenAiTools(functionTools, providerItem);
     const normalizedReasoning = reasoningLevelNormalized(assistant.reasoningLevel);
@@ -159,7 +159,7 @@ export async function callProvider(
 
   headers.Authorization = `Bearer ${providerItem.apiKey}`;
   if (providerItem.useResponseApi) {
-    const functionTools = supportsAbility(picked.model, "TOOL") ? [...openAiSearchTools(), ...openAiLocalTools(assistant), ...openAiSkillTools(assistant), ...openAiMcpTools(assistant)] : [];
+    const functionTools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
     const builtInTools = responseApiBuiltInTools(picked.model);
     const systemContent = conversationResponseApiInstructions(conversation, assistant);
     const reasoning = responseApiReasoningForProvider(providerItem, picked.model, assistant.reasoningLevel);
@@ -189,7 +189,7 @@ export async function callProvider(
     if (!body.tools.length) delete body.tools;
     return fetchText(url, headers, applyCustomBody(body, assistant, picked.model), providerItem, (raw) => raw.output_text ?? raw.output?.flatMap((item: any) => item.content ?? []).map((item: any) => item.text ?? "").join("\n"), signal);
   }
-  const tools = supportsAbility(picked.model, "TOOL") ? [...openAiSearchTools(), ...openAiLocalTools(assistant), ...openAiSkillTools(assistant), ...openAiMcpTools(assistant)] : [];
+  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
   body = {
     model: selectedModel,
     messages: messagesForApi,
@@ -231,7 +231,7 @@ export async function callProviderStreaming(
     // 默认 true，仅当用户显式关闭时才不回传历史 reasoning_content。
     providerItem.type === "openai" ? providerItem.includeHistoryReasoning !== false : true,
   );
-  const tools = supportsAbility(picked.model, "TOOL") ? [...openAiSearchTools(), ...openAiLocalTools(assistant), ...openAiSkillTools(assistant), ...openAiMcpTools(assistant)] : [];
+  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
   const hooks: StreamHooksWithSink = {
     message: assistantMessage,
     conversation,
@@ -289,14 +289,20 @@ export async function callProviderStreaming(
   return fetchOpenAiTextStreaming(url, headers, body, providerItem, assistant, hooks, ctx.signal);
 }
 
-export async function executeApprovedToolPart(part: Record<string, JsonValue>, assistant: Assistant) {
+export async function executeApprovedToolPart(
+  part: Record<string, JsonValue>,
+  assistant: Assistant,
+  context?: { conversationId?: string; messageNodeId?: string; signal?: AbortSignal },
+) {
   const approvalType = toolApprovalType(part);
   if (approvalType === "answered") return String((part.approvalState as Record<string, JsonValue>)?.answer ?? "");
   if (approvalType === "denied") {
     const reason = String((part.approvalState as Record<string, JsonValue>)?.reason ?? "").trim() || "No reason provided";
     return { error: `Tool execution denied by user. Reason: ${reason}` };
   }
-  return executeToolCall(apiToolCallFromPart(part), assistant);
+  // 走到这里 = 用户对 pending 卡显式批准：userApproved 是危险命令拦截的
+  // 知情同意放行门（workspace/runtime.ts），仅此路径可置 true。
+  return executeToolCall(apiToolCallFromPart(part), assistant, { ...context, userApproved: true });
 }
 
 export async function resumeApprovedToolParts(
@@ -305,6 +311,7 @@ export async function resumeApprovedToolParts(
   assistantMessage: Message,
   assistantNode: MessageNode,
   useResponseInput: boolean,
+  signal?: AbortSignal,
 ) {
   const toolMessages: ApiMessage[] = [];
   let changed = false;
@@ -314,7 +321,11 @@ export async function resumeApprovedToolParts(
     if (!canResumeToolExecution(part)) continue;
     let toolResult: unknown;
     try {
-      toolResult = await executeApprovedToolPart(part, assistant);
+      toolResult = await executeApprovedToolPart(part, assistant, {
+        conversationId: conversation.id,
+        messageNodeId: assistantNode.id,
+        signal,
+      });
     } catch (err) {
       toolResult = toolExecutionErrorPayload(err);
     }
@@ -539,13 +550,15 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
   broadcastNodeUpdate(conversation, assistantNode);
   try {
     if (resumingApprovedTools) {
-      await resumeApprovedToolParts(conversation, assistant, currentMessage, assistantNode, false);
+      await resumeApprovedToolParts(conversation, assistant, currentMessage, assistantNode, false, controller.signal);
     }
     // 工具执行闭包：把 server.ts 里的 executeToolCall 包装成 ToolExecutor 接口。
     // 这里保留对全局 state 的读写（如 saveToolBinaryContent），因为协调器仍然是唯一拥有
     // state 写权限的层；后续 Phase 会再把文件落盘拆到 files/ 模块。
     const executeTool: ToolExecutor = async (toolCall, context) => {
-      const raw = await executeToolCall(toolCall, assistant, context);
+      // 注入生成级 signal：工作区工具（尤其 bash）据此响应"停止生成"（pi 内核
+      // 逐 await 查 aborted，M1-5 再接杀进程树）。
+      const raw = await executeToolCall(toolCall, assistant, { ...context, signal: controller.signal });
       // ask_user / MCP 审批等 pending 状态直接作为单 output 载荷返回，让协调器走暂停路径。
       if (isRecord(raw) && "pending" in raw) {
         return { output: [raw as unknown as ToolPendingOutput] };

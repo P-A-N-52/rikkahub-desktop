@@ -286,7 +286,7 @@ export async function runStreamingToolLoop(
     // 审批 pre-scan：批内任一工具需要用户审批就整批不执行（避免部分执行后下一轮缺
     // tool_result）。工具卡已经/将要渲染为 pending 态，generateAnswer 看到
     // hasPendingToolApproval 会暂停等用户决定。
-    const hasPendingInBatch = result.toolCalls.some((call) => toolNeedsApproval(call.name, assistant));
+    const hasPendingInBatch = result.toolCalls.some((call) => toolNeedsApproval(call.name, assistant, hooks.conversation));
     const dispatchCtx = toolCallContext(hooks);
     const toolResults: ExecutedToolResult[] = [];
 
@@ -302,7 +302,7 @@ export async function runStreamingToolLoop(
           toolName: call.name,
           input: call.arguments,
           output: [],
-          approvalState: initialApprovalState(call.name, assistant),
+          approvalState: initialApprovalState(call.name, assistant, hooks.conversation),
         };
         finishReasoningParts(hooks.message);
         hooks.sink?.({
