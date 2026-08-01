@@ -627,7 +627,7 @@ type UploadStagingPlan = {
 // 截干保尾缀(staging 与解包都落真实文件系统,常见上限 255 字节,150 字符对多字节留足余量)。
 // 清洗后为空由调用方回退 <id>.<ext>;清洗后撞名由调用方 usedNames 去重兜底。
 export function sanitizeStagingFileName(rawName: string): string {
-  let name = rawName.replace(/[<>:"/\\|?*# -]/g, "_").replace(/[. ]+$/, "");
+  let name = rawName.replace(/[<>:"/\\|?*#\x00-\x1f]/g, "_").replace(/[. ]+$/, "");
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) name = `_${name}`;
   if (name.length > 150) {
     const ext = extname(name);
