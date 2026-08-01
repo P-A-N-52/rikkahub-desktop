@@ -9,6 +9,7 @@ import { CodeBlock } from "./code-block";
 import {
   advanceFrozenPrefix,
   EMPTY_FROZEN_PREFIX,
+  tailRenderIntervalMs,
   type FrozenPrefix,
 } from "./frozen-prefix";
 import "katex/dist/katex.min.css";
@@ -101,6 +102,44 @@ function preProcess(content: string): string {
   );
 }
 
+// 巨型活动尾部的自适应重渲节奏:档位与依据见 frozen-prefix.ts tailRenderIntervalMs。
+// 逐帧档(间隔 0)直接透传 prop,不经 state;节流档把最新尾部暂存 ref,按间隔批量
+// 提交——生成结束(isAnimating=false)或尾部缩回小体量(块晋升)即回到透传。
+function useAdaptiveTail(tail: string, isAnimating: boolean): string {
+  const [displayed, setDisplayed] = React.useState(tail);
+  const tailRef = React.useRef(tail);
+  tailRef.current = tail;
+  const lastCommitRef = React.useRef(0);
+  const timerRef = React.useRef<number | null>(null);
+
+  const intervalMs = isAnimating ? tailRenderIntervalMs(tail.length) : 0;
+
+  React.useEffect(() => {
+    if (intervalMs === 0) return;
+    const commit = () => {
+      timerRef.current = null;
+      lastCommitRef.current = performance.now();
+      setDisplayed(tailRef.current);
+    };
+    const sinceLast = performance.now() - lastCommitRef.current;
+    if (sinceLast >= intervalMs) {
+      commit();
+      return;
+    }
+    if (timerRef.current === null) {
+      timerRef.current = window.setTimeout(commit, intervalMs - sinceLast);
+    }
+  }, [tail, intervalMs]);
+  React.useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  return intervalMs === 0 ? tail : displayed;
+}
+
 // 流式前缀冻结:每帧渲染成本从 O(全文) 降到 O(活动尾部)。纯函数核心与保守锚点见
 // frozen-prefix.ts,此处只做 ref 载体。渲染期推进 ref 是幂等推导((旧值, content) →
 // 新值),StrictMode 双调安全(同 code-block.tsx rawLinesRef 先例)。
@@ -146,7 +185,9 @@ export default function Markdown({
 }: MarkdownProps) {
   const displaySetting = useSettingsStore((state) => state.settings?.displaySetting);
   const frozenPrefix = useFrozenPrefix(content, isAnimating);
-  const activeTail = frozenPrefix.raw ? content.slice(frozenPrefix.raw.length) : content;
+  const rawTail = frozenPrefix.raw ? content.slice(frozenPrefix.raw.length) : content;
+  // 巨型尾部(无增量通道的生长大块)自适应降频;小尾部与完成态原样逐帧透传
+  const activeTail = useAdaptiveTail(rawTail, isAnimating);
   // 流式中只预处理活动尾部(前缀的预处理产物随晋升增量累积,见 frozen-prefix.ts);
   // 完成态前缀恒为空,此处即整文,与旧管线逐字节一致。
   const processedTail = React.useMemo(() => preProcess(activeTail), [activeTail]);

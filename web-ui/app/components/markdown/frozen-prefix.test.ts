@@ -8,6 +8,7 @@ import {
   STREAM_PROMOTE_HOLDBACK_BLOCKS,
   STREAM_PROMOTE_RETRY_GROWTH,
   STREAM_TAIL_PROMOTE_THRESHOLD,
+  tailRenderIntervalMs,
 } from "./frozen-prefix";
 
 const identity = (s: string) => s;
@@ -112,5 +113,16 @@ describe("advanceFrozenPrefix", () => {
     prefix = advanceFrozenPrefix(prefix, paragraphs(10), upper);
     prefix = advanceFrozenPrefix(prefix, paragraphs(20), upper);
     expect(prefix.processed).toBe(upper(prefix.raw));
+  });
+});
+
+describe("tailRenderIntervalMs(巨型尾部自适应节奏档位)", () => {
+  test("小尾部逐帧(0),8KB/32KB 分档降频,档位单调不减", () => {
+    expect(tailRenderIntervalMs(0)).toBe(0);
+    expect(tailRenderIntervalMs(8 * 1024 - 1)).toBe(0);
+    expect(tailRenderIntervalMs(8 * 1024)).toBe(160);
+    expect(tailRenderIntervalMs(32 * 1024 - 1)).toBe(160);
+    expect(tailRenderIntervalMs(32 * 1024)).toBe(320);
+    expect(tailRenderIntervalMs(1024 * 1024)).toBe(320);
   });
 });

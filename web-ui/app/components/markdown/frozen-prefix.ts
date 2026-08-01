@@ -44,6 +44,25 @@ export const STREAM_PROMOTE_HOLDBACK_BLOCKS = 2;
 /** 晋升尝试失败后,尾部需再增长这么多才重试(见 attemptedTailLength)。 */
 export const STREAM_PROMOTE_RETRY_GROWTH = 1024;
 
+// ===== 巨型活动尾部的自适应重渲节奏(单价治理第二层)=====
+// 前缀冻结把每帧成本压到 O(活动尾部),但"生长中的巨型单块"(大表格/长围栏)没有
+// 增量渲染通道,整块 remark 解析 + 元素构建随块体积线性涨:实测 150 行表格单次
+// ~54ms、400 行 ~210ms(bench,2026-08-01),逐帧重渲必然超 33ms 帧预算。成熟客户
+// 端(ChatGPT/Claude 网页端)的通行做法是按内容规模降频:小尾部逐帧,巨型尾部
+// 行成批出现——把恒定超支变成有界的低频开销,滚动帧预算立即回来。
+const TAIL_RENDER_CADENCE_TIERS: ReadonlyArray<{ minLength: number; intervalMs: number }> = [
+  { minLength: 32 * 1024, intervalMs: 320 },
+  { minLength: 8 * 1024, intervalMs: 160 },
+];
+
+/** 活动尾部按长度对应的最小重渲间隔;0 = 逐帧。 */
+export function tailRenderIntervalMs(tailLength: number): number {
+  for (const tier of TAIL_RENDER_CADENCE_TIERS) {
+    if (tailLength >= tier.minLength) return tier.intervalMs;
+  }
+  return 0;
+}
+
 /**
  * 纯函数推进:(旧前缀, 最新全文, 预处理器) → 新前缀。
  * 幂等——同一 content 重复推进得到相同结果,渲染期双调(StrictMode)安全。
