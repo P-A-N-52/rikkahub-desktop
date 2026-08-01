@@ -135,9 +135,59 @@ interface StreamRecord {
   controller: AbortController | null;
   pollTimer: ReturnType<typeof setInterval> | null;
   closeTimer: ReturnType<typeof setTimeout> | null;
+  /** 注意力节奏:无人贴底观看时攒批的流式增量帧(见 records 下方注释)。 */
+  pendingDeltas: ConversationTextDeltaEventDto[];
+  deltaFlushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const records = new Map<string, StreamRecord>();
+
+// ===== 流式增量的注意力节奏(用户反馈:流式输出表格/大块时滚动看别处掉到 ~15fps)=====
+// 根因:text_delta 每帧(服务端 33ms 节流)同步落地,正在生长的巨型块(表格没有
+// 代码块那样的增量渲染通道)整块重渲 + 整表重排,30Hz 持续占用主线程;贴底观看时
+// 掉帧不可感,一旦滚动查看其他位置,滚动处理与条目挂载抢不到帧预算,卡顿立现。
+// 对策:只有"当前会话且贴底"的观看者需要逐帧;其余(滚离底部、后台生成中的会话)
+// 攒批 250ms 按序一次性落地——同一宏任务内的多次 setState 被 React 自动合批,巨型
+// 块每 250ms 只重渲一次。正确性锚点:node_update(节点级权威帧)与轮询快照落地前
+// 先 flush 攒批保序;snapshot(连接首帧全量权威)直接作废攒批;重启/关闭清空。
+const UNFOCUSED_DELTA_FLUSH_MS = 250;
+let attentionConversationId: string | null = null;
+
+/** 路由上报"贴底观看中"的会话;null = 无人贴底。回到贴底立即补齐攒批。 */
+export function setConversationStreamAttention(id: string | null): void {
+  attentionConversationId = id;
+  if (!id) return;
+  const record = records.get(id);
+  if (record) flushPendingDeltas(id, record);
+}
+
+function clearPendingDeltas(record: StreamRecord): void {
+  record.pendingDeltas.length = 0;
+  if (record.deltaFlushTimer !== null) {
+    clearTimeout(record.deltaFlushTimer);
+    record.deltaFlushTimer = null;
+  }
+}
+
+/** 按序落地攒批;任何一帧分叉/无快照即重启流(重启清空攒批,重连首帧拿全量)。 */
+function flushPendingDeltas(id: string, record: StreamRecord): void {
+  if (record.deltaFlushTimer !== null) {
+    clearTimeout(record.deltaFlushTimer);
+    record.deltaFlushTimer = null;
+  }
+  if (record.pendingDeltas.length === 0) return;
+  const batch = record.pendingDeltas.splice(0);
+  for (const frame of batch) {
+    const outcome = withSummaryBridge(id, () => applyConversationTextDelta(frame));
+    if (outcome === "no_detail" || outcome === "resync") {
+      queueMicrotask(() => {
+        if (records.get(id) === record) restartStream(id, record);
+      });
+      return;
+    }
+  }
+  syncPolling(id, record);
+}
 
 // I-1(专题2)快照协商:snapshot 帧携带的不透明令牌,与其对应的 updateAt 成对缓存。
 // 重开流时仅当缓存 detail 的 updateAt 仍等于成对 updateAt(其间没有增量帧推进)才
@@ -188,6 +238,8 @@ function syncPolling(id: string, record: StreamRecord): void {
       void fetchConversationSnapshot(id)
         .then((data) => {
           if (records.get(id) !== record) return;
+          // 先补齐攒批:本地 updateAt 才是当前值,R7-3 单调守卫的陈旧判定不失真
+          flushPendingDeltas(id, record);
           withSummaryBridge(id, () => {
             applyPolledConversationSnapshot(data);
           });
@@ -227,6 +279,7 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
 
         if (event === "snapshot" && data.type === "snapshot") {
           useAppStore.getState().setClockOffset(data.serverTime);
+          clearPendingDeltas(record); // 全量权威快照已包含增量,攒批作废(防御性)
           const staleRange = withSummaryBridge(id, () => applyConversationSnapshot(data.conversation));
           rememberNegotiationToken(id, data.conversation.updateAt, data.negotiationToken);
           if (staleRange) void repairStaleNodes(id, staleRange.from, staleRange.to);
@@ -251,6 +304,17 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
 
         if (event === "text_delta" && data.type === "text_delta") {
           useAppStore.getState().setClockOffset(data.serverTime);
+          // 注意力节奏:无人贴底观看本会话 -> 只攒批,定时器到点统一按序落地
+          if (attentionConversationId !== id) {
+            record.pendingDeltas.push(data);
+            if (record.deltaFlushTimer === null) {
+              record.deltaFlushTimer = setTimeout(() => {
+                record.deltaFlushTimer = null;
+                if (records.get(id) === record) flushPendingDeltas(id, record);
+              }, UNFOCUSED_DELTA_FLUSH_MS);
+            }
+            return;
+          }
           const deltaOutcome = withSummaryBridge(id, () => applyConversationTextDelta(data));
           if (deltaOutcome === "no_detail" || deltaOutcome === "resync") {
             // 无快照可打增量 / 与服务端分叉(丢帧、结构漂移):重启流拿全量快照,
@@ -267,6 +331,8 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
         if (event !== "node_update" || data.type !== "node_update") return;
 
         useAppStore.getState().setClockOffset(data.serverTime);
+        // 保序:攒批增量比本权威帧旧,先放后补会 baseLen 失配误判分叉
+        flushPendingDeltas(id, record);
         const outcome = withSummaryBridge(id, () => applyConversationNodeUpdate(data));
         if (outcome === "no_detail") {
           // 本地尚无快照可打增量:重启流拿全量(原 useConversationDetail 的
@@ -310,6 +376,7 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
 
 function restartStream(id: string, record: StreamRecord): void {
   record.controller?.abort();
+  clearPendingDeltas(record); // 重连首帧全量快照已包含一切,攒批作废
   // 重启都是"本地状态存疑"场景(no_detail/resync/强制刷新):跳过协商拿全量快照。
   openStream(id, record, { negotiate: false });
 }
@@ -322,6 +389,7 @@ function closeStream(id: string, record: StreamRecord): void {
   }
   record.controller?.abort();
   record.controller = null;
+  clearPendingDeltas(record);
   if (record.pollTimer !== null) {
     clearInterval(record.pollTimer);
     record.pollTimer = null;
@@ -353,7 +421,14 @@ export function acquireConversationStream(id: string): () => void {
       record.closeTimer = null;
     }
   } else {
-    record = { refCount: 1, controller: null, pollTimer: null, closeTimer: null };
+    record = {
+      refCount: 1,
+      controller: null,
+      pollTimer: null,
+      closeTimer: null,
+      pendingDeltas: [],
+      deltaFlushTimer: null,
+    };
     records.set(id, record);
     retainConversationEntry(id);
     openStream(id, record);
@@ -509,6 +584,7 @@ export function resetConversationStreamForTest(): void {
   }
   summaryListeners.clear();
   negotiationTokens.clear();
+  attentionConversationId = null;
   transport = sse;
   fetchConversationSnapshot = defaultFetchSnapshot;
   fetchConversationNodesPage = defaultFetchNodesPage;

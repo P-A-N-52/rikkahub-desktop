@@ -15,6 +15,7 @@ import {
   loadOlderConversationNodes,
   onConversationSummaryChange,
   resetConversationStreamForTest,
+  setConversationStreamAttention,
   shouldBroadcastConversationSummary,
   type ConversationStreamEvent,
   type ConversationSummaryUpdate,
@@ -153,6 +154,7 @@ describe("快照协商(专题2 I-1)", () => {
 
   test("增量帧推进 updateAt 后令牌作废(不再回传陈旧令牌)", async () => {
     const release = acquireConversationStream("a");
+    setConversationStreamAttention("a"); // 贴底观看:增量逐帧落地
     streams[0]!.emit("snapshot", snapshotFrame(100, "100:abc"));
     streams[0]!.emit("text_delta", {
       type: "text_delta",
@@ -174,6 +176,7 @@ describe("快照协商(专题2 I-1)", () => {
 
   test("resync 重启不带令牌(分叉后必须拿全量)", async () => {
     acquireConversationStream("a");
+    setConversationStreamAttention("a");
     streams[0]!.emit("snapshot", snapshotFrame(100, "100:abc"));
     streams[0]!.emit("text_delta", {
       type: "text_delta",
@@ -323,6 +326,7 @@ describe("流事件语义", () => {
     const updates: ConversationSummaryUpdate[] = [];
     const off = onConversationSummaryChange((update) => updates.push(update));
     acquireConversationStream("a");
+    setConversationStreamAttention("a");
     streams[0]!.emit("snapshot", {
       type: "snapshot",
       seq: 1,
@@ -351,6 +355,7 @@ describe("流事件语义", () => {
 
   test("text_delta 分叉(baseLen 失配)→ 重启流拿全量快照", async () => {
     acquireConversationStream("a");
+    setConversationStreamAttention("a");
     streams[0]!.emit("snapshot", {
       type: "snapshot",
       seq: 1,
@@ -378,6 +383,7 @@ describe("流事件语义", () => {
 
   test("快照前收到 text_delta(no_detail)→ 重启流", async () => {
     acquireConversationStream("a");
+    setConversationStreamAttention("a");
     streams[0]!.emit("text_delta", {
       type: "text_delta",
       seq: 1,
@@ -429,6 +435,72 @@ describe("流事件语义", () => {
       serverTime: Date.now(),
     });
     expect(entries()["a"]?.detail ?? null).toBeNull();
+  });
+});
+
+describe("流式增量的注意力节奏(滚离底部/后台会话攒批)", () => {
+  const delta = (seq: number, baseLen: number, textDelta: string) => ({
+    type: "text_delta" as const,
+    seq,
+    conversationId: "a",
+    nodeId: "a-n1",
+    messageId: "a-n1-m",
+    deltas: [{ partIndex: 0, baseLen, text: textDelta }],
+    updateAt: 100 + seq,
+    isGenerating: true,
+    serverTime: Date.now(),
+  });
+  const openWithSnapshot = () => {
+    acquireConversationStream("a");
+    streams[0]!.emit("snapshot", {
+      type: "snapshot",
+      seq: 1,
+      conversation: conversation("a", { isGenerating: true, updateAt: 100 }),
+      serverTime: Date.now(),
+    });
+  };
+  const text = () =>
+    (entries()["a"]!.detail!.messages[0]!.messages[0]!.parts[0] as { text: string }).text;
+
+  test("无人贴底:增量不逐帧落地,定时器到点按序一次性补齐", async () => {
+    openWithSnapshot();
+    streams[0]!.emit("text_delta", delta(2, 2, "AA"));
+    streams[0]!.emit("text_delta", delta(3, 4, "BB"));
+    expect(text()).toBe("内容"); // 攒批中,未落地
+    await wait(320);
+    expect(text()).toBe("内容AABB");
+    expect(streams).toHaveLength(1); // 按序应用,无分叉重启
+  });
+
+  test("回到贴底立即补齐攒批;贴底期间恢复逐帧", () => {
+    openWithSnapshot();
+    streams[0]!.emit("text_delta", delta(2, 2, "AA"));
+    expect(text()).toBe("内容");
+    setConversationStreamAttention("a");
+    expect(text()).toBe("内容AA"); // 上报注意力即补齐
+    streams[0]!.emit("text_delta", delta(3, 4, "BB"));
+    expect(text()).toBe("内容AABB"); // 逐帧
+  });
+
+  test("node_update 落地前先补齐攒批(保序,不误判分叉)", async () => {
+    openWithSnapshot();
+    streams[0]!.emit("text_delta", delta(2, 2, "AA"));
+    streams[0]!.emit("node_update", {
+      type: "node_update",
+      stamp: "s2",
+      seq: 3,
+      conversationId: "a",
+      nodeId: "a-n1",
+      nodeIndex: 0,
+      node: node("a-n1", "权威内容"),
+      updateAt: 300,
+      isGenerating: true,
+      serverTime: Date.now(),
+    });
+    expect(text()).toBe("权威内容");
+    await wait(320); // 定时器到点也没有残留攒批可再落
+    expect(text()).toBe("权威内容");
+    expect(streams).toHaveLength(1);
   });
 });
 

@@ -62,6 +62,7 @@ import {
   ensureFullConversationDetail,
   loadOlderConversationNodes,
   refreshConversation,
+  setConversationStreamAttention,
   useConversationSubscription,
 } from "~/stores/conversation-stream";
 import { WorkbenchHost } from "~/components/workbench/workbench-host";
@@ -841,6 +842,13 @@ const ConversationTimeline = React.memo(
       isAtBottomRef.current = atBottom;
       setIsAtBottom(atBottom);
     }, []);
+    // 流式注意力上报:贴底观看当前会话 -> 增量逐帧落地;滚离底部/切会话/卸载 -> 攒批
+    // 250ms(根治"流式表格/大块时滚动看别处掉到十几帧",见 conversation-stream.ts)。
+    React.useEffect(() => {
+      if (!activeId || !isAtBottom) return;
+      setConversationStreamAttention(activeId);
+      return () => setConversationStreamAttention(null);
+    }, [activeId, isAtBottom]);
     const handleTotalListHeightChanged = React.useCallback((height: number) => {
       const previous = totalListHeightRef.current;
       totalListHeightRef.current = height;
