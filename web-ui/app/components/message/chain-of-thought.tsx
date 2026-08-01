@@ -7,7 +7,6 @@ import { cn } from "~/lib/utils";
 interface ChainOfThoughtProps<T> extends React.ComponentProps<typeof Card> {
   steps: T[];
   collapsedVisibleCount?: number;
-  collapsedAdaptiveWidth?: boolean;
   renderStep: (
     step: T,
     index: number,
@@ -24,7 +23,6 @@ interface ChainOfThoughtStepBaseProps {
   onClick?: () => void;
   children?: React.ReactNode;
   contentVisible?: boolean;
-  collapsedAdaptiveWidth?: boolean;
   className?: string;
   active?: boolean;
   isFirst?: boolean;
@@ -43,7 +41,6 @@ interface ControlledChainOfThoughtStepProps extends ChainOfThoughtStepBaseProps 
 function ChainOfThought<T>({
   steps,
   collapsedVisibleCount = 2,
-  collapsedAdaptiveWidth = false,
   renderStep,
   collapseLabel = "Collapse",
   showMoreLabel,
@@ -54,13 +51,11 @@ function ChainOfThought<T>({
   const canCollapse = steps.length > collapsedVisibleCount;
   const visibleSteps = expanded || !canCollapse ? steps : steps.slice(-collapsedVisibleCount);
   const hiddenCount = Math.max(steps.length - collapsedVisibleCount, 0);
-  const shouldFillCollapseControlWidth = expanded || !collapsedAdaptiveWidth;
 
   return (
     <Card
       className={cn(
         "gap-0 rounded-2xl border-border/70 bg-card/85 px-2 py-2 shadow-sm",
-        collapsedAdaptiveWidth && !expanded && "w-fit max-w-full self-start",
         className,
       )}
       {...props}
@@ -69,8 +64,7 @@ function ChainOfThought<T>({
         <button
           type="button"
           className={cn(
-            "text-primary hover:bg-muted/60 focus-visible:ring-ring/50 mb-1 flex items-center gap-2 rounded-md px-1 py-1 text-left text-sm outline-none focus-visible:ring-[3px]",
-            shouldFillCollapseControlWidth ? "w-full" : "w-fit self-start",
+            "text-primary hover:bg-muted/60 focus-visible:ring-ring/50 mb-1 flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm outline-none focus-visible:ring-[3px]",
           )}
           onClick={() => setExpanded((prev) => !prev)}
         >
@@ -148,7 +142,6 @@ function ChainOfThoughtStepContent({
   expanded,
   onExpandedChange,
   contentVisible,
-  collapsedAdaptiveWidth = false,
   className,
   active,
   isFirst,
@@ -156,7 +149,6 @@ function ChainOfThoughtStepContent({
 }: ChainOfThoughtStepContentProps) {
   const hasContent = Boolean(children);
   const clickable = Boolean(onClick || hasContent);
-  const shouldFillMaxWidth = !collapsedAdaptiveWidth || contentVisible;
 
   const handleActivate = () => {
     if (onClick) {
@@ -169,16 +161,14 @@ function ChainOfThoughtStepContent({
   };
 
   const rowClassName = cn(
-    "relative flex items-center gap-2 overflow-hidden rounded-xl px-2 py-2 text-left",
-    shouldFillMaxWidth ? "w-full" : "w-fit max-w-full",
+    "relative flex w-full items-center gap-2 overflow-hidden rounded-xl px-2 py-2 text-left",
     clickable && "cursor-pointer outline-none",
     active && "rikkahub-step-shimmer bg-muted/60",
     className,
   );
 
   const stepClassName = cn(
-    "flex gap-2 rounded-xl",
-    shouldFillMaxWidth ? "w-full" : "w-fit max-w-full",
+    "flex w-full gap-2 rounded-xl",
     clickable && "hover:bg-muted/60 focus-within:ring-ring/50 focus-within:ring-[3px]",
   );
 
@@ -215,27 +205,24 @@ function ChainOfThoughtStepContent({
         <div className={cn("w-px flex-1", isLast === false && "bg-border/80")} />
       </div>
 
-      <div className={cn("min-w-0", shouldFillMaxWidth && "flex-1")}>
+      <div className="min-w-0 flex-1">
         {clickable ? (
           <button type="button" className={rowClassName} onClick={handleActivate}>
-            <span className={cn("min-w-0", shouldFillMaxWidth && "flex-1")}>{label}</span>
+            <span className="min-w-0 flex-1">{label}</span>
             {extra}
             {indicator}
           </button>
         ) : (
           <div className={rowClassName}>
-            <span className={cn("min-w-0", shouldFillMaxWidth && "flex-1")}>{label}</span>
+            <span className="min-w-0 flex-1">{label}</span>
             {extra}
             {indicator}
           </div>
         )}
 
-        {hasContent && !(collapsedAdaptiveWidth && !contentVisible) && (
+        {hasContent && (
           <div
-            className={cn(
-              "grid transition-all duration-200 ease-out",
-              shouldFillMaxWidth && "w-full",
-            )}
+            className="grid w-full transition-all duration-200 ease-out"
             style={{ gridTemplateRows: contentVisible ? "1fr" : "0fr" }}
           >
             <div className="overflow-hidden">
