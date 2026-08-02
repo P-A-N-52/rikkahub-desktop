@@ -737,10 +737,14 @@
     // The page loads with `[data-download="primary"]` buttons pointing at the GitHub
     // Releases /latest page (set in the HTML attribute), so crawlers and JS-disabled
     // browsers always have a working download. On load we:
-    //   1. Ask api.github.com what the latest release tag is — this is the single
-    //      source of truth, and it bumps the moment you publish a new GitHub Release.
-    //   2. Fall back to a static `latest.txt` on R2 (just one line, e.g. "1.0.5") if
-    //      the GitHub API is rate-limited (60 req/hr/IP) or otherwise unreachable.
+    //   1. Read the tiny `latest.txt` on R2 (one line, e.g. "1.5.0"). R2 is where the
+    //      .exe actually lives, and you upload latest.txt together with the .exe, so
+    //      whatever it says is guaranteed downloadable — no tag-published-but-exe-not-
+    //      uploaded-yet window. It's also the fastest route (esp. in China) and immune
+    //      to GitHub API rate limits. NOTE: needs a CORS policy on the R2 bucket
+    //      (allow GET from this site's origin), otherwise browsers block the fetch.
+    //   2. Fall back to the GitHub Releases API (auto-bumps on publish, but anonymous
+    //      calls are limited to 60 req/hr per IP — shared office IPs hit this fast).
     //   3. If both routes fail, leave the buttons untouched — they already point at
     //      the GitHub Releases /latest page, which is always correct. (The old code
     //      rewrote them to a hardcoded-version R2 link that went stale — never do that.)
@@ -756,8 +760,19 @@
     }
 
     async function resolveLatestVersion() {
-      // Primary: GitHub Releases API. CORS is open here, so the fetch works from any
-      // origin. We don't authenticate — 60 req/hr/IP is plenty per visitor.
+      // Primary: latest.txt on R2 — same store the .exe is served from, uploaded
+      // together with it, so the answer is always downloadable. Requires bucket CORS.
+      try {
+        const res = await fetch(`${RIKKAHUB_R2_BASE}/latest.txt`, { cache: 'no-store' });
+        if (res.ok) {
+          const tag = (await res.text()).trim().replace(/^v/i, '');
+          if (tag) return { version: tag, source: 'r2-latest-txt' };
+        }
+      } catch (err) {
+        console.warn('[rikkahub] R2 latest.txt check failed', err);
+      }
+      // Fallback: GitHub Releases API. CORS is open, but anonymous calls are rate
+      // limited (60 req/hr/IP) and the API can lead the R2 upload by a few minutes.
       try {
         const res = await fetch(`https://api.github.com/repos/${RIKKAHUB_GITHUB_REPO}/releases/latest`, {
           headers: { Accept: 'application/vnd.github+json' },
@@ -769,17 +784,6 @@
         }
       } catch (err) {
         console.warn('[rikkahub] GitHub API check failed', err);
-      }
-      // Fallback: a tiny `latest.txt` on R2 (one line, version only). Upload this
-      // alongside the .exe and it covers the case where GitHub API is rate-limited.
-      try {
-        const res = await fetch(`${RIKKAHUB_R2_BASE}/latest.txt`, { cache: 'no-store' });
-        if (res.ok) {
-          const tag = (await res.text()).trim().replace(/^v/i, '');
-          if (tag) return { version: tag, source: 'r2-latest-txt' };
-        }
-      } catch (err) {
-        console.warn('[rikkahub] R2 latest.txt check failed', err);
       }
       return null; // both probes failed — caller keeps the GitHub /latest links as-is
     }
