@@ -58,6 +58,28 @@ export function customJsImportWarning(beforeSignatures: Map<string, string>, set
   return `安全提醒：本次导入包含 ${names.length} 个自定义 JS 搜索脚本（${names.join("、")}）。这类脚本会在本机执行，请确认备份来源可信；如不确定，请到 设置 → 搜索 中检查或删除对应服务。`;
 }
 
+/** 七层合并·层3修正(Linux 用户实测"导入后设置覆盖不完全"):含 apiKey 的集合
+ *  (providers/asrProviders/ttsProviders)同 id 时并非无条件保 PC——PC 的默认供应商与
+ *  安卓共享同一批固定 UUID(互导契约刻意对齐),全新安装的 PC 条目全是无 key 出厂默认,
+ *  裸 mergeById(PC, APP) 会把手机上配好的 key/模型列表/启用状态整条挡在门外。
+ *  与 mergeSearchByType 同规则:同 id 且 APP 配了 apiKey 而 PC 没配 → 采用 APP 条目
+ *  (key 与模型定义一起进来);PC 已配 key → 保 PC(层3原意:保护 PC 端已验证的 key 与
+ *  定义);两端都无 key(如系统 TTS)→ 保 PC,不让安卓端的本机化配置串台;APP 独有追加。 */
+export function mergeKeyedCollectionById<T extends { id: string; apiKey?: unknown }>(pcList: T[], appList: T[]): T[] {
+  const result = [...pcList];
+  const idxById = new Map(result.map((item, i) => [item.id, i] as const));
+  for (const appItem of appList) {
+    const idx = idxById.get(appItem.id);
+    if (idx === undefined) {
+      idxById.set(appItem.id, result.length);
+      result.push(appItem);
+    } else if (String(appItem.apiKey ?? "").trim() && !String(result[idx].apiKey ?? "").trim()) {
+      result[idx] = appItem; // APP 有 key、PC 没有 → 用 APP
+    }
+  }
+  return result;
+}
+
 /** 全面审查 5-6:导入前 state.json 快照(单份滚动覆盖,与会话库 pre-import.bak 对齐)。
  *  恢复是全量替换语义,误选备份时这是设置/供应商 apiKey/文件账本的唯一本地回退点。
  *  快照失败只告警不阻断导入(尽力而为的安全网,不是前置条件)。 */
@@ -453,8 +475,10 @@ function applyAndroidOriginZipFromExtractDir(extractDir: string): { settingsImpo
       //      原样保留,saveState 写回、PC→APP 回导还能用。
       //   2) 标量配置(默认模型选择 / 各类 prompt / 主题 / 布尔开关):PC 缺失或仍=出厂默认 = 用户没在
       //      PC 定制 → 采用 APP(APP 是主力端);PC 已定制 → 保 PC。pick() 同时判 null 和 ===。
-      //   3) 含 apiKey 的集合(providers/asr/tts):mergeById(PC, APP) PC 优先,保 PC 的 key 与定义,
-      //      APP 独有条目追加。searchServices 单独处理——两端 id 都是随机生成(defaultSettings 用 id()、
+      //   3) 含 apiKey 的集合(providers/asr/tts):mergeKeyedCollectionById——同 id 时 PC 已配 key 保 PC,
+      //      PC 无 key 而 APP 有 → 采用 APP 条目(默认供应商两端共享固定 UUID,全新安装若无条件保 PC
+      //      会把手机配好的 key/模型挡在门外,Linux 用户实测“覆盖不完全”),APP 独有条目追加。
+      //      searchServices 单独处理——两端 id 都是随机生成(defaultSettings 用 id()、
       //      Android 用 Uuid.random()),mergeById 按 id 去重会翻倍,改按 type 去重(见 mergeSearchByType)。
       //   4) 用户内容集合(assistants/mcpServers/lorebooks/quickMessages/modeInjections/assistantTags):
       //      mergeById(APP, PC) APP 优先(改名/配置进来),PC 独有追加。id 是 UUID 且两端默认空,撞 id
@@ -573,11 +597,11 @@ function applyAndroidOriginZipFromExtractDir(extractDir: string): { settingsImpo
         selectedASRProviderId: pick("selectedASRProviderId"),
         selectedTTSProviderId: pick("selectedTTSProviderId"),
         assistantId: pick("assistantId"),
-        providers: mergeById(pc.providers ?? [], (Array.isArray(app.providers) ? app.providers : []) as { id: string }[]),
+        providers: mergeKeyedCollectionById(pc.providers ?? [], (Array.isArray(app.providers) ? app.providers : []) as { id: string }[]),
         searchServices: mergedSearchServices,
         searchServiceSelected: resolveSearchSelected(),
-        asrProviders: mergeById(pc.asrProviders ?? [], (Array.isArray(app.asrProviders) ? app.asrProviders : []) as { id: string }[]),
-        ttsProviders: mergeById(pc.ttsProviders ?? [], (Array.isArray(app.ttsProviders) ? app.ttsProviders : []) as { id: string }[]),
+        asrProviders: mergeKeyedCollectionById(pc.asrProviders ?? [], (Array.isArray(app.asrProviders) ? app.asrProviders : []) as { id: string }[]),
+        ttsProviders: mergeKeyedCollectionById(pc.ttsProviders ?? [], (Array.isArray(app.ttsProviders) ? app.ttsProviders : []) as { id: string }[]),
         assistants: mergeById((Array.isArray(app.assistants) ? app.assistants : []) as any[], pc.assistants ?? []),
         mcpServers: mergeById((Array.isArray(app.mcpServers) ? app.mcpServers : []) as any[], pc.mcpServers ?? []),
         lorebooks: mergeById((Array.isArray(app.lorebooks) ? app.lorebooks : []) as any[], pc.lorebooks ?? []),
