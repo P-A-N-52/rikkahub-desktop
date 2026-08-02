@@ -13,7 +13,8 @@
     "fmt:check": "oxfmt app --check",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "bun run --cwd ../pc-server compile && tauri build",
+    "tauri:build:shell-only": "tauri build"
   },
   "dependencies": {
     "@react-router/node": "7.13.0",
