@@ -329,13 +329,24 @@ const PC_MANAGED_CONVERSATION_COLUMNS = new Set([
   "mode_injection_ids", "lorebook_ids",
 ]);
 
-/** T-2:以 cached 安卓库为基底重建。文件级拷贝到目标后只重灌 PC 管理的表,安卓自有表
- *  与未知列全部存活。FTS5 虚拟表整表 DROP(影子表随虚拟表自动删除;陈旧索引不该跟着
- *  新数据走,安卓 Room 会在 onOpen 重建。切勿把影子表当普通表留下——APP 端重建 FTS
- *  虚拟表时会撞影子表名直接崩,这是旧实现用排除法换来的教训)。 */
+/** T-2:以 cached 安卓库为基底重建。基底字节 deserialize 进内存库操作,只重灌 PC 管理
+ *  的表,安卓自有表与未知列全部存活;结果 serialize 一次性落盘。FTS5 虚拟表整表 DROP
+ *  (影子表随虚拟表自动删除;陈旧索引不该跟着新数据走,安卓 Room 会在 onOpen 重建。
+ *  切勿把影子表当普通表留下——APP 端重建 FTS 虚拟表时会撞影子表名直接崩,这是旧实现
+ *  用排除法换来的教训)。
+ *  为何不直接在 stage 内的 dbPath 上操作(旧实现 copyFileSync 后 new Database(dbPath)):
+ *  bun:sqlite 的 close() 是 sqlite3_close_v2 语义——存在未 finalize 的预编译语句时延迟
+ *  关闭,句柄要等语句被 GC 才真正释放。Windows 上暂存 rikka_hub.db 因此一直被本进程
+ *  锁着,-wal/-shm 删不掉,随后 PowerShell 压缩报"文件正被另一个进程使用"→ 导出
+ *  HTTP 500(1.5.0 用户实测,仅 cached 基底路径踩中;vendored 路径在内存建库无此问题)。
+ *  现改为:工作副本放系统临时目录(stage 之外)落盘操作,VACUUM + wal_checkpoint(TRUNCATE)
+ *  归并后把主库文件字节拷入 stage——延迟释放的句柄只挂在临时目录文件上,stage 内的
+ *  rikka_hub.db 从头到尾不存在打开的句柄。不用 Database.deserialize 走全内存:cached 库
+ *  是 WAL 模式,其镜像 deserialize 后任何访问都报 SQLITE_CANTOPEN(内存库不支持 WAL)。 */
 function buildAndroidDbOnCachedBase(cachedDbPath: string, dbPath: string, backupNameById?: Map<number, string>): void {
-  copyFileSync(cachedDbPath, dbPath);
-  const db = new Database(dbPath);
+  const workPath = join(tempDir(), `rikkahub-android-db-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`);
+  copyFileSync(cachedDbPath, workPath);
+  const db = new Database(workPath);
   try {
     // ① 快照安卓自有列,重灌后按 id 回填。
     const convCols = (db.prepare("PRAGMA table_info(ConversationEntity)").all() as { name: string }[]).map((c) => c.name);
@@ -365,10 +376,17 @@ function buildAndroidDbOnCachedBase(cachedDbPath: string, dbPath: string, backup
       const update = db.prepare(`UPDATE ConversationEntity SET ${setList} WHERE id = ?`);
       for (const [convId, values] of extrasById) update.run(...(values as never[]), convId);
     }
-    // ⑤ 文件级拷贝继承了基底体积,把删掉的旧数据真正还地。
+    // ⑤ 基底继承的旧数据体积真正还地;checkpoint(TRUNCATE) 把 WAL 全量并回主库,
+    //    使 workPath 主文件成为完整一致的库镜像,拷贝即成品。
     db.exec("VACUUM");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally {
     db.close();
+  }
+  copyFileSync(workPath, dbPath);
+  // 工作副本尽力清理:延迟释放的句柄可能让删除失败,吞掉——文件在系统临时目录,无碍。
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try { rmSync(workPath + suffix); } catch { /* best-effort */ }
   }
 }
 
