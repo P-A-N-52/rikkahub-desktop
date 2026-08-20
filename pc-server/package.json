@@ -8,13 +8,14 @@
     "test": "bun test",
     "smoke:request-chain": "bun run scripts/request-chain-smoke.ts",
     "smoke:backup-roundtrip": "bun run scripts/backup-roundtrip-smoke.ts",
-    "typecheck": "bunx tsc --noEmit --skipLibCheck",
+    "typecheck": "bun run scripts/typecheck.ts",
     "version:bump": "bun run scripts/bump-version.ts",
     "compile": "bun install && bun build --compile --target=bun-windows-x64 server.ts --outfile ../dist/rikkahub-pc.exe && bun -e \"await Bun.write('../web-ui/src-tauri/binaries/rikkahub-server-x86_64-pc-windows-msvc.exe', Bun.file('../dist/rikkahub-pc.exe'))\"",
     "compile:linux": "bun install && bun build --compile --target=bun-linux-x64 server.ts --outfile ../dist/rikkahub-pc"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.4"
+    "@types/bun": "^1.3.4",
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "diff": "8.0.4",

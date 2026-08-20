@@ -750,8 +750,10 @@ export function responseApiContentFromUiParts(parts: JsonValue[], role: string) 
       return null;
     })
     .filter(Boolean);
-  if (content.length === 1 && isRecord(content[0]) && content[0].type === "input_text") return String(content[0].text ?? "");
-  if (content.length === 1 && isRecord(content[0]) && content[0].type === "output_text") return String(content[0].text ?? "");
+  const singlePart = content.length === 1 ? content[0] : undefined;
+  if (isRecord(singlePart) && (singlePart.type === "input_text" || singlePart.type === "output_text") && "text" in singlePart) {
+    return String(singlePart.text ?? "");
+  }
   return content;
 }
 
