@@ -241,6 +241,10 @@ export interface Conversation {
   workspaceId?: string | null;
   /** 会话级工作目录(绝对路径,必须在 workspace root 边界内)。null = workspace root。 */
   workspaceCwd?: string | null;
+  /** pi 引擎工作记忆 jsonl 的文件名(pc-data/pi-agent/sessions/ 内,只存文件名不存绝对
+   *  路径,pc-data 可搬迁)。null = 尚无引擎记忆。仅存 PC 自有库;跨端导出白名单不含此列,
+   *  跨端 zip 不含 jsonl(pi 方案 §4.6)。文件丢失/损坏 → 引擎降级新会话,UI 历史不受影响。 */
+  piSessionFile?: string | null;
 }
 
 // ----- 工作区(agent 模式)领域模型 -----
@@ -477,6 +481,7 @@ export interface PcConversationRow {
   lorebook_ids?: string;
   workspace_id?: string | null;
   workspace_cwd?: string | null;
+  pi_session_file?: string | null;
 }
 export interface PcMessageNodeRow {
   id: string;

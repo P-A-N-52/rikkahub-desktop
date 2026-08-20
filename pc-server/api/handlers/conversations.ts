@@ -558,6 +558,9 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         isPinned: false,
         createAt: Date.now(),
         updateAt: Date.now(),
+        // pi 引擎记忆不随 fork 共享:两个会话写同一 jsonl 必互相污染。分支的引擎记忆
+        // 从零开始(UI 历史完整保留);P5 分支语义若要保留记忆,走 SessionManager.forkFrom。
+        piSessionFile: null,
       };
       registerConversation(fork); // fork 树复制自内存源会话,内存即权威
       persistConversation(fork);

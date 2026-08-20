@@ -5,8 +5,9 @@ import type { Assistant, Conversation, JsonValue, Message, MessageNode, MessageP
 import { estimateTokens, getStringArray, id, isRecord, message, reasoningFromParts, textFromParts } from "../foundation/utils";
 import { state } from "../persistence/json-store";
 import { broadcastList, dropConversationSse } from "../api/sse";
-import { deletePcConversations, flushConvDirtyNow, getConversation, persistConversation, selectedConversationMessages } from "./index";
+import { deletePcConversations, flushConvDirtyNow, getConversation, getConversationsDb, persistConversation, selectedConversationMessages } from "./index";
 import { registerConversation, removeConversations } from "./working-set";
+import { deletePiSessionFiles } from "../pi-engine/session-files";
 import { generating } from "./generation-state";
 import { findAssistant as findAssistantCore } from "../assistants";
 import { fillContextLimit } from "../inference-engine/providers";
@@ -35,11 +36,37 @@ export function deleteConversationsById(ids: Set<string>) {
     // R2-4+R2-6:close 详情流 + 清待发节点广播(见 dropConversationSse 注释)
     dropConversationSse(conversationId);
   }
+  // pi 引擎级联(P2):行删除前先收集引擎记忆文件名(删行后列不可读)。文件删除放在
+  // 行删除成功之后——先删文件再删行,行删失败会留下"有会话无记忆"的静默降级。
+  const piSessionFiles = collectPiSessionFiles(ids);
   // 先删 working set,再删活库——避免删活库后残余脏标记 flush 又把节点 upsert 回来
   // (flushConvDirty 经 peekConversation 查注册表,条目没了就跳过)。
   removeConversations(ids);
   deletePcConversations(Array.from(ids));
+  deletePiSessionFiles(piSessionFiles);
   broadcastList();
+}
+
+/** 待删会话的引擎记忆文件名。活库列是权威(working set 可能未驻留该会话);
+ *  活库不可用时退回 working set 实例。 */
+function collectPiSessionFiles(ids: Set<string>): Array<string | null> {
+  const db = getConversationsDb();
+  const names: Array<string | null> = [];
+  for (const conversationId of ids) {
+    if (db) {
+      try {
+        const row = db.prepare("SELECT pi_session_file FROM pc_conversation WHERE id = ?").get(conversationId) as
+          | { pi_session_file: string | null }
+          | null;
+        names.push(row?.pi_session_file ?? null);
+        continue;
+      } catch {
+        // 老库无此列等边缘:退回内存实例
+      }
+    }
+    names.push(getConversation(conversationId)?.piSessionFile ?? null);
+  }
+  return names;
 }
 
 export function findAssistant(idValue = state.settings.assistantId) {
@@ -76,6 +103,7 @@ export function ensureConversation(idValue: string, init?: { workspaceId?: strin
       updateAt: now,
       workspaceId: init?.workspaceId ?? null,
       workspaceCwd: null,
+      piSessionFile: null,
     };
     seedConversationInjectionBinding(conversation, assistant);
     registerConversation(conversation); // 新建:内存即权威,防 checkout 从活库读空树反向覆盖

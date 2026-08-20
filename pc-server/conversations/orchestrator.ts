@@ -1,9 +1,9 @@
 // conversations/orchestrator.ts — 会话生成编排（Provider 分发、流式工具循环挂接、生成主链路与收尾任务）
 // 纪律：纯搬迁自 server.ts（阶段 5.3g），行为不变。推理引擎经 GenerationEvent sink 与本层解耦。
 
-import type { ApiMessage, Assistant, Conversation, JsonValue, Message, MessageNode, Model, Provider, StreamHooks, ToolPendingOutput } from "../foundation/types";
+import type { ApiMessage, Assistant, Conversation, JsonValue, Message, MessageNode, Model, Provider, ToolPendingOutput } from "../foundation/types";
 import { bumpAnalyticsErrCount } from "../app-config/analytics";
-import type { GenerationEvent, GenerationEventSink, StreamHooksWithSink, ToolExecutor } from "../inference-engine/events";
+import type { GenerationEventSink, StreamHooksWithSink, ToolExecutor } from "../inference-engine/events";
 import { id, isRecord, message, textFromParts } from "../foundation/utils";
 import { classifyProxyError } from "../foundation/net";
 import { classifyContextOverflowError, classifyRateLimitError } from "../inference-engine/provider-errors";
@@ -36,7 +36,6 @@ import {
 } from "../inference-engine/conversation-encoding";
 import {
   fetchClaudeTextWithTools,
-  mergeTokenUsage,
   fetchOpenAiText,
   fetchOpenAiTextStreaming,
   fetchText,
@@ -44,14 +43,11 @@ import {
   streamGoogleChatWithTools,
 } from "../inference-engine/providers";
 import {
-  addStreamImage,
-  addStreamText,
-  appendReasoningDelta,
   finishReasoningParts,
-  replaceLoadingReasoningWithTool,
   setMessageLoading,
   streamStartedMessages,
 } from "../inference-engine/parts";
+import { createGenerationEventApplier } from "./generation-apply";
 import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
@@ -571,86 +567,9 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
       const output = await realizeToolResult(normalized);
       return { output };
     };
-    const applyEvent = (event: GenerationEvent) => {
-      const streamHooks: StreamHooks = { message: currentMessage, conversation, node: assistantNode };
-      switch (event.kind) {
-        // 文本/思维链/图片增量写入内存后必须 touchStream(标脏 + 200ms 节流落库 + 33ms 节流
-        // 广播),与下方三个 tool case 对齐。5.3g 搬迁时该调用曾丢失(收官审查 P0-2):无工具
-        // 会话全程无增量帧、无增量落库,流式中崩溃丢整段回答。
-        case "text_delta":
-          addStreamText(streamHooks, event.text);
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "reasoning_delta":
-          appendReasoningDelta(streamHooks as StreamHooksWithSink, event.text, event.metadata);
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "image_delta":
-          addStreamImage(streamHooks, event.url, event.metadata);
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "tool_call_created": {
-          finishReasoningParts(currentMessage);
-          // 幂等化:OpenAI 系流内建卡(参数未齐的下界)后,循环层读完整轮还会发一次
-          // 终局建卡事件——已有同 id 卡时改为更新参数与审批态(只升不降:auto/pending
-          // 可被终局覆盖,用户已决定的 approved/denied 不回写),不再追加重复卡。
-          const exists = currentMessage.parts.some(
-            (part) => isRecord(part) && part.type === "tool" && part.toolCallId === event.toolCallId,
-          );
-          if (exists) {
-            currentMessage.parts = currentMessage.parts.map((part) => {
-              if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
-              const current = isRecord(part.approvalState) ? String(part.approvalState.type ?? "") : "";
-              return {
-                ...part,
-                ...(event.input ? { input: event.input } : {}),
-                ...(current === "auto" || current === "pending" ? { approvalState: event.approvalState } : {}),
-              };
-            });
-          } else {
-            replaceLoadingReasoningWithTool(currentMessage, {
-              type: "tool",
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              input: event.input,
-              output: [],
-              approvalState: event.approvalState,
-            });
-          }
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        }
-        case "tool_input_delta":
-          currentMessage.parts = currentMessage.parts.map((part) => {
-            if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
-            return { ...part, input: event.input };
-          });
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "tool_approval_updated":
-          // 审批态上调同步（流内建卡的无参数下界 → 参数齐备后的终局）。只改 auto/pending
-          // 态的卡，绝不回写用户已决定的 approved/denied。
-          currentMessage.parts = currentMessage.parts.map((part) => {
-            if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
-            const current = isRecord(part.approvalState) ? String(part.approvalState.type ?? "") : "";
-            if (current !== "auto" && current !== "pending") return part;
-            return { ...part, approvalState: event.approvalState };
-          });
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "tool_result":
-          currentMessage.parts = currentMessage.parts.map((part) => {
-            if (!isRecord(part) || part.type !== "tool" || part.toolCallId !== event.toolCallId) return part;
-            return { ...part, output: event.output };
-          });
-          touchStream(streamHooks as StreamHooksWithSink);
-          break;
-        case "usage":
-          // P1-3:多轮工具调用时每轮都发 usage 事件,merge 防后轮缺字段清零已知值。
-          currentMessage.usage = mergeTokenUsage(currentMessage.usage, event.usage);
-          break;
-      }
-    };
+    // P2(pi 引擎):内联 applyEvent 抽取为共享应用器(conversations/generation-apply.ts,
+    // 逐字搬迁行为零变)——聊天引擎与 pi 事件桥共用同一份"事件→parts"写入字典。
+    const applyEvent = createGenerationEventApplier({ conversation, node: assistantNode, message: currentMessage });
     const sink: GenerationEventSink = (event) => applyEvent(event);
     const content = await runGeneration(
       conversation,

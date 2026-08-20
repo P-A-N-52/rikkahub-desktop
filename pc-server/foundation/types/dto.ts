@@ -166,6 +166,7 @@ export type AppErrorDomain =
   | "network"
   | "tool"
   | "workspace"
+  | "pi-engine"
   | "media"
   | "update"
   | "internal";

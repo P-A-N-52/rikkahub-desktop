@@ -11,7 +11,7 @@
 
 import { existsSync, readdirSync, rmSync, statSync, unlinkSync, type Dirent } from "node:fs";
 import { basename, join } from "node:path";
-import { dataDir, filesDir, memoryDir, updatesCacheDir } from "../foundation/paths";
+import { dataDir, filesDir, memoryDir, piSessionsDir, updatesCacheDir } from "../foundation/paths";
 import { compareSemver } from "../foundation/utils";
 import { APP_VERSION } from "../updates/index";
 import { reportError } from "../observability/app-errors";
@@ -139,7 +139,8 @@ export async function runDataDirHygiene(): Promise<void> {
   try {
     // 让开启动后的首屏请求高峰
     await Bun.sleep(3_000);
-    const removedCorrupt = [...sweepCorruptQuarantineIn(dataDir), ...sweepCorruptQuarantineIn(memoryDir)];
+    // piSessionsDir(P2):pi 引擎记忆 jsonl 的损坏隔离件与库文件同一命名族,同一清扫策略。
+    const removedCorrupt = [...sweepCorruptQuarantineIn(dataDir), ...sweepCorruptQuarantineIn(memoryDir), ...sweepCorruptQuarantineIn(piSessionsDir)];
     if (removedCorrupt.length > 0) {
       reportError("persistence", "info", `数据目录清理：移除 ${removedCorrupt.length} 个过期的损坏隔离文件`, removedCorrupt.join("、"), "hygiene_corrupt_cleaned", { count: removedCorrupt.length });
     }

@@ -26,6 +26,7 @@ interface MetaRow {
   lorebook_ids: string;
   workspace_id: string | null;
   workspace_cwd: string | null;
+  pi_session_file: string | null;
 }
 
 function parseIdArray(raw: string | undefined): string[] {
@@ -57,10 +58,11 @@ function rowToMeta(row: MetaRow): ConversationMeta {
     lorebookIds: parseIdArray(row.lorebook_ids),
     workspaceId: row.workspace_id ?? null,
     workspaceCwd: row.workspace_cwd ?? null,
+    piSessionFile: row.pi_session_file ?? null,
   };
 }
 
-const META_COLUMNS = "id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd";
+const META_COLUMNS = "id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd, pi_session_file";
 
 /**
  * 某助手的全部会话元数据，ORDER BY create_at DESC, id DESC——

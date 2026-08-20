@@ -69,7 +69,8 @@ export function ensureConversationTables(db: InstanceType<typeof Database>): voi
       mode_injection_ids TEXT NOT NULL DEFAULT '[]',
       lorebook_ids       TEXT NOT NULL DEFAULT '[]',
       workspace_id       TEXT,
-      workspace_cwd      TEXT
+      workspace_cwd      TEXT,
+      pi_session_file    TEXT
     );
     CREATE TABLE IF NOT EXISTS pc_message_node (
       id              TEXT PRIMARY KEY NOT NULL,
@@ -119,6 +120,20 @@ function ensureConversationWorkspaceColumns(db: InstanceType<typeof Database>): 
   }
 }
 
+/** pi 引擎篇章(P2):老库补加会话的引擎工作记忆文件名列。幂等,可空列旧数据天然兼容
+ *  (NULL = 尚无引擎记忆)。仅存 PC 自有库,跨端导出白名单不含此列(pi 方案 §4.6)。
+ *  export 仅为回归测试(老库升级路径需在真实 ALTER 上验证)。 */
+export function ensureConversationPiSessionColumn(db: InstanceType<typeof Database>): void {
+  try {
+    const cols = db.prepare("PRAGMA table_info(pc_conversation)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "pi_session_file")) {
+      db.exec("ALTER TABLE pc_conversation ADD COLUMN pi_session_file TEXT");
+    }
+  } catch (err) {
+    console.warn("[conv-db] 会话 pi 引擎记忆列迁移失败(引擎续会话暂不可用,下次启动重试)", err);
+  }
+}
+
 function dropTruncateIndexColumnIfPresent(db: InstanceType<typeof Database>): void {
   try {
     const cols = db.prepare("PRAGMA table_info(pc_conversation)").all() as { name: string }[];
@@ -147,6 +162,7 @@ function openConversationsDbUnsafe(): InstanceType<typeof Database> {
     dropTruncateIndexColumnIfPresent(db);
     ensureConversationInjectionColumns(db);
     ensureConversationWorkspaceColumns(db);
+    ensureConversationPiSessionColumn(db);
     ensureMessageFtsTable(db);
     // FTS 自愈重建：老库首次升级（表刚建、空）或索引意外丢失时，从节点表全量重建。
     // 幂等：行数>0 时零成本跳过。
@@ -190,6 +206,7 @@ export function loadConversationMetasFromDb(db: InstanceType<typeof Database>): 
     lorebookIds: safeParseStringArray(row.lorebook_ids ?? "[]"),
     workspaceId: row.workspace_id ?? null,
     workspaceCwd: row.workspace_cwd ?? null,
+    piSessionFile: row.pi_session_file ?? null,
   }));
 }
 
@@ -302,10 +319,11 @@ function safeParseStringArray(raw: string): string[] {
 // 该会话全部节点行被级联清空。流式期间每 200ms flush 都 upsert 会话行,等于整个流式期间
 // 磁盘上只剩正在补写的脏节点;流式中途进程死亡 = 会话历史永久丢失。
 const UPSERT_CONVERSATION_SQL =
-  "INSERT INTO pc_conversation (id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+  "INSERT INTO pc_conversation (id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd, pi_session_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
   "ON CONFLICT(id) DO UPDATE SET assistant_id = excluded.assistant_id, title = excluded.title, system_prompt = excluded.system_prompt, " +
   "suggestions = excluded.suggestions, is_pinned = excluded.is_pinned, create_at = excluded.create_at, update_at = excluded.update_at, " +
-  "mode_injection_ids = excluded.mode_injection_ids, lorebook_ids = excluded.lorebook_ids, workspace_id = excluded.workspace_id, workspace_cwd = excluded.workspace_cwd";
+  "mode_injection_ids = excluded.mode_injection_ids, lorebook_ids = excluded.lorebook_ids, workspace_id = excluded.workspace_id, workspace_cwd = excluded.workspace_cwd, " +
+  "pi_session_file = excluded.pi_session_file";
 
 const UPSERT_NODE_SQL =
   "INSERT INTO pc_message_node (id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?) " +
@@ -326,6 +344,7 @@ export function upsertConversationRowInto(db: InstanceType<typeof Database>, con
     JSON.stringify(conv.lorebookIds ?? []),
     conv.workspaceId ?? null,
     conv.workspaceCwd ?? null,
+    conv.piSessionFile ?? null,
   );
 }
 
@@ -526,6 +545,7 @@ export function migrateConversationsIntoDb(db: InstanceType<typeof Database>, co
         JSON.stringify(conv.lorebookIds ?? []),
         conv.workspaceId ?? null,
         conv.workspaceCwd ?? null,
+        conv.piSessionFile ?? null,
       );
       deleteNodes.run(conv.id);
       deleteConversationFts(db, [conv.id]);
@@ -583,7 +603,8 @@ export function exportPcConversationsDump(targetPath: string): number {
         mode_injection_ids TEXT NOT NULL DEFAULT '[]',
         lorebook_ids       TEXT NOT NULL DEFAULT '[]',
         workspace_id       TEXT,
-        workspace_cwd      TEXT
+        workspace_cwd      TEXT,
+        pi_session_file    TEXT
       );
       CREATE TABLE pcdump.pc_message_node (
         id              TEXT PRIMARY KEY NOT NULL,
@@ -593,7 +614,7 @@ export function exportPcConversationsDump(targetPath: string): number {
         select_index    INTEGER NOT NULL DEFAULT 0
       );
       INSERT INTO pcdump.pc_dump_meta (key, value) VALUES ('format', '1'), ('exportedAt', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-      INSERT INTO pcdump.pc_conversation SELECT id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd FROM main.pc_conversation;
+      INSERT INTO pcdump.pc_conversation SELECT id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd, pi_session_file FROM main.pc_conversation;
       INSERT INTO pcdump.pc_message_node SELECT id, conversation_id, node_index, messages, select_index FROM main.pc_message_node;
     `);
     return (db.prepare("SELECT COUNT(*) AS n FROM pcdump.pc_conversation").get() as { n: number }).n;
