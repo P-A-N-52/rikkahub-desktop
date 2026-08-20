@@ -1,6 +1,7 @@
-// P0 冒烟脚本:验证 vendored pi 引擎可被 SDK 内嵌调用,完整闭环:
-// 依赖解析 → ModelRuntime 注入 → inMemory 会话 → prompt → 事件流 → agent_end。
-// 假模型 = 本地 http mock(SSE 格式抄自 pi/packages/ai/test/openai-completions-thinking-as-text.test.ts)。
+// P0/P1 冒烟脚本(保留为回归工具):验证 vendored pi 引擎可被 SDK 内嵌调用,完整闭环:
+// 我们的 provider 配置 → model-bridge 映射(P1) → ModelRuntime 内存注册 → inMemory 会话
+// → prompt → 事件流 → agent_end。假模型 = 本地 http mock(SSE 格式抄自
+// pi/packages/ai/test/openai-completions-thinking-as-text.test.ts)。
 // 运行: cd pc-server && bun scripts/pi-spike.ts
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -9,15 +10,13 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Model } from "../../pi/packages/ai/src/types.ts";
-import { ModelRuntime } from "../../pi/packages/coding-agent/src/core/model-runtime.ts";
 import { createAgentSession } from "../../pi/packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
+import { model, provider } from "../model-providers";
+import { createPiModelRuntime, mapProviderModelToPi } from "../pi-engine/model-bridge";
 
-// 借内建 "deepseek" 作 provider id:pi-ai Models 注册表只认已注册 provider(自定义 id 需经
-// ModelConfig 注册,那是 P1 的正题),且 provider 注册决定流式客户端("openai" 会路由到
-// Responses API)。deepseek 注册为 openai-completions + api-key 鉴权,正合本 mock。
-const FAKE_PROVIDER = "deepseek";
+// 走完整映射链:自定义 UUID provider id(非 pi 内建)实测 registerProvider 注册面。
+const SPIKE_PROVIDER_ID = "00000000-0000-4000-8000-000000000001";
 const FAKE_REPLY = "hello from fake model";
 
 function startFakeOpenAiServer(): Promise<{ server: http.Server; port: number; requests: unknown[] }> {
@@ -66,30 +65,23 @@ async function main(): Promise<void> {
 	const { server, port, requests } = await startFakeOpenAiServer();
 
 	try {
-		const modelRuntime = await ModelRuntime.create({
-			authPath: join(tmpRoot, "auth.json"),
-			modelsPath: null,
-		});
-		await modelRuntime.setRuntimeApiKey(FAKE_PROVIDER, "fake-key");
-
-		const model: Model<"openai-completions"> = {
-			id: "spike-model",
-			name: "P0 Spike Fake Model",
-			api: "openai-completions",
-			provider: FAKE_PROVIDER,
+		// 我们侧配置形状(与 state.json 里的 provider 同构) → 映射 → pi 运行时。
+		const ourProvider = provider({
+			id: SPIKE_PROVIDER_ID,
+			name: "P1 Spike Provider",
 			baseUrl: `http://127.0.0.1:${port}`,
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 4096,
-		};
+			apiKey: "sk-spike-fake",
+		});
+		const ourModel = model("spike-model", "P1 Spike Fake Model");
+		const mapped = mapProviderModelToPi(ourProvider, ourModel);
+		if (!mapped.ok) throw new Error(`映射失败: ${mapped.reason}`);
+		const { runtime, model: piModel } = await createPiModelRuntime(mapped.mapping);
 
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
-			modelRuntime,
-			model,
+			modelRuntime: runtime,
+			model: piModel,
 			sessionManager: SessionManager.inMemory(cwd),
 		});
 
@@ -123,7 +115,9 @@ async function main(): Promise<void> {
 
 		if (requests.length !== 1) throw new Error("fake llm expected exactly 1 request");
 		if (!assistantText.includes(FAKE_REPLY)) throw new Error("assistant text did not round-trip");
-		console.log("[pi-spike] PASS: prompt -> events -> agent_end 闭环成立");
+		const requestModel = (requests[0] as { model?: string }).model;
+		if (requestModel !== "spike-model") throw new Error(`request model 应为 spike-model,实际 ${requestModel}`);
+		console.log("[pi-spike] PASS: 我们的配置 -> 映射 -> 注册 -> prompt -> 事件 -> agent_end 闭环成立");
 	} finally {
 		server.close();
 		await once(server, "close");

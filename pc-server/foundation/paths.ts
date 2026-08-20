@@ -22,6 +22,9 @@ export const skillsDir = join(dataDir, "skills");
 export const workspacesDir = join(dataDir, "workspaces");
 // 用户上传的自定义字体。跟 files/skills 同级，落在 pc-data/ 下，gitignored 且应用更新不覆盖。
 export const customFontsDir = join(dataDir, "fonts");
+// pi 引擎的 agentDir（方案"客房"：近乎空置、可整目录清空、用户无感）。auth.json/models.json
+// 永不写入——模型与密钥经 ModelRuntime 内存注册注入，唯一事实源是 state.json。
+export const piAgentDir = join(dataDir, "pi-agent");
 export const statePath = join(dataDir, "state.json");
 // 会话活库（SQLite，WAL）。1.2.6：会话从 state.json 迁出，改用 SQLite 增量写——流式只
 // upsert 当前在长的那个节点行，不再每 200ms 全量重写 state.json。与备份库（导出时现场
