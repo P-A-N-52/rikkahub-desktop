@@ -55,11 +55,12 @@ import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } fr
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
-import { runPiCompaction, runPiGeneration } from "../pi-engine/runner";
+import { runPiCompaction, runPiGeneration, type CapturedPiCompaction } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
 import { piPromptInputFromParts } from "../pi-engine/attachments";
+import type { PiCompactionRecord } from "../pi-engine/context-encoder";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
 import { flushConvDirtyNow, getConversation, getConversationsDb, markConversationRowDirty, markMessageNodeDirty, persistConversation, scheduleThrottledConvFlush } from "./index";
@@ -467,14 +468,64 @@ function piModelLimitsFor(provider: Provider, model: Model, assistant: Assistant
   };
 }
 
-/** pi 引擎生成装配(P3 路由 + P4 资源统一,方案 §4.2/§4.3/§三):
+/** P7:选中路径上的消息序列 = 每节点取 selectIndex 处消息
+ *  (conversations/index.ts selectedConversationMessages 同一口径)——本轮的
+ *  prompt 用户消息(末 USER 节点)由调用方决定是否包含在内。 */
+function selectedMessages(conversation: Conversation): Message[] {
+  return conversation.messages
+    .map((node) => node.messages[node.selectIndex] ?? node.messages[0])
+    .filter(Boolean);
+}
+
+/** P7:conversation.piCompactions(DB 任意 JSON)→ 编码器契约。宽容校验:
+ *  坏条目丢弃而不是整列作废(与列解析"损坏回 null"同哲学)。 */
+function parsePiCompactions(raw: JsonValue[] | null | undefined): PiCompactionRecord[] {
+  const records: PiCompactionRecord[] = [];
+  for (const item of raw ?? []) {
+    if (!isRecord(item)) continue;
+    if (typeof item.cutMessageId !== "string" || typeof item.summary !== "string") continue;
+    const record: PiCompactionRecord = {
+      cutMessageId: item.cutMessageId,
+      summary: item.summary,
+      tokensBefore: typeof item.tokensBefore === "number" ? item.tokensBefore : 0,
+    };
+    if (typeof item.createdAt === "string") record.createdAt = item.createdAt;
+    records.push(record);
+  }
+  return records;
+}
+
+/** P7:本轮压缩产物落 conversation.piCompactions。cutMessageId 为 null(pi 自动压缩
+ *  的切点可能落在本轮 prompt 之后,而本轮消息尚未入库)按"外收拢"落当前尾消息
+ *  id——只多保不少保,下一轮编码器按"切点在场"自校验生效。 */
+function applyCapturedPiCompactions(conversation: Conversation, captured: CapturedPiCompaction[]): void {
+  if (!captured.length) return;
+  const tail = selectedMessages(conversation).at(-1);
+  const records = parsePiCompactions(conversation.piCompactions);
+  for (const item of captured) {
+    const cutMessageId = item.cutMessageId ?? tail?.id;
+    if (!cutMessageId) continue; // 无任何消息可挂靠(理论不可达):丢记录好过写错切点
+    records.push({
+      cutMessageId,
+      summary: item.summary,
+      tokensBefore: item.tokensBefore,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  conversation.piCompactions = records as unknown as JsonValue[];
+  markConversationRowDirty(conversation.id);
+  scheduleThrottledConvFlush();
+}
+
+/** pi 引擎生成装配(P3 路由 + P4 资源统一 + P7 会话数据统一,方案 §4.2/§4.3/§4.7):
  *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
- *    图片走 pi 原生 images 通道;重新生成/编辑重发会向引擎记忆追加同一用户消息——
- *    引擎记忆是工作上下文,可容忍;分支级记忆语义 P5 与 forkFrom 一并裁决);
+ *    图片走 pi 原生 images 通道);
+ *  - 引擎上下文 = 编码器从选中路径历史(不含本轮 prompt 消息)确定性重建,压缩记录
+ *    从 conversation.piCompactions 进同一灌注——重新生成/编辑重发/分支切换天然
+ *    生效(UI 选中路径就是引擎记忆,所见即所记);
  *  - 工具面 = 七个工作区工具 + 通用工具/MCP 桥(P4),审批全部内化在工具 execute;
  *  - 资源面 = createPiSessionResources(技能白名单/AGENTS.md 边界过滤/人设+记忆冻结
- *    appendSystemPrompt/受控 settings);
- *  - jsonl 文件名回调即时写列+标脏:流式中途崩溃也不丢"会话↔jsonl"关联。 */
+ *    appendSystemPrompt/受控 settings)。 */
 async function runPiWorkspaceGeneration(
   conversation: Conversation,
   assistantNode: MessageNode,
@@ -501,13 +552,15 @@ async function runPiWorkspaceGeneration(
     cwd: runtime.cwd,
     root: runtime.root,
   });
+  const history = selectedMessages(conversation).filter((msg) => msg.id !== promptMessage?.id);
   const result = await runPiGeneration({
     provider: deps.providerItem,
     model: deps.selectedModel,
     modelLimits: piModelLimitsFor(deps.providerItem, deps.selectedModel, deps.assistant),
     conversationId: conversation.id,
-    storedSessionFileName: conversation.piSessionFile ?? null,
     cwd: runtime.cwd,
+    history,
+    compactions: parsePiCompactions(conversation.piCompactions),
     promptText: promptInput.text,
     images: promptInput.images,
     resources,
@@ -517,21 +570,17 @@ async function runPiWorkspaceGeneration(
     ],
     sink,
     signal,
-    onSessionFile: (fileName) => {
-      if (conversation.piSessionFile === fileName) return;
-      conversation.piSessionFile = fileName;
-      markConversationRowDirty(conversation.id);
-      scheduleThrottledConvFlush();
-    },
   });
+  applyCapturedPiCompactions(conversation, result.capturedCompactions);
   return result.text;
 }
 
-/** P5:工作区会话手动压缩改走 pi 原生 compaction。压的是引擎记忆 jsonl(它才决定
- *  发给上游的上下文),UI 历史一字不动;压缩摘要由 pi 写进 jsonl,下轮生成自然生效。
- *  返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落 UI 历史压缩
- *  (与生成路由的降级一致:聊天引擎从 UI 历史构建请求,压 UI 历史即压上下文)。
- *  压缩期间经 engine_status 直通状态条,finally 兜底清除(取消/失败不挂"压缩中")。 */
+/** P5:工作区会话手动压缩改走 pi 原生 compaction;P7:压缩产物落
+ *  conversation.piCompactions(下一轮生成由编码器把它重放进引擎上下文),UI 历史
+ *  一字不动。返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落
+ *  UI 历史压缩(与生成路由的降级一致:聊天引擎从 UI 历史构建请求,压 UI 历史即
+ *  压上下文)。压缩期间经 engine_status 直通状态条,finally 兜底清除(取消/失败
+ *  不挂"压缩中")。 */
 export async function compactPiWorkspaceConversation(
   conversation: Conversation,
   customInstructions: string,
@@ -549,26 +598,23 @@ export async function compactPiWorkspaceConversation(
     root: runtime.root,
   });
   try {
-    return await runPiCompaction({
+    const result = await runPiCompaction({
       provider: picked.provider,
       model: picked.model,
       modelLimits: piModelLimitsFor(picked.provider, picked.model, assistant),
       conversationId: conversation.id,
-      storedSessionFileName: conversation.piSessionFile ?? null,
       cwd: runtime.cwd,
+      history: selectedMessages(conversation),
+      compactions: parsePiCompactions(conversation.piCompactions),
       resources,
       customInstructions,
       signal,
       sink: (event) => {
         if (event.kind === "engine_status") broadcastEngineStatus(conversation.id, event.status);
       },
-      onSessionFile: (fileName) => {
-        if (conversation.piSessionFile === fileName) return;
-        conversation.piSessionFile = fileName;
-        markConversationRowDirty(conversation.id);
-        scheduleThrottledConvFlush();
-      },
     });
+    applyCapturedPiCompactions(conversation, [result.compaction]);
+    return result;
   } finally {
     broadcastEngineStatus(conversation.id, { busy: false });
   }

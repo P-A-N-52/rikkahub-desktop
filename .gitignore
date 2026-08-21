@@ -31,6 +31,9 @@ node_modules/
 # Logs
 *.log
 
+# AI Memory
+.claude/
+
 # Reference source trees (separate repos, checked out locally for study)
 Rikkahub-Android/
 cherry-studio/

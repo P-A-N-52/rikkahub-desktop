@@ -84,6 +84,7 @@ async function scriptedRun(
     model: model("fake-model", "Runner Tools Model"),
     conversationId: conversation.id,
     cwd,
+    history: [],
     promptText: "干活",
     tools: createPiWorkspaceTools({ conversation: conversation as never, assistant: fakeAssistant, sink }),
     sink,

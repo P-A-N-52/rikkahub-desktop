@@ -24,9 +24,9 @@ export const workspacesDir = join(dataDir, "workspaces");
 export const customFontsDir = join(dataDir, "fonts");
 // pi 引擎的 agentDir（方案"客房"：近乎空置、可整目录清空、用户无感）。auth.json/models.json
 // 永不写入——模型与密钥经 ModelRuntime 内存注册注入，唯一事实源是 state.json。
+// P7 起其子目录 sessions/(jsonl 引擎记忆)已退役:启动卫生(data-dir-hygiene)会整目录
+// 清掉残留,会话上下文每轮从会话行确定性重建(pi-engine/context-encoder)。
 export const piAgentDir = join(dataDir, "pi-agent");
-/** pi 引擎工作记忆 jsonl 所在目录(pi 方案 §4.6:sessions/<conversationId>.jsonl)。 */
-export const piSessionsDir = join(piAgentDir, "sessions");
 export const statePath = join(dataDir, "state.json");
 // 会话活库（SQLite，WAL）。1.2.6：会话从 state.json 迁出，改用 SQLite 增量写——流式只
 // upsert 当前在长的那个节点行，不再每 200ms 全量重写 state.json。与备份库（导出时现场

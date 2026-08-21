@@ -148,7 +148,7 @@ describe("pi 事件桥:纯映射", () => {
     ).toEqual([{ kind: "tool_result", toolCallId: "call-3", output: [{ error: "boom" }] }]);
   });
 
-  test("details.app.output 优先于 content:通用工具结构化输出(含图)忠实还原", () => {
+  test("details.app.output 优先于 content:通用工具结构化输出(含图)忠实还原+来源标记", () => {
     const bridge = createPiEventBridge();
     bridge.handle({ type: "tool_execution_start", toolCallId: "call-app", toolName: "search_web", args: {} });
     const appOutput: ToolOutputEntry[] = [
@@ -163,7 +163,18 @@ describe("pi 事件桥:纯映射", () => {
         result: { content: [{ type: "text", text: "model-facing text" }], details: { app: { output: appOutput } } },
         isError: false,
       }),
-    ).toEqual([{ kind: "tool_result", toolCallId: "call-app", output: appOutput }]);
+    ).toEqual([
+      {
+        kind: "tool_result",
+        toolCallId: "call-app",
+        // P7:app 通道首条目打 pi:{src:"app"} 来源标记(DB→pi 重建时选 openAiToolOutput
+        // 再计算通道),其余条目原样;UI 渲染忽略未知 metadata,契约不受影响。
+        output: [
+          { type: "text", text: "1. Result", metadata: { pi: { src: "app" } } },
+          { type: "image", url: "/api/files/img-1.png" },
+        ],
+      },
+    ]);
   });
 
   test("bash_execution_update:显式 id 累加;无 id 归唯一在执行工具;歧义/未建卡丢弃", () => {
@@ -194,18 +205,71 @@ describe("pi 事件桥:纯映射", () => {
     expect(bridge.handle({ type: "bash_execution_update", id: "call-6", delta: "raw" })).toEqual([]);
   });
 
-  test("message_end(assistant) → usage 映射 + 终局文本/停止原因进 outcome", () => {
+  test("message_end(assistant) → engine_fidelity(先) + usage 映射 + 终局文本/停止原因进 outcome", () => {
     const bridge = createPiEventBridge();
     const final = assistantMessage([{ type: "text", text: "答案" }], {
       usage: usage({ input: 100, output: 20, cacheRead: 60, cacheWrite: 10, totalTokens: 190 }),
     });
     expect(bridge.handle({ type: "message_end", message: final })).toEqual([
+      {
+        kind: "engine_fidelity",
+        message: {
+          msg: 0,
+          api: "openai-completions",
+          provider: "test-provider",
+          model: "test-model",
+          blocks: [{ type: "text", len: 2 }],
+        },
+      },
       { kind: "usage", usage: { promptTokens: 170, completionTokens: 20, totalTokens: 190, cachedTokens: 60 } },
     ]);
     const outcome = bridge.outcome();
     expect(outcome.text).toBe("答案");
     expect(outcome.stopReason).toBe("stop");
     expect(outcome.errorMessage).toBeNull();
+  });
+
+  test("engine_fidelity(P7):块结构/签名/redacted 逐块捕获,消息序号跨 message_end 递增", () => {
+    const bridge = createPiEventBridge();
+    const first = bridge.handle({
+      type: "message_end",
+      message: assistantMessage(
+        [
+          { type: "thinking", thinking: "推理", thinkingSignature: "sig-1" },
+          { type: "thinking", thinking: "", thinkingSignature: "enc-payload", redacted: true },
+          toolCall("call-f", "bash", { command: "ls" }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+    });
+    expect(first[0]).toEqual({
+      kind: "engine_fidelity",
+      message: {
+        msg: 0,
+        api: "openai-completions",
+        provider: "test-provider",
+        model: "test-model",
+        blocks: [
+          { type: "thinking", len: 2, sig: "sig-1" },
+          { type: "thinking", len: 0, sig: "enc-payload", redacted: true },
+          { type: "toolCall", toolCallId: "call-f" },
+        ],
+      },
+    });
+    const second = bridge.handle({
+      type: "message_end",
+      message: assistantMessage([{ type: "text", text: "完成" }]),
+    });
+    expect(second[0]).toEqual({
+      kind: "engine_fidelity",
+      message: {
+        msg: 1,
+        api: "openai-completions",
+        provider: "test-provider",
+        model: "test-model",
+        blocks: [{ type: "text", len: 2 }],
+      },
+    });
   });
 
   test("上游失败:stopReason=error 与 errorMessage 进 outcome", () => {
@@ -361,6 +425,23 @@ describe("pi 事件桥:落地回放(生产同款应用器)", () => {
     // usage 按 mergeTokenUsage 合并(两轮,后轮非零值覆盖);P5 统计对齐:应用器统一补
     // contextLimit 分母(测试环境 models.dev 缓存未加载 → null,前端降级只显示分子)
     expect(msg.usage).toEqual({ promptTokens: 20, completionTokens: 6, totalTokens: 26, cachedTokens: 0, contextLimit: null });
+    // P7 保真注解:两条引擎消息的块结构按序落 annotations(重建分组与签名的依据)
+    expect(msg.annotations).toEqual([
+      {
+        type: "pi-fidelity",
+        v: 1,
+        api: "openai-completions",
+        provider: "test-provider",
+        model: "test-model",
+        messages: [
+          [
+            { type: "thinking", len: 4 },
+            { type: "toolCall", toolCallId: "call-a" },
+          ],
+          [{ type: "text", len: 5 }],
+        ],
+      },
+    ]);
   });
 
   test("bash 增量输出:tool part 单 text 条目纯前缀增长(SSE 可走 text_delta 快路),终局替换", () => {
@@ -397,6 +478,7 @@ describe("pi 事件桥:落地回放(生产同款应用器)", () => {
 // 在 GenerationEvent 扩展时提醒同步审视桥的产出面,运行时恒真)。
 const _generationKinds: GenerationEvent["kind"][] = [
   "text_delta", "reasoning_delta", "image_delta", "tool_call_created", "tool_input_delta",
-  "tool_approval_updated", "tool_result", "usage", "finished", "error", "abort",
+  "tool_approval_updated", "tool_result", "usage", "engine_status", "engine_fidelity",
+  "finished", "error", "abort",
 ];
 void _generationKinds;

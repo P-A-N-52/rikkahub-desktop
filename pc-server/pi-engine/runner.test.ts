@@ -1,22 +1,26 @@
-// pi-engine/runner.test.ts — pi 会话驱动器集成测试(P2)
+// pi-engine/runner.test.ts — pi 会话驱动器集成测试(P2 骨架,P7 改 unified 语义)
 //
-// 真实链路:假 OpenAI SSE 服务器 → model-bridge 内存注册 → SessionManager(jsonl 落在
-// 测试沙箱 pc-data)→ 事件桥 → sink。覆盖:首轮生成、jsonl 续会话(上下文真的回放给
-// 上游)、损坏降级、预中止。上游失败→throw 的纯逻辑已在 event-bridge.test 锁定。
+// 真实链路:假 OpenAI SSE 服务器 → model-bridge 内存注册 → SessionManager.inMemory
+// (P7:上下文从 history 灌注,零 jsonl)→ 事件桥 → sink。覆盖:首轮生成、DB 历史
+// 灌注回放(硬证据:上游请求体携带灌注的历史)、既有压缩记录重放(pi 引擎上下文
+// 以摘要起头=编码器 appendCompaction 语义生效)、手动压缩捕获、预中止。
+// 自动压缩(threshold/overflow)的触发条件由 pi 内部按"本会话内真实 usage"判定,
+// 灌注存量消息 usage 恒 0(zeroUsage)不参与计量——该路径由 capturedCompactions 的
+// 捕获单元(context-encoder.test 的压缩记录重放 + 本文件手动压缩端到端)共同钉住。
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync } from "node:fs";
 
 import type { GenerationEvent } from "../inference-engine/events";
+import type { Message } from "../foundation/types";
+import { message } from "../foundation/utils";
 import { model, provider } from "../model-providers";
-import { resolvePiSessionPath, piSessionsDir } from "./session-files";
-import { runPiGeneration } from "./runner";
+import { runPiCompaction, runPiGeneration } from "./runner";
 import { startFakeOpenAiSse, type FakeOpenAiSseServer } from "../test-utils/fake-openai-sse";
 
-const PROVIDER_ID = "00000000-0000-4000-8000-0000000000p2".replace("p2", "02");
+const PROVIDER_ID = "00000000-0000-4000-8000-000000000002";
 
 let server: FakeOpenAiSseServer;
 let cwd: string;
@@ -25,7 +29,8 @@ beforeAll(async () => {
   server = await startFakeOpenAiSse([
     { content: "第一轮回答", usage: { prompt_tokens: 11, completion_tokens: 3 } },
     { content: "第二轮回答", usage: { prompt_tokens: 25, completion_tokens: 4 } },
-    { content: "损坏降级后的回答" },
+    // 手动压缩用例剧本:session.compact 的上游调用(摘要)。
+    { content: "手动压缩摘要:聊了两轮问答。" },
   ]);
   cwd = mkdtempSync(join(tmpdir(), "pi-runner-cwd-"));
 });
@@ -45,6 +50,7 @@ function testContext(conversationId: string, promptText: string, extras: Partial
       model: ourModel,
       conversationId,
       cwd,
+      history: [] as Message[],
       promptText,
       sink: (event: GenerationEvent) => events.push(event),
       ...extras,
@@ -52,17 +58,14 @@ function testContext(conversationId: string, promptText: string, extras: Partial
   };
 }
 
-describe("pi runner 集成", () => {
-  test("首轮:事件入 sink,jsonl 建在确定性路径,文件名回调触发", async () => {
+describe("pi runner 集成(P7 统一会话数据)", () => {
+  test("首轮:事件入 sink,capturedCompactions 为空,无 jsonl 概念", async () => {
     const { events, ctx } = testContext("conv-runner-1", "你好");
-    const assignedFiles: string[] = [];
-    const result = await runPiGeneration({ ...ctx, onSessionFile: (name) => { assignedFiles.push(name); } });
+    const result = await runPiGeneration(ctx);
 
     expect(result.text).toBe("第一轮回答");
-    expect(result.resumed).toBe(false);
-    expect(result.sessionFileName).toBe("conv-runner-1.jsonl");
-    expect(assignedFiles).toEqual(["conv-runner-1.jsonl"]);
-    expect(existsSync(resolvePiSessionPath("conv-runner-1.jsonl"))).toBe(true);
+    expect(result.capturedCompactions).toEqual([]);
+    expect(result.degradedMessageIds).toEqual([]);
 
     const kinds = events.map((event) => event.kind);
     expect(kinds).toContain("text_delta");
@@ -72,31 +75,75 @@ describe("pi runner 集成", () => {
     expect(text).toBe("第一轮回答");
   }, 20_000);
 
-  test("续会话:同一会话第二轮 resumed=true,历史真的回放给上游", async () => {
-    const { ctx } = testContext("conv-runner-1", "继续");
-    const result = await runPiGeneration({ ...ctx, storedSessionFileName: "conv-runner-1.jsonl" });
-    expect(result.resumed).toBe(true);
+  test("历史灌注:history 里的上一轮问答真的回放给上游(DB 单一事实源语义)", async () => {
+    const user1 = message("USER", [{ type: "text", text: "灌注的历史问题" }]);
+    const asst1 = message("ASSISTANT", [{ type: "text", text: "灌注的历史回答" }]);
+    // P7:无保真注解的存量行走 legacy 解码(剥 thinking/启发式分组),仍应回放。
+    const { ctx } = testContext("conv-runner-2", "继续", { history: [user1, asst1] });
+    const result = await runPiGeneration(ctx);
     expect(result.text).toBe("第二轮回答");
+    expect(result.degradedMessageIds).toEqual([asst1.id]);
 
-    // 上游第二个请求必须携带第一轮上下文(引擎工作记忆生效的硬证据)
     const secondRequest = server.requests[1] as { messages?: Array<{ role: string; content?: unknown }> };
     const roles = (secondRequest.messages ?? []).map((m) => m.role);
     expect(roles.filter((role) => role === "user").length).toBeGreaterThanOrEqual(2);
     const serialized = JSON.stringify(secondRequest.messages ?? []);
-    expect(serialized).toContain("第一轮回答");
-    expect(serialized).toContain("你好");
+    expect(serialized).toContain("灌注的历史问题");
+    expect(serialized).toContain("灌注的历史回答");
+    expect(serialized).toContain("继续");
   }, 20_000);
 
-  test("损坏降级:jsonl 非法内容 → 隔离改名 + 新会话照常生成", async () => {
-    mkdirSync(piSessionsDir, { recursive: true });
-    const corruptPath = resolvePiSessionPath("conv-runner-corrupt.jsonl");
-    writeFileSync(corruptPath, "这不是 jsonl{{{\n");
-    const { ctx } = testContext("conv-runner-corrupt", "hi");
-    const result = await runPiGeneration({ ...ctx, storedSessionFileName: "conv-runner-corrupt.jsonl" });
-    expect(result.resumed).toBe(false);
-    expect(result.text).toBe("损坏降级后的回答");
-    const quarantined = readdirSync(piSessionsDir).filter((name) => name.startsWith("conv-runner-corrupt.jsonl.corrupt-"));
-    expect(quarantined.length).toBe(1);
+  test("手动压缩:runPiCompaction 产出摘要并捕获切点(反查回 DB 消息 id)", async () => {
+    // prepareCompaction 需要"可压缩的历史":切割线由 settings 的 keepRecentTokens
+    // (pi 默认 20000)决定,测试不传 resources → inMemory 设置全默认;长文本按
+    // chars/4 估算,~100k 字符 ≈ 25k tokens,保证旧段被分进摘要区。
+    const filler = "很长的历史内容,".repeat(12000);
+    const user1 = message("USER", [{ type: "text", text: `压缩对象问题${filler}` }]);
+    const asst1 = message("ASSISTANT", [{ type: "text", text: `压缩对象回答${filler}` }]);
+    const events: GenerationEvent[] = [];
+    const ourProvider = provider({ id: PROVIDER_ID, name: "Runner Test Provider", baseUrl: server.baseUrl, apiKey: "sk-test" });
+    const ourModel = model("fake-model", "Runner Test Model");
+    const result = await runPiCompaction({
+      provider: ourProvider,
+      model: ourModel,
+      conversationId: "conv-runner-manual",
+      cwd,
+      history: [user1, asst1],
+      sink: (event: GenerationEvent) => events.push(event),
+    });
+
+    expect(result.summary).toContain("手动压缩摘要");
+    expect(result.tokensBefore).toBeGreaterThan(0);
+    // 手动压缩的切点由 pi 在灌注条目里选(firstKeptEntryId 反查必命中,runner 契约)。
+    expect(result.compaction.cutMessageId).not.toBeNull();
+    expect([user1.id, asst1.id]).toContain(result.compaction.cutMessageId!);
+    expect(result.compaction.summary).toBe(result.summary);
+    // 压缩期间状态条直通(engine_status)。
+    expect(events.some((event) => event.kind === "engine_status")).toBe(true);
+  }, 20_000);
+
+  test("压缩记录重放:既有压缩记录的下一轮,引擎上下文以摘要起头(编码器 appendCompaction 生效)", async () => {
+    const user1 = message("USER", [{ type: "text", text: "第一轮问题" }]);
+    const asst1 = message("ASSISTANT", [{ type: "text", text: "第一轮回答" }]);
+    const user2 = message("USER", [{ type: "text", text: "第二轮问题" }]);
+    const asst2 = message("ASSISTANT", [{ type: "text", text: "第二轮回答" }]);
+    // 压缩记录切点 = 第二轮用户消息:之前的历史(user1/asst1)应被摘要取代。
+    const { ctx } = testContext("conv-runner-compacted", "第三轮问题", {
+      history: [user1, asst1, user2, asst2],
+      compactions: [{ cutMessageId: user2.id, summary: "手动压缩摘要:聊了两轮问答。", tokensBefore: 1234 }],
+    });
+    // 本轮假上游应答不复读剧本(剧本已耗尽→500 会走 runner 失败分支);
+    // 我们关心的是"发出去的请求体"——它在失败前已入 server.requests。
+    await runPiGeneration(ctx).catch(() => undefined);
+    const request = server.requests.at(-1) as { messages?: Array<{ role: string; content?: unknown }> };
+    const serialized = JSON.stringify(request?.messages ?? []);
+    // 压缩语义硬证据:摘要在场,且被取代的旧问答不在场,保留尾(第二轮起)在场。
+    expect(serialized).toContain("手动压缩摘要");
+    expect(serialized).not.toContain("第一轮问题");
+    expect(serialized).not.toContain("第一轮回答");
+    expect(serialized).toContain("第二轮问题");
+    expect(serialized).toContain("第二轮回答");
+    expect(serialized).toContain("第三轮问题");
   }, 20_000);
 
   test("预中止:signal 已 aborted 时直接抛 AbortError,不触碰上游", async () => {

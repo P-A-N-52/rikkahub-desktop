@@ -32,7 +32,6 @@ import { bumpAnalyticsMsgCount } from "../../app-config/analytics";
 import { DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
 import { attachOcrToImageParts, compressConversation, englishLanguageName, fetchAuxiliaryText, generateTitleForConversation, isQwenMtModel, markOcrPendingParts } from "../../conversations/auxiliary";
 import { compactPiWorkspaceConversation, generateAnswer } from "../../conversations/orchestrator";
-import { copyPiSessionFileForFork } from "../../pi-engine/session-files";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
 import { generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
@@ -570,9 +569,8 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         isPinned: false,
         createAt: Date.now(),
         updateAt: Date.now(),
-        // P5 裁决:引擎记忆随 fork 复制为独立副本(确定性命名 <forkId>.jsonl),杜绝
-        // 双会话共写同一 jsonl 的互相污染;复制失败/源缺失降级为全新引擎记忆。
-        piSessionFile: copyPiSessionFileForFork(conversation.piSessionFile, forkId),
+        // P7:压缩记录随上方深拷贝整体复制;切点消息不在 fork 前缀内的记录,编码器按
+        // "切点在场"自校验自动跳过,fork 无需感知压缩语义(P5 的 jsonl 副本复制随层退役)。
       };
       registerConversation(fork); // fork 树复制自内存源会话,内存即权威
       persistConversation(fork);

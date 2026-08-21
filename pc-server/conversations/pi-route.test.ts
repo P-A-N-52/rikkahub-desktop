@@ -1,12 +1,13 @@
-// conversations/pi-route.test.ts — generateAnswer 路由切换端到端(P3)
+// conversations/pi-route.test.ts — generateAnswer 路由切换端到端(P3;P7 改 unified 断言)
 //
-// 钉住编排器的三条 P3 不变式(方案 §六):
-//   1) 工作区会话 → pi 引擎:回答落 parts、pi_session_file 列持久化、jsonl 真实存在;
+// 钉住编排器的三条 P3 不变式(方案 §六),P7 起观测点从 jsonl 换成会话行数据:
+//   1) 工作区会话 → pi 引擎:回答落 parts、保真注解(pi-fidelity)落消息、上下文从
+//      DB 历史灌注回放(上游请求体携带历史即硬证据)、压缩记录字段就位;
 //   2) 非工作区会话 → 聊天引擎原路(同一编排器入口,零 pi 痕迹);
 //   3) 审批 API 全链路:pending 时生成保持在跑,POST tool-approval 原地放行,
 //      不重触发生成(上游请求数不涨即硬证据)。
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,7 +23,6 @@ const { defaultAssistant } = await import("../assistants");
 const { defaultState } = await import("../app-config/defaults");
 const { setState, state } = await import("../persistence/json-store");
 const { model, provider } = await import("../model-providers");
-const { resolvePiSessionPath } = await import("../pi-engine/session-files");
 const { pendingToolApprovalCount } = await import("../pi-engine/approval-gate");
 const { handleConversationRoutes } = await import("../api/handlers/conversations");
 const { startFakeOpenAiSse } = await import("../test-utils/fake-openai-sse");
@@ -75,6 +75,21 @@ async function installUpstream(turns: FakeSseTurn[]) {
 }
 
 let seq = 0;
+/** 追加一条 USER 消息节点(第二轮 prompt),返回该消息(断言/灌注校验用)。 */
+function appendUserNode(conversation: Conversation, text: string) {
+  const msg = {
+    id: `piroute-m-u${seq}-${conversation.messages.length}`,
+    role: "USER",
+    parts: [{ type: "text", text }],
+    annotations: [],
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    translation: null,
+  };
+  conversation.messages.push({ id: `piroute-n-u${seq}-${conversation.messages.length}`, selectIndex: 0, messages: [msg] } as never);
+  return msg as unknown as Conversation["messages"][number]["messages"][number];
+}
+
 function seedConversation(workspaceId: string | null): Conversation {
   seq += 1;
   const now = Date.now();
@@ -132,8 +147,8 @@ async function waitUntil(cond: () => boolean, timeoutMs = 10_000): Promise<void>
 }
 
 describe("generateAnswer P3 路由", () => {
-  test("工作区会话走 pi 引擎:回答落 parts,pi_session_file 列持久化,jsonl 存在", async () => {
-    await installUpstream([{ content: "工作区回答", usage: { prompt_tokens: 20, completion_tokens: 4 } }]);
+  test("工作区会话走 pi 引擎:回答落 parts,保真注解落消息,上下文从 DB 灌注回放", async () => {
+    const server = await installUpstream([{ content: "工作区回答" }, { content: "第二轮工作区回答" }]);
     const workspace = ws.createWorkspace({ type: "managed", name: "route-pi" });
     const conversation = seedConversation(workspace.id);
     await generateAnswer(conversation);
@@ -141,11 +156,27 @@ describe("generateAnswer P3 路由", () => {
     const answer = lastAssistantMessage(conversation);
     expect(partsText(conversation)).toContain("工作区回答");
     expect(answer.finishedAt).not.toBeNull();
-    expect(conversation.piSessionFile).toBe(`${conversation.id}.jsonl`);
-    expect(existsSync(resolvePiSessionPath(`${conversation.id}.jsonl`))).toBe(true);
-    // 崩溃安全关联:列已随生成收尾落库(而不是只活在内存对象上)。
-    expect(getConversationMeta(db, conversation.id)?.piSessionFile).toBe(`${conversation.id}.jsonl`);
+    // P7:引擎保真注解(P7 桥捕获)落在回答消息上——下一轮编码器靠它无损重建引擎消息。
+    const fidelity = (answer.annotations ?? []).find(
+      (item) => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "pi-fidelity",
+    ) as { messages?: unknown } | undefined;
+    expect(Array.isArray(fidelity?.messages)).toBe(true);
+    // P7:压缩记录字段就位(未触发自动压缩时保持 null——语义即"无压缩记录";
+    // 无 jsonl 文件概念,无额外持久化动作)。
+    expect(conversation.piCompactions ?? null).toBeNull();
+    expect(getConversationMeta(db, conversation.id)?.piCompactions ?? null).toBeNull();
     expect(generating.has(conversation.id)).toBe(false);
+
+    // P7 灌注回放硬证据:追加第二轮用户消息再生成,上游第二请求必须携带
+    // 第一轮的 prompt 与回答(历史从 DB 重建进引擎上下文,而不是靠 jsonl)。
+    appendUserNode(conversation, "接着干活");
+    await generateAnswer(conversation);
+    expect(partsText(conversation)).toContain("第二轮工作区回答");
+    const secondRequest = server.requests[1] as { messages?: Array<{ role: string; content?: unknown }> };
+    const serialized = JSON.stringify(secondRequest?.messages ?? []);
+    expect(serialized).toContain("请干活");
+    expect(serialized).toContain("工作区回答");
+    expect(serialized).toContain("接着干活");
   }, 30_000);
 
   test("非工作区会话走聊天引擎原路:零 pi 痕迹", async () => {
@@ -154,8 +185,12 @@ describe("generateAnswer P3 路由", () => {
     await generateAnswer(conversation);
 
     expect(partsText(conversation)).toContain("聊天回答");
-    expect(conversation.piSessionFile).toBeUndefined();
-    expect(existsSync(resolvePiSessionPath(`${conversation.id}.jsonl`))).toBe(false);
+    // P7:聊天引擎会话没有 piCompactions 字段(pi 专属),保真注解也不会出现。
+    expect(conversation.piCompactions).toBeUndefined();
+    const answer = lastAssistantMessage(conversation);
+    expect((answer.annotations ?? []).some(
+      (item) => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "pi-fidelity",
+    )).toBe(false);
     // 聊天引擎请求体特征:messages 含系统提示词(pi 路径的系统提示词是 pi 自建格式)。
     expect(server.requests.length).toBe(1);
   }, 30_000);

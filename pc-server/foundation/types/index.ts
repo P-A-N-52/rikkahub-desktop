@@ -241,10 +241,12 @@ export interface Conversation {
   workspaceId?: string | null;
   /** 会话级工作目录(绝对路径,必须在 workspace root 边界内)。null = workspace root。 */
   workspaceCwd?: string | null;
-  /** pi 引擎工作记忆 jsonl 的文件名(pc-data/pi-agent/sessions/ 内,只存文件名不存绝对
-   *  路径,pc-data 可搬迁)。null = 尚无引擎记忆。仅存 PC 自有库;跨端导出白名单不含此列,
-   *  跨端 zip 不含 jsonl(pi 方案 §4.6)。文件丢失/损坏 → 引擎降级新会话,UI 历史不受影响。 */
-  piSessionFile?: string | null;
+  /** P7 会话数据统一:pi 引擎压缩记录数组(元素 {cutMessageId,summary,tokensBefore,
+   *  createdAt}),SQLite 单一事实源下压缩状态的唯一载体(jsonl 层已退役)。切点为消息
+   *  id,从切点(含)起保留原文、之前历史被 summary 取代;只有"切点仍在选中路径"的最新
+   *  一条生效(编码器自校验,编辑/fork 后失效记录自动跳过)。仅存 PC 自有库;跨端导出
+   *  白名单不含此列。 */
+  piCompactions?: JsonValue[] | null;
 }
 
 // ----- 工作区(agent 模式)领域模型 -----
@@ -481,7 +483,7 @@ export interface PcConversationRow {
   lorebook_ids?: string;
   workspace_id?: string | null;
   workspace_cwd?: string | null;
-  pi_session_file?: string | null;
+  pi_compactions?: string | null;
 }
 export interface PcMessageNodeRow {
   id: string;

@@ -21,7 +21,8 @@
 //   bash_execution_update          → tool_result(增量累加;仅当该工具卡未被
 //     tool_execution_update 通道认领,防双写。P3 我们的 bash customTool 若经
 //     session.executeBash({id: toolCallId}) 流式输出,即由此通道回写)
-//   message_end(assistant)         → usage(pi Usage → 我们的 TokenUsage 口径,P5 精化)
+//   message_end(assistant)         → engine_fidelity(P7:块结构/签名注解,先发)
+//                                    + usage(pi Usage → 我们的 TokenUsage 口径,P5 精化)
 //   agent_end                      → 无 part 操作;终局结果经 outcome() 由 runner 消费
 //   compaction_*/auto_retry_*/summarization_retry_* → P2 无 part 操作(P5 接会话状态 UI)
 //   其余生命周期/队列/条目事件      → 无 part 操作
@@ -37,7 +38,7 @@ import type {
   TextContent,
   Usage as PiUsage,
 } from "../../pi/packages/ai/src/types.ts";
-import type { GenerationEvent } from "../inference-engine/events";
+import type { EngineFidelityBlock, GenerationEvent } from "../inference-engine/events";
 import type { JsonValue, ToolOutputEntry } from "../foundation/types";
 
 /** pi Usage → 我们的 TokenUsage(conversations/helpers ensureUsage 同形)。
@@ -99,10 +100,23 @@ function appOutputOf(details: unknown): ToolOutputEntry[] | null {
 
 /** 工具结果 → ToolOutputEntry[](tool_execution_update/end 共用)。metadata 附着规则
  *  与聊天引擎 runtime.toToolResult 逐字一致:挂首个 text 条目;无 text 条目而 details
- *  存在时,补一个空 text 载体。 */
+ *  存在时,补一个空 text 载体。
+ *  P7 来源标记:{app:{output}} 通道(通用工具实体化产物)在首条目 metadata 打
+ *  pi:{src:"app"}——模型面文本是 openAiToolOutput(entries) 的再计算产物,与工作区
+ *  工具"逐字 content"通道在多条目时不可从形状区分,捕获时标记供 DB→pi 重建选路。 */
 export function mapPiToolResult(result: PiToolResultView | undefined): ToolOutputEntry[] {
   const appOutput = appOutputOf(result?.details);
-  if (appOutput) return appOutput;
+  if (appOutput) {
+    const [first, ...rest] = appOutput;
+    if (!first || typeof first !== "object") return appOutput;
+    const firstRecord = first as Record<string, unknown>;
+    const existingMeta =
+      firstRecord.metadata && typeof firstRecord.metadata === "object" && !Array.isArray(firstRecord.metadata)
+        ? (firstRecord.metadata as Record<string, JsonValue>)
+        : {};
+    const marked = { ...firstRecord, metadata: { ...existingMeta, pi: { src: "app" } } } as unknown as ToolOutputEntry;
+    return [marked, ...rest];
+  }
   const entries = result?.content?.length ? mapPiToolContent(result.content) : [];
   const metadata = workspaceMetadataOf(result?.details);
   if (!metadata) return entries;
@@ -147,6 +161,8 @@ export function createPiEventBridge() {
    *  唯一在执行的工具即目标。 */
   const executing = new Set<string>();
   const outcome: PiBridgeOutcome = { stopReason: null, errorMessage: null, text: "" };
+  /** P7 保真:本轮引擎消息序号(每个 assistant message_end 递增,注解分组键)。 */
+  let engineMessageOrdinal = 0;
 
   function card(toolCallId: string): ToolCardState {
     let entry = cards.get(toolCallId);
@@ -227,6 +243,28 @@ export function createPiEventBridge() {
     }
   }
 
+  /** P7 保真:assistant 引擎消息 content → 块序列(len 供合并 part 文本切回原块;
+   *  sig/redacted 是思维链重放签名;toolCallId 对齐工具卡)。conditional spread
+   *  保证无 undefined 键(注解走 JSON 落库)。 */
+  function fidelityBlocks(message: AssistantMessage): EngineFidelityBlock[] {
+    const blocks: EngineFidelityBlock[] = [];
+    for (const item of message.content) {
+      if (item.type === "thinking") {
+        blocks.push({
+          type: "thinking",
+          len: item.thinking.length,
+          ...(item.thinkingSignature ? { sig: item.thinkingSignature } : {}),
+          ...(item.redacted ? { redacted: true } : {}),
+        });
+      } else if (item.type === "text") {
+        blocks.push({ type: "text", len: item.text.length });
+      } else if (item.type === "toolCall") {
+        blocks.push({ type: "toolCall", toolCallId: item.id });
+      }
+    }
+    return blocks;
+  }
+
   function recordAssistantEnd(message: AssistantMessage): GenerationEvent[] {
     outcome.stopReason = message.stopReason;
     outcome.errorMessage = message.errorMessage ?? null;
@@ -234,7 +272,21 @@ export function createPiEventBridge() {
       .filter((item): item is TextContent => item.type === "text")
       .map((item) => item.text)
       .reduce((sum, text) => (sum ? `${sum}\n${text}` : text), outcome.text);
-    return message.usage ? [{ kind: "usage", usage: mapPiUsage(message.usage) }] : [];
+    // 保真注解先于 usage:结构事件与统计事件互不依赖,固定顺序便于契约测试断言。
+    const events: GenerationEvent[] = [
+      {
+        kind: "engine_fidelity",
+        message: {
+          msg: engineMessageOrdinal++,
+          api: String(message.api),
+          provider: String(message.provider),
+          model: message.model,
+          blocks: fidelityBlocks(message),
+        },
+      },
+    ];
+    if (message.usage) events.push({ kind: "usage", usage: mapPiUsage(message.usage) });
+    return events;
   }
 
   function handle(event: AgentSessionEvent): GenerationEvent[] {

@@ -1,33 +1,37 @@
-// pi-engine/runner.ts — pi 会话生成驱动器(P2)
+// pi-engine/runner.ts — pi 会话生成驱动器(P2 骨架;P7 重写为统一会话数据)
 //
-// 一次调用 = 我们会话模型里的一轮生成:注入模型运行时(P1 model-bridge)→ 打开/创建
-// 引擎工作记忆(session-files)→ 订阅事件经桥(event-bridge)映射为 GenerationEvent
-// 灌进调用方 sink(生产侧即 generateAnswer 的共享应用器)→ prompt 等待回合结束 →
-// 按桥观察到的终局决定 return/throw。
+// 一次调用 = 我们会话模型里的一轮生成:注入模型运行时(P1 model-bridge)→ 把 SQLite
+// 选中路径历史灌注进内存 SessionManager(P7 context-encoder;inMemory,零 jsonl)→
+// 订阅事件经桥(event-bridge)映射为 GenerationEvent 灌进调用方 sink(生产侧即
+// generateAnswer 的共享应用器)→ prompt 等待回合结束 → 按桥观察到的终局决定
+// return/throw,顺手捕获本轮 pi 自动压缩产物(摘要以会话行为事实源,见下)。
 //
 // 契约与聊天引擎流式函数对齐:sink 语义相同、abort 经 AbortSignal、上游失败以 throw
 // 上抛(generateAnswer 的失败分支统一做 reportError/失败文本/注解)。P3 把工作区会话的
 // runGeneration 切到本驱动器,generateAnswer 的收尾/错误/审批框架原样复用。
+//
+// P7 会话数据统一(方案 §4.7):SQLite 是唯一事实源,引擎上下文每轮从选中路径历史
+// 确定性重建(context-encoder 保真注解解码,失配行自校验退 legacy),不再有
+// 会话↔jsonl 文件关联。pi 自动压缩发生在 prompt 内部,结果捕获为
+// capturedCompactions(firstKeptEntryId 反查灌注映射回到 DB 消息 id),由调用方落
+// conversation.piCompactions——下一轮经编码器 appendCompaction 重放,语义逐字等价。
 //
 // P3 工具面:noTools:"builtin"——pi 内建 read/bash/edit/write 一律不启用(它们绕开
 // 我们的审批与边界壳),我们的七工具经 ctx.tools 以 customTools 注册
 // (pi-engine/workspace-tools.ts,审批内化在工具 execute 里)。不传 tools 即纯对话
 // (与 P2 语义等价:无任何激活工具,系统提示词 Available tools 为 "(none)")。
 
-import { existsSync, mkdirSync } from "node:fs";
-import { basename } from "node:path";
 import { createAgentSession } from "../../pi/packages/coding-agent/src/core/sdk.ts";
 import type { ToolDefinition } from "../../pi/packages/coding-agent/src/core/extensions/types.ts";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { GenerationEventSink } from "../inference-engine/events";
-import type { Model, Provider } from "../foundation/types";
+import type { Message, Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
-import { reportError } from "../observability/app-errors";
 import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "./model-bridge";
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "./approval-gate";
 import type { PiSessionResources } from "./resources";
-import { piSessionFileNameFor, piSessionsDir, quarantineCorruptPiSession, resolvePiSessionPath } from "./session-files";
+import { seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
 
 export interface PiGenerationContext {
   /** 生效 provider/model(调用方经 findModel 解析,providerOverwrite 已展开)。 */
@@ -36,12 +40,15 @@ export interface PiGenerationContext {
   /** 模型极限(P5:orchestrator 从 models.dev/助手配置取值;不传用 model-bridge 保守默认)。
    *  contextWindow 决定 pi 自动压缩阈值(contextWindow - reserveTokens),必须尽量真实。 */
   modelLimits?: PiModelLimits;
-  /** 会话身份与引擎记忆。 */
+  /** 会话身份(审批等待者清扫的归属键;引擎上下文与身份无关,纯由 history 决定)。 */
   conversationId: string;
-  /** pi_session_file 列的当前值(无记录传 null)。 */
-  storedSessionFileName?: string | null;
   /** 会话工作目录(工作区边界内的绝对路径)。 */
   cwd: string;
+  /** P7:选中路径上的历史消息(不含本轮新用户输入——那条走 session.prompt)。 */
+  history: Message[];
+  /** P7:既有压缩记录(conversation.piCompactions 解析产物;编码器只取切点仍在
+   *  历史中的最新一条生效)。 */
+  compactions?: PiCompactionRecord[];
   /** 本轮用户输入(文本;文档/OCR 已由 pi-engine/attachments 文本化)。 */
   promptText: string;
   /** 图片附件(pi 原生 prompt images 通道,P4 附件面)。 */
@@ -55,61 +62,47 @@ export interface PiGenerationContext {
   /** 生成事件下沉(生产侧 = conversations/generation-apply 的应用器)。 */
   sink: GenerationEventSink;
   signal?: AbortSignal;
-  /** 引擎记忆文件名分配回调:prompt 前即回调,调用方负责写列并持久化——
-   *  流式中途崩溃也不能丢"会话↔jsonl"的关联。 */
-  onSessionFile?: (fileName: string) => void;
+}
+
+/** pi 压缩产物的 DB 侧映射(runner 返回;orchestrator 负责落 conversation.piCompactions)。 */
+export interface CapturedPiCompaction {
+  /** 切点(首个保留原文的 DB 消息 id)。null = 切点落在本轮(prompt 之后)——
+   *  本轮消息尚未入库,调用方按"外收拢"落为当前尾消息 id(只多保不少保,
+   *  下一轮编码器按"切点在场"自校验生效)。 */
+  cutMessageId: string | null;
+  summary: string;
+  tokensBefore: number;
 }
 
 export interface PiGenerationResult {
   /** 全程 assistant 可见文本(镜像聊天引擎 allContent 口径:trim,空则占位)。 */
   text: string;
-  sessionFileName: string;
-  /** true = 本轮续上了既有引擎记忆。 */
-  resumed: boolean;
+  /** 灌注后走了 legacy 退化的 assistant 行 id(诊断;注解失配=用户编辑过历史)。 */
+  degradedMessageIds: string[];
   stopReason: string | null;
+  capturedCompactions: CapturedPiCompaction[];
 }
 
-export interface OpenPiSessionResult {
-  manager: SessionManager;
-  /** 应写入 pi_session_file 列的文件名。 */
-  fileName: string;
-  /** true = 从既有 jsonl 续上了引擎记忆。 */
-  resumed: boolean;
-}
-
-/**
- * 打开(续会话)或创建会话的引擎工作记忆。
- * - 列里有文件名且文件存在 → SessionManager.open 续会话(cwdOverride 用当前工作目录,
- *   工作区被用户搬迁后不被 jsonl 头里的旧 cwd 钉死);
- * - 文件损坏(open 抛)→ 隔离 `.corrupt-<ts>` + reportError(warn) + 降级新会话
- *   (UI 历史不丢,只丢引擎工作记忆——方案 §4.6 语义);
- * - 无记录/文件不存在 → 在确定性路径上建新会话(session-manager.ts 实证:open 不存在
- *   的路径即"在该路径建新会话",且首个 assistant 消息落盘前文件不创建,空会话零磁盘垃圾)。
- */
-export function openOrCreatePiSession(options: {
-  conversationId: string;
-  storedFileName?: string | null;
-  cwd: string;
-}): OpenPiSessionResult {
-  mkdirSync(piSessionsDir, { recursive: true });
-  const fileName = options.storedFileName ? basename(options.storedFileName) : piSessionFileNameFor(options.conversationId);
-  const path = resolvePiSessionPath(fileName);
-  if (existsSync(path)) {
-    try {
-      return { manager: SessionManager.open(path, piSessionsDir, options.cwd), fileName, resumed: true };
-    } catch (err) {
-      quarantineCorruptPiSession(path);
-      reportError(
-        "pi-engine",
-        "warn",
-        "工作区会话的引擎记忆文件损坏，已降级为全新引擎会话（界面历史不受影响）",
-        err,
-        "pi_session_corrupt",
-      );
+/** 本轮新增的压缩条目 → DB 压缩记录。切点反查灌注映射(assistant 行一条消息产
+ *  多个 entry,任一命中即归属该消息);查不到 = 切点在本轮,交调用方外收拢。 */
+function captureRoundCompactions(
+  manager: SessionManager,
+  seededEntryIds: Set<string>,
+  entryIdsByMessageId: Map<string, string[]>,
+): CapturedPiCompaction[] {
+  const captured: CapturedPiCompaction[] = [];
+  for (const entry of manager.getEntries()) {
+    if (entry.type !== "compaction" || seededEntryIds.has(entry.id)) continue;
+    let cutMessageId: string | null = null;
+    for (const [messageId, entryIds] of entryIdsByMessageId) {
+      if (entryIds.includes(entry.firstKeptEntryId)) {
+        cutMessageId = messageId;
+        break;
+      }
     }
+    captured.push({ cutMessageId, summary: entry.summary, tokensBefore: entry.tokensBefore });
   }
-  // 确定性命名下,降级新会话与全新会话共用同一路径(损坏件已被隔离挪走)。
-  return { manager: SessionManager.open(path, piSessionsDir, options.cwd), fileName, resumed: false };
+  return captured;
 }
 
 export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGenerationResult> {
@@ -118,19 +111,22 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
   if (!mapped.ok) throw new Error(`该模型无法在工作区引擎使用：${mapped.reason}`);
   const { runtime, model } = await createPiModelRuntime(mapped.mapping);
 
-  const opened = openOrCreatePiSession({
-    conversationId: ctx.conversationId,
-    storedFileName: ctx.storedSessionFileName,
-    cwd: ctx.cwd,
+  // P7:引擎上下文从 SQLite 历史每轮重建,inMemory 会话零文件生命周期。
+  const manager = SessionManager.inMemory(ctx.cwd);
+  const seeded = seedPiSessionFromHistory({
+    manager,
+    history: ctx.history,
+    model: ctx.model,
+    compactions: ctx.compactions,
   });
-  ctx.onSessionFile?.(opened.fileName);
+  const seededEntryIds = new Set(manager.getEntries().map((entry) => entry.id));
 
   const { session } = await createAgentSession({
     cwd: ctx.cwd,
     agentDir: piAgentDir,
     modelRuntime: runtime,
     model,
-    sessionManager: opened.manager,
+    sessionManager: manager,
     // "builtin" 只关内建工具;customTools 经 includeAllExtensionTools 全部激活
     // (sdk.ts:246-251 + agent-session._refreshToolRegistry,§七-3 实证)。
     noTools: "builtin",
@@ -168,6 +164,8 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     clearToolApprovalWaiters(ctx.conversationId);
   }
 
+  const capturedCompactions = captureRoundCompactions(manager, seededEntryIds, seeded.entryIdsByMessageId);
+
   const outcome = bridge.outcome();
   // 上游失败且非用户中止 → 抛给调用方失败分支(与聊天引擎 throw 语义一致)。
   // 用户中止 → 正常返回已生成部分,调用方按 signal.aborted 走中止收尾。
@@ -176,21 +174,23 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
   }
   return {
     text: outcome.text.trim() || "(empty response)",
-    sessionFileName: opened.fileName,
-    resumed: opened.resumed,
+    degradedMessageIds: seeded.degradedMessageIds,
     stopReason: outcome.stopReason,
+    capturedCompactions,
   };
 }
 
-// ===== P5:pi 原生手动压缩 =====
+// ===== P5:pi 原生手动压缩(P7:压缩记录以会话行为事实源) =====
 
 export interface PiCompactionContext {
   provider: Provider;
   model: Model;
   modelLimits?: PiModelLimits;
   conversationId: string;
-  storedSessionFileName?: string | null;
   cwd: string;
+  /** P7:同 runPiGeneration——压缩前的引擎上下文同样从 DB 历史+既有压缩记录重建。 */
+  history: Message[];
+  compactions?: PiCompactionRecord[];
   /** 受控资源装配(生产必传:压缩会话也不许打开 .pi/settings.json 注入面)。 */
   resources?: PiSessionResources;
   /** 用户附加指示(compress 框的 additionalPrompt → pi compact customInstructions)。 */
@@ -198,15 +198,16 @@ export interface PiCompactionContext {
   /** 生成事件下沉:压缩路径只产 engine_status(压缩中/摘要重试),经桥同一映射。 */
   sink: GenerationEventSink;
   signal?: AbortSignal;
-  onSessionFile?: (fileName: string) => void;
 }
 
 export interface PiCompactionResult {
-  sessionFileName: string;
   summary: string;
   tokensBefore: number;
   /** pi 对压缩后上下文的估算(可选字段,拿不到为 null;仅展示/日志用途)。 */
   estimatedTokensAfter: number | null;
+  /** 本次压缩的切点(pi compact 在既有灌注条目里选 firstKeptEntryId,反查必命中;
+   *  理论上查不到时为 null,调用方按外收拢语义落尾消息)。 */
+  compaction: CapturedPiCompaction;
 }
 
 /** pi 已知压缩失败信息 → 人话(其余原样上抛,handler 统一转 400)。 */
@@ -216,10 +217,10 @@ const PI_COMPACT_ERROR_TEXT: Record<string, string> = {
 };
 
 /**
- * 手动压缩工作区会话的引擎记忆(方案 P5:手动压缩按钮改调 pi 原生 compaction)。
+ * 手动压缩工作区会话(方案 P5:手动压缩按钮改调 pi 原生 compaction;P7 落点)。
  * 装配面与 runPiGeneration 同款(模型运行时/受控资源/事件桥),差别只在驱动动作:
- * prompt → session.compact。压缩摘要由 pi 追加进 jsonl(appendCompaction),UI 历史
- * 不动——双表征语义下,决定上游上下文的是引擎记忆,不是 UI 历史。
+ * prompt → session.compact。压缩产物(摘要/切点/tokensBefore)返回给调用方落
+ * conversation.piCompactions,UI 历史不动——下一轮生成由编码器重放压缩语义。
  */
 export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompactionResult> {
   if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
@@ -227,19 +228,21 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
   if (!mapped.ok) throw new Error(`该模型无法在工作区引擎使用：${mapped.reason}`);
   const { runtime, model } = await createPiModelRuntime(mapped.mapping);
 
-  const opened = openOrCreatePiSession({
-    conversationId: ctx.conversationId,
-    storedFileName: ctx.storedSessionFileName,
-    cwd: ctx.cwd,
+  const manager = SessionManager.inMemory(ctx.cwd);
+  const seeded = seedPiSessionFromHistory({
+    manager,
+    history: ctx.history,
+    model: ctx.model,
+    compactions: ctx.compactions,
   });
-  ctx.onSessionFile?.(opened.fileName);
+  const seededEntryIds = new Set(manager.getEntries().map((entry) => entry.id));
 
   const { session } = await createAgentSession({
     cwd: ctx.cwd,
     agentDir: piAgentDir,
     modelRuntime: runtime,
     model,
-    sessionManager: opened.manager,
+    sessionManager: manager,
     noTools: "builtin",
     customTools: [],
     ...(ctx.resources
@@ -258,11 +261,16 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
   try {
     if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
     const result = await session.compact(ctx.customInstructions?.trim() || undefined);
+    const captured = captureRoundCompactions(manager, seededEntryIds, seeded.entryIdsByMessageId).at(-1);
+    if (!captured) {
+      // compact 成功却找不到新 compaction 条目 = pi 内部行为漂移,按失败处理比静默丢摘要安全。
+      throw new Error("工作区引擎压缩完成但未产生压缩条目");
+    }
     return {
-      sessionFileName: opened.fileName,
       summary: result.summary,
       tokensBefore: result.tokensBefore,
       estimatedTokensAfter: result.estimatedTokensAfter ?? null,
+      compaction: captured,
     };
   } catch (err) {
     // 取消统一为 AbortError(compact 内部以普通 Error("Compaction cancelled") 上抛)。

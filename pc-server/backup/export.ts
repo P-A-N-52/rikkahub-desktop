@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import type { JsonValue } from "../foundation/types";
 import type { Settings } from "../foundation/types/settings";
 import { isRecord, safeJsonStringify } from "../foundation/utils";
-import { dataDir, filesDir, piSessionsDir, skillsDir } from "../foundation/paths";
+import { dataDir, filesDir, skillsDir } from "../foundation/paths";
 import { reportError } from "../observability/app-errors";
 import { tempDir } from "../foundation/platform";
 import { state } from "../persistence/json-store";
@@ -263,8 +263,9 @@ export function filterMessagePartsForAndroid(
 }
 
 /** PC-only 消息注解判别符(安卓 UIMessageAnnotation 只有 url_citation;PC 生成失败时
- *  写入的 model_call_error 若流入安卓即"会话打不开")。 */
-export const PC_ONLY_ANNOTATION_TYPES: ReadonlySet<string> = new Set(["model_call_error"]);
+ *  写入的 model_call_error 若流入安卓即"会话打不开")。pi-fidelity 是 P7 引擎消息
+ *  保真注解(块结构/思维链签名),纯 PC 工作区语义,同样不得流入安卓。 */
+export const PC_ONLY_ANNOTATION_TYPES: ReadonlySet<string> = new Set(["model_call_error", "pi-fidelity"]);
 
 /** A-2:导出方向的注解清洗。只保留"带字符串判别符且非 PC-only"的注解——缺判别符的
  *  遗留脏对象与 PC-only 类型都会让安卓多态解码即炸;安卓自有/未来新增类型原样透传。 */
@@ -804,25 +805,8 @@ export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?
       mkdirSync(skillsStage, { recursive: true });
       copyDirRecursive(skillsDir, skillsStage);
     }
-    // P5 拍板:pi 引擎记忆(工作区会话的 jsonl)纳入自家恢复面——与 pc-backup.json
-    // 同级的 PC 专属目录,安卓端按已知前缀读取、未知目录容忍跳过(跨端语义不变)。
-    // 只收 *.jsonl;损坏隔离件(.corrupt-*)是本机取证残留,不进备份。单文件失败不
-    // 阻断备份:恢复端缺 jsonl 自动降级为全新引擎记忆(§4.6),UI 历史不受影响。
-    if (existsSync(piSessionsDir)) {
-      const sessionFiles = readdirSync(piSessionsDir).filter((name) => name.endsWith(".jsonl"));
-      if (sessionFiles.length > 0) {
-        onProgress?.("正在打包引擎记忆...");
-        const piStage = join(stageDir, "pi-sessions");
-        mkdirSync(piStage, { recursive: true });
-        for (const name of sessionFiles) {
-          try {
-            copyFileSync(join(piSessionsDir, name), join(piStage, name));
-          } catch (copyErr) {
-            reportError("backup", "warn", `引擎记忆文件暂存失败,该会话恢复后将降级为全新引擎记忆:${name}`, copyErr, "pi_session_stage_failed");
-          }
-        }
-      }
-    }
+    // P7:引擎会话状态(压缩记录)在会话行内,随 PC 库 dump 一体进备份——P5 的
+    // pi-sessions/ jsonl 打包段随层退役,备份面回归"库即全部"。
     // 安卓对齐批6:fonts/ 透传(安卓 2.4.2 新增自定义聊天字体)。PC 不消费,仅忠实搬运,
     // 保证 APP→PC→APP 往返不丢字体文件(导入侧对应 importFontsDirIfPresent)。
     const fontsDir = join(dataDir, "fonts");

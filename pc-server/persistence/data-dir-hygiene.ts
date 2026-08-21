@@ -3,6 +3,8 @@
 // 错误中心留 info 级痕迹。就绪后由 server.ts 异步触发,失败只留痕、不影响运行。
 // 保留策略(批次四决策,详见发现文档批次四记录):
 // - corrupt-* 损坏隔离文件(活库/记忆):同族保最新一份(取证价值),其余超龄 30 天清;
+// - pi-agent/sessions/:P7 起引擎会话状态并入会话行,该目录是 jsonl 时代的死残留
+//   (含损坏隔离件),存在即整目录退役删除;pi-agent/ 客房本体保留(P4 资源面在用);
 // - updates/:版本 ≤ 当前 APP_VERSION 的安装包与 extracted-* 解压残留即删(纯可再生);
 // - state.json.pre-memory-split.bak:迁移标记已写且超龄 30 天即删(全代码无读取方,纯遗物);
 //   pre-sqlite.bak 原样保留——它仍是活库损坏恢复链的最后兜底,退役需先补替代兜底(未做);
@@ -11,7 +13,7 @@
 
 import { existsSync, readdirSync, rmSync, statSync, unlinkSync, type Dirent } from "node:fs";
 import { basename, join } from "node:path";
-import { dataDir, filesDir, memoryDir, piSessionsDir, updatesCacheDir } from "../foundation/paths";
+import { dataDir, filesDir, memoryDir, piAgentDir, updatesCacheDir } from "../foundation/paths";
 import { compareSemver } from "../foundation/utils";
 import { APP_VERSION } from "../updates/index";
 import { reportError } from "../observability/app-errors";
@@ -134,13 +136,28 @@ export function computeOrphanUploadStats(referenced: Set<number>): OrphanUploadS
   return { orphanEntries, orphanBytes, untrackedFiles, untrackedBytes };
 }
 
+/** P7 一次性退役清理:jsonl 引擎记忆目录整目录删除(它再无任何读取方,
+ *  内容是"冗余"类残留——UI 历史与压缩记录都在会话行里,删了零数据损失)。 */
+function sweepPiSessionsDirOnce(): boolean {
+  const retiredDir = join(piAgentDir, "sessions");
+  try {
+    if (!existsSync(retiredDir)) return false;
+    rmSync(retiredDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 就绪后异步执行的卫生任务总入口(server.ts 调用)。 */
 export async function runDataDirHygiene(): Promise<void> {
   try {
     // 让开启动后的首屏请求高峰
     await Bun.sleep(3_000);
-    // piSessionsDir(P2):pi 引擎记忆 jsonl 的损坏隔离件与库文件同一命名族,同一清扫策略。
-    const removedCorrupt = [...sweepCorruptQuarantineIn(dataDir), ...sweepCorruptQuarantineIn(memoryDir), ...sweepCorruptQuarantineIn(piSessionsDir)];
+    if (sweepPiSessionsDirOnce()) {
+      reportError("persistence", "info", "数据目录清理：退役并移除旧版引擎记忆目录", "pi-agent/sessions/(jsonl 时代残留)", "hygiene_pi_sessions_retired");
+    }
+    const removedCorrupt = [...sweepCorruptQuarantineIn(dataDir), ...sweepCorruptQuarantineIn(memoryDir)];
     if (removedCorrupt.length > 0) {
       reportError("persistence", "info", `数据目录清理：移除 ${removedCorrupt.length} 个过期的损坏隔离文件`, removedCorrupt.join("、"), "hygiene_corrupt_cleaned", { count: removedCorrupt.length });
     }
