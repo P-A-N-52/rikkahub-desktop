@@ -9,12 +9,15 @@
 // 上抛(generateAnswer 的失败分支统一做 reportError/失败文本/注解)。P3 把工作区会话的
 // runGeneration 切到本驱动器,generateAnswer 的收尾/错误/审批框架原样复用。
 //
-// P2 工具面策略:noTools:"all"——pi 内建 read/bash/edit/write 一律不启用(它们绕开
-// 我们的审批与边界壳,P3 以 customTools 形式接回我们已 pi 化的七工具)。
+// P3 工具面:noTools:"builtin"——pi 内建 read/bash/edit/write 一律不启用(它们绕开
+// 我们的审批与边界壳),我们的七工具经 ctx.tools 以 customTools 注册
+// (pi-engine/workspace-tools.ts,审批内化在工具 execute 里)。不传 tools 即纯对话
+// (与 P2 语义等价:无任何激活工具,系统提示词 Available tools 为 "(none)")。
 
 import { existsSync, mkdirSync } from "node:fs";
 import { basename } from "node:path";
 import { createAgentSession } from "../../pi/packages/coding-agent/src/core/sdk.ts";
+import type { ToolDefinition } from "../../pi/packages/coding-agent/src/core/extensions/types.ts";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { GenerationEventSink } from "../inference-engine/events";
 import type { Model, Provider } from "../foundation/types";
@@ -22,6 +25,7 @@ import { piAgentDir } from "../foundation/paths";
 import { reportError } from "../observability/app-errors";
 import { createPiModelRuntime, mapProviderModelToPi } from "./model-bridge";
 import { createPiEventBridge } from "./event-bridge";
+import { clearToolApprovalWaiters } from "./approval-gate";
 import { piSessionFileNameFor, piSessionsDir, quarantineCorruptPiSession, resolvePiSessionPath } from "./session-files";
 
 export interface PiGenerationContext {
@@ -36,6 +40,8 @@ export interface PiGenerationContext {
   cwd: string;
   /** 本轮用户输入(纯文本;附件面 P4)。 */
   promptText: string;
+  /** customTools(生产侧 = createPiWorkspaceTools 的七工具;不传 = 纯对话)。 */
+  tools?: ToolDefinition[];
   /** 生成事件下沉(生产侧 = conversations/generation-apply 的应用器)。 */
   sink: GenerationEventSink;
   signal?: AbortSignal;
@@ -115,7 +121,10 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     modelRuntime: runtime,
     model,
     sessionManager: opened.manager,
-    noTools: "all",
+    // "builtin" 只关内建工具;customTools 经 includeAllExtensionTools 全部激活
+    // (sdk.ts:246-251 + agent-session._refreshToolRegistry,§七-3 实证)。
+    noTools: "builtin",
+    customTools: ctx.tools ?? [],
   });
 
   const bridge = createPiEventBridge();
@@ -128,11 +137,16 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
   ctx.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     if (ctx.signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
-    await session.prompt(ctx.promptText);
+    // expandPromptTemplates:false——用户消息逐字直达模型。pi 默认会把 "/" 开头的输入
+    // 当模板/扩展命令拦截(agent-session.ts:1122),我们的会话 UX 不走 pi 命令面。
+    await session.prompt(ctx.promptText, { expandPromptTemplates: false });
   } finally {
     ctx.signal?.removeEventListener("abort", onAbort);
     unsubscribe();
     session.dispose();
+    // 审批等待者兜底清扫:正常路径下等待者随用户决定/中止即刻注销,这里只防实现
+    // 疏漏把 execute 的 Promise 泄漏成永久悬挂(approval-gate 头注)。
+    clearToolApprovalWaiters(ctx.conversationId);
   }
 
   const outcome = bridge.outcome();

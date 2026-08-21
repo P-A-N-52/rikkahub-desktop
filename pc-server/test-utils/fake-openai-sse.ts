@@ -7,9 +7,18 @@ import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
+export interface FakeSseToolCall {
+  id: string;
+  name: string;
+  /** 完整 JSON 参数字符串(单帧发出;分帧累计路径由桥单测覆盖)。 */
+  arguments: string;
+}
+
 export interface FakeSseTurn {
   /** assistant 正文(单帧发出;分帧对桥无语义差,pi 客户端逐帧累计)。 */
-  content: string;
+  content?: string;
+  /** 本轮工具调用(P3:驱动 pi 执行 customTools;finish_reason 自动为 tool_calls)。 */
+  toolCalls?: FakeSseToolCall[];
   usage?: { prompt_tokens: number; completion_tokens: number };
 }
 
@@ -40,19 +49,42 @@ export async function startFakeOpenAiSse(turns: FakeSseTurn[]): Promise<FakeOpen
     }
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const frame = (payload: object) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (turn.content !== undefined) {
+      frame({
+        id: "chatcmpl-fake",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "fake-model",
+        choices: [{ index: 0, delta: { role: "assistant", content: turn.content }, finish_reason: null }],
+      });
+    }
+    if (turn.toolCalls?.length) {
+      frame({
+        id: "chatcmpl-fake",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "fake-model",
+        choices: [{
+          index: 0,
+          delta: {
+            role: "assistant",
+            tool_calls: turn.toolCalls.map((call, index) => ({
+              index,
+              id: call.id,
+              type: "function",
+              function: { name: call.name, arguments: call.arguments },
+            })),
+          },
+          finish_reason: null,
+        }],
+      });
+    }
     frame({
       id: "chatcmpl-fake",
       object: "chat.completion.chunk",
       created: 0,
       model: "fake-model",
-      choices: [{ index: 0, delta: { role: "assistant", content: turn.content }, finish_reason: null }],
-    });
-    frame({
-      id: "chatcmpl-fake",
-      object: "chat.completion.chunk",
-      created: 0,
-      model: "fake-model",
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      choices: [{ index: 0, delta: {}, finish_reason: turn.toolCalls?.length ? "tool_calls" : "stop" }],
       usage: turn.usage ?? { prompt_tokens: 7, completion_tokens: 5 },
     });
     res.write("data: [DONE]\n\n");

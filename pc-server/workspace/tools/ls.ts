@@ -46,13 +46,14 @@ export interface LsToolOptions {
   operations?: LsOperations;
 }
 
+// 与 pi 原版逐字一致:无必填参数时不写 required 键(TypeBox 同样省略;
+// P3 契约对照测试按语义全等钉住,required:[] 与缺省虽等价,但移植逐字纪律优先)。
 const LS_SCHEMA = {
   type: "object",
   properties: {
     path: { type: "string", description: "Directory to list (default: current directory)" },
     limit: { type: "number", description: "Maximum number of entries to return (default: 500)" },
   },
-  required: [],
 } as const;
 
 export function createLsTool(

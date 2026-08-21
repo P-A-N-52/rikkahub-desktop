@@ -51,9 +51,12 @@ import { createGenerationEventApplier } from "./generation-apply";
 import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
+import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
+import { runPiGeneration } from "../pi-engine/runner";
+import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
-import { flushConvDirtyNow, getConversation, getConversationsDb, markMessageNodeDirty, persistConversation, scheduleThrottledConvFlush } from "./index";
+import { flushConvDirtyNow, getConversation, getConversationsDb, markConversationRowDirty, markMessageNodeDirty, persistConversation, scheduleThrottledConvFlush } from "./index";
 import { checkoutConversation, releaseConversation } from "./working-set";
 import { conversationExistsInDb } from "./read-queries";
 import { reportError } from "../observability/app-errors";
@@ -448,6 +451,47 @@ async function runPostGenerationTasks(conversationId: string, snapshot: Conversa
   }
 }
 
+/** pi 引擎生成装配(P3 路由,方案 §4.2/§4.3):
+ *  - promptText 取末 USER 节点选中消息文本(重新生成/编辑重发会向引擎记忆追加同一
+ *    用户消息——引擎记忆是工作上下文,可容忍;分支级记忆语义 P5 与 forkFrom 一并裁决);
+ *  - 七工具经 customTools 注册,审批内化在工具 execute(pi-engine/workspace-tools.ts);
+ *  - jsonl 文件名回调即时写列+标脏:流式中途崩溃也不丢"会话↔jsonl"关联。 */
+async function runPiWorkspaceGeneration(
+  conversation: Conversation,
+  runtime: WorkspaceRuntime,
+  deps: { assistant: Assistant; providerItem: Provider; selectedModel: Model },
+  sink: GenerationEventSink,
+  signal?: AbortSignal,
+): Promise<string> {
+  const lastUserNode = [...conversation.messages]
+    .reverse()
+    .find((node) => (node.messages[node.selectIndex] ?? node.messages[0])?.role === "USER");
+  const promptMessage = lastUserNode ? (lastUserNode.messages[lastUserNode.selectIndex] ?? lastUserNode.messages[0]) : null;
+  const promptText = promptMessage ? textFromParts(promptMessage.parts).trim() : "";
+  if (!promptText) {
+    // pi 引擎按"末条用户文本"驱动(附件面 P4);无文本输入直接走失败分支给出人话。
+    throw new Error("工作区会话缺少可发送的用户文本消息,无法驱动工作区引擎。");
+  }
+  const result = await runPiGeneration({
+    provider: deps.providerItem,
+    model: deps.selectedModel,
+    conversationId: conversation.id,
+    storedSessionFileName: conversation.piSessionFile ?? null,
+    cwd: runtime.cwd,
+    promptText,
+    tools: createPiWorkspaceTools({ conversation, assistant: deps.assistant, sink }),
+    sink,
+    signal,
+    onSessionFile: (fileName) => {
+      if (conversation.piSessionFile === fileName) return;
+      conversation.piSessionFile = fileName;
+      markConversationRowDirty(conversation.id);
+      scheduleThrottledConvFlush();
+    },
+  });
+  return result.text;
+}
+
 /** 纯生成逻辑：驱动 Provider 流式/非流式调用，并通过 sink 发出生成事件。
  *  本函数不直接写 state.json、不直接广播 SSE、不直接落盘 SQLite——这些副作用由
  *  协调器 generateAnswer 统一处理。 */
@@ -460,11 +504,19 @@ async function runGeneration(
     providerItem: Provider;
     selectedModel: Model;
     executeTool: ToolExecutor;
+    /** P3 路由:工作区可用(三道闸通过)即 pi 引擎;null 走聊天引擎。 */
+    piRuntime: WorkspaceRuntime | null;
   },
   sink: GenerationEventSink,
   signal?: AbortSignal,
 ): Promise<string> {
   if (signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
+  // P3 路由切换(方案 §六):工作区会话由 pi 引擎跑循环,事件桥回灌同一 sink;
+  // 工作区不可用(缺根/未信任)回落聊天引擎纯对话——openAiWorkspaceTools 同一判定
+  // 返回空工具面,与 M4 降级语义一致。
+  if (deps.piRuntime) {
+    return runPiWorkspaceGeneration(conversation, deps.piRuntime, deps, sink, signal);
+  }
   return callProviderStreaming(conversation, assistantMessage, assistantNode, {
     signal,
     sink,
@@ -490,6 +542,9 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
   checkoutConversation(conversation.id);
   const assistant = findAssistant(conversation.assistantId);
   const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
+  // P3:路由在入口一次判定并贯穿本次生成(与 P1-4 配置快照同理)——pi 引擎无
+  // "暂停→续跑"模型,续跑/暂停分支只属于聊天引擎。
+  const piRuntime = workspaceRuntimeForConversation(conversation);
   // 重新生成 ASSISTANT:调用方已在该 node 追加空占位 message 并把 selectIndex 指向它,
   // 直接复用,绕开 ensureAssistantGenerationNode(它会复用末尾 assistant 或新建 node,
   // 都不是"在指定 node 上新增分支")。find 不到时安全回退到默认逻辑。
@@ -520,7 +575,7 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     broadcastNodeUpdate(conversation, assistantNode);
     broadcastConversation(conversation);
   };
-  const resumingApprovedTools = hasResumableToolParts(currentMessage);
+  const resumingApprovedTools = !piRuntime && hasResumableToolParts(currentMessage);
   currentMessage.finishedAt = null;
   // R7-2:重入生成(续写/重试复用同一消息对象)时清掉上一轮的失败标记,
   // 本轮成功后前端错误横幅不再残留;本轮再失败会在 catch 里重新落标记。
@@ -575,12 +630,12 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
       conversation,
       currentMessage,
       assistantNode,
-      { assistant, providerItem: picked.provider, selectedModel: picked.model, executeTool },
+      { assistant, providerItem: picked.provider, selectedModel: picked.model, executeTool, piRuntime },
       sink,
       controller.signal,
     );
     if (controller.signal.aborted) throw new DOMException("Generation stopped", "AbortError");
-    if (hasPendingToolApproval(currentMessage)) {
+    if (!piRuntime && hasPendingToolApproval(currentMessage)) {
       // 注:hasPendingToolApproval 判定在 applyOutputTransforms 之前与旧实现一致——
       // 旧实现先 transform 再判定,但 transform 只改 text/reasoning parts,不触碰 tool
       // parts 的 approvalState,判定结果不受影响;两分支的 transform 都由 finalize 统一做。

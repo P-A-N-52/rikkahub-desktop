@@ -1,7 +1,9 @@
 // workspace/runtime.ts — 工作区工具运行时(M1-4:挂载判定 + 执行分发)
 // 职责边界:本模块把"会话 → 工作区 → pi 工具实例"串成一条线——
 //   挂载:openAiWorkspaceTools(conversation) 产出进模型的 tools 声明(条件挂载,§9.2);
-//   执行:runWorkspaceTool(name, args, ctx) 构建有界工具实例并执行,产出 ToolResult 形状。
+//   执行:executeWorkspaceToolCore(name, args, ctx) 是唯一的守卫+执行内核(P3 起双消费:
+//     聊天引擎经 runWorkspaceTool 拿调度器 ToolResult 形状;pi 引擎 customTools 直接拿
+//     WorkspaceToolOutput 原始形状,见 pi-engine/workspace-tools.ts)。
 // 审批矩阵在 tools/approval.ts(纯函数在 ./approval.ts);路径边界在 ./boundary.ts;
 // 工具内核是 ./tools/ 下的 pi 原样移植,本层不复制其任何逻辑。
 
@@ -184,10 +186,12 @@ export function clampBashTimeoutSeconds(timeout: number | undefined): number {
   return Math.min(timeout, BASH_HARD_TIMEOUT_SECONDS);
 }
 
-/** details 里可能带整文件 diff;落库/广播前截断,保护消息体与前端渲染(§4.5 有界渲染)。 */
+/** details 里可能带整文件 diff;落库/广播前截断,保护消息体与前端渲染(§4.5 有界渲染)。
+ *  P3 起导出:pi 引擎 customTools 把 details 打包给事件桥还原成 part metadata,截断
+ *  口径必须与聊天引擎同源。 */
 const DETAILS_TEXT_CAP = 100_000;
 
-function jsonSafeDetails(details: unknown): Record<string, JsonValue> | null {
+export function jsonSafeDetails(details: unknown): Record<string, JsonValue> | null {
   if (details == null || typeof details !== "object") return null;
   const out: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(details as Record<string, unknown>)) {
@@ -275,20 +279,24 @@ function logWorkspaceToolCall(
   }
 }
 
-/** 工作区工具执行入口(executeToolCall 分发至此)。
+export interface WorkspaceToolCoreContext {
+  conversationId?: string;
+  /** 用户对本次调用的显式批准(危险命令知情同意放行门 + write/edit 宽界选择)。 */
+  userApproved?: boolean;
+  signal?: AbortSignal;
+  /** 执行中部分输出(pi onUpdate 全量快照语义,bash 内核 100ms 自节流;其余工具忽略)。 */
+  onUpdate?: (partial: WorkspaceToolOutput<unknown>) => void;
+}
+
+/** 工作区工具守卫+执行内核(唯一实现,聊天引擎与 pi 引擎共用)。
  *  守卫链:会话归属 → 工作区三道闸 → (bash)shell 可用 + 危险命令拦截 → pi 内核执行。
  *  历史残留调用(会话已解绑/工作区已删)会命中守卫抛错——错误文案回灌模型,
  *  与 search_web 关闭后的守卫语义一致(execution.ts:87)。 */
-export async function runWorkspaceTool(
+export async function executeWorkspaceToolCore(
   name: string,
   args: Record<string, JsonValue>,
-  context?: {
-    conversationId?: string;
-    userApproved?: boolean;
-    signal?: AbortSignal;
-    onToolPartialOutput?: (output: ToolOutputEntry[]) => void;
-  },
-): Promise<{ output: ToolOutputEntry[]; fileCreations?: Array<{ data: string; mime: string; prefix: string }> }> {
+  context?: WorkspaceToolCoreContext,
+): Promise<WorkspaceToolOutput<unknown>> {
   if (!isWorkspaceToolName(name)) throw new Error(`Unknown workspace tool: ${name}`);
   const conversation = context?.conversationId ? getConversation(context.conversationId) : null;
   if (!conversation?.workspaceId) {
@@ -348,19 +356,12 @@ export async function runWorkspaceTool(
         input = { command: String(args.command), timeout: clampBashTimeoutSeconds(optionalNumberArg(args, "timeout")) } satisfies BashToolInput;
         break;
     }
-    const onPartial = context?.onToolPartialOutput;
-    const result = await tool.execute(
-      input,
-      context?.signal,
-      // bash 执行中部分输出回写(pi onUpdate 全量快照语义,100ms 自节流);其余工具忽略该参数
-      onPartial ? (partial) => onPartial(toToolResult(name, partial).output) : undefined,
-    );
-    const mapped = toToolResult(name, result);
-    const summary = mapped.output
-      .map((entry) => ("text" in entry && typeof entry.text === "string" ? entry.text : ""))
+    const result = await tool.execute(input, context?.signal, context?.onUpdate);
+    const summary = result.content
+      .map((entry) => (entry.type === "text" ? entry.text : ""))
       .join("\n");
     logWorkspaceToolCall(runtime, name, args, started, { ok: true, summary });
-    return mapped;
+    return result;
   } catch (err) {
     logWorkspaceToolCall(runtime, name, args, started, {
       ok: false,
@@ -368,4 +369,28 @@ export async function runWorkspaceTool(
     });
     throw err;
   }
+}
+
+/** 聊天引擎执行入口(executeToolCall 分发至此):内核产出映射为调度器 ToolResult 形状
+ *  (details 挂首个 text part metadata、图片走 fileCreations)。pi 引擎不走本函数——
+ *  它要内核原始形状(pi-engine/workspace-tools.ts)。 */
+export async function runWorkspaceTool(
+  name: string,
+  args: Record<string, JsonValue>,
+  context?: {
+    conversationId?: string;
+    userApproved?: boolean;
+    signal?: AbortSignal;
+    onToolPartialOutput?: (output: ToolOutputEntry[]) => void;
+  },
+): Promise<{ output: ToolOutputEntry[]; fileCreations?: Array<{ data: string; mime: string; prefix: string }> }> {
+  const onPartial = context?.onToolPartialOutput;
+  const result = await executeWorkspaceToolCore(name, args, {
+    conversationId: context?.conversationId,
+    userApproved: context?.userApproved,
+    signal: context?.signal,
+    // bash 执行中部分输出回写(全量快照);其余工具的内核忽略 onUpdate
+    onUpdate: onPartial ? (partial) => onPartial(toToolResult(name as WorkspaceToolName, partial).output) : undefined,
+  });
+  return toToolResult(name as WorkspaceToolName, result);
 }

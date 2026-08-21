@@ -35,6 +35,8 @@ import { generateAnswer } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
 import { generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
+import { workspaceRuntimeForConversation } from "../../workspace/runtime";
+import { resolveToolApproval } from "../../pi-engine/approval-gate";
 
 export async function handleConversationRoutes(request: Request, url: URL, path: string): Promise<Response | null> {
   // 列表失效事件已并入 /api/events 通道(invalidate 事件);会话详情流保持独立端点
@@ -588,6 +590,18 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       conversation.updateAt = Date.now();
       persistConversation(conversation);
       broadcastConversation(conversation);
+      // P3(pi 引擎,方案 §4.4):审批内化后决定送达在途等待者,生成保持在跑,execute
+      // 原地放行/拒绝——不走"暂停→重触发续跑"。pi 路由会话即使无等待者(生成已死的
+      // 孤儿审批:重启/停止后才点卡)也只记录状态:pi 无续跑模型,重触发会向引擎记忆
+      // 重复注入末条用户消息;引擎侧悬空 toolCall 由 pi 在下轮请求时自愈
+      // (pi/packages/ai transform-messages 注入合成空结果)。
+      const consumed = resolveToolApproval(conversation.id, String(body.toolCallId ?? ""), {
+        approved: body.approved === true,
+        ...(body.reason ? { reason: String(body.reason) } : {}),
+      });
+      if (consumed || workspaceRuntimeForConversation(conversation)) {
+        return json({ status: "accepted" }, { status: 202 });
+      }
       const hasPendingTools = conversation.messages.some((node) =>
         node.messages.some((msg) => hasPendingToolApproval(msg))
       );

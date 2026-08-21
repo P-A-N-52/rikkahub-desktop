@@ -15,6 +15,9 @@
 //     单 text 条目恰好命中 node-delta 的 isStreamableToolPart 快路,SSE 走 text_delta 帧)
 //   tool_execution_end             → tool_result(成功 → content 映射;失败 → {error} 载荷,
 //     与聊天引擎 toolExecutionErrorPayload 的历史契约形状一致)
+//   result.details.workspace       → 首个 text 条目的 metadata.workspace(P3:我们的
+//     customTools 打包的 diff/exitCode 等结构化细节,还原口径与聊天引擎
+//     runtime.toToolResult 逐字一致——前端渲染器与安卓导出适配层吃同一形状)
 //   bash_execution_update          → tool_result(增量累加;仅当该工具卡未被
 //     tool_execution_update 通道认领,防双写。P3 我们的 bash customTool 若经
 //     session.executeBash({id: toolCallId}) 流式输出,即由此通道回写)
@@ -66,6 +69,36 @@ function contentText(content: readonly (TextContent | ImageContent)[]): string {
     .filter((item): item is TextContent => item.type === "text")
     .map((item) => item.text)
     .join("\n");
+}
+
+/** pi 工具结果的宽松视图(AgentToolResult;details 只认我们 customTools 打的
+ *  {workspace:{tool,details}} 标记,其他引擎侧 details 不进 part)。 */
+interface PiToolResultView {
+  content?: (TextContent | ImageContent)[];
+  details?: unknown;
+}
+
+function workspaceMetadataOf(details: unknown): Record<string, JsonValue> | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const workspace = (details as Record<string, unknown>).workspace;
+  if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return null;
+  return { workspace: workspace as JsonValue };
+}
+
+/** 工具结果 → ToolOutputEntry[](tool_execution_update/end 共用)。metadata 附着规则
+ *  与聊天引擎 runtime.toToolResult 逐字一致:挂首个 text 条目;无 text 条目而 details
+ *  存在时,补一个空 text 载体。 */
+export function mapPiToolResult(result: PiToolResultView | undefined): ToolOutputEntry[] {
+  const entries = result?.content?.length ? mapPiToolContent(result.content) : [];
+  const metadata = workspaceMetadataOf(result?.details);
+  if (!metadata) return entries;
+  const firstText = entries.find(
+    (entry): entry is Extract<ToolOutputEntry, { type: "text" }> =>
+      typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "text",
+  );
+  if (firstText) firstText.metadata = metadata;
+  else entries.push({ type: "text", text: "", metadata });
+  return entries;
 }
 
 /** 桥观察到的会话终局(runner 据此决定 return / throw)。 */
@@ -209,23 +242,20 @@ export function createPiEventBridge() {
       case "tool_execution_update": {
         const entry = card(event.toolCallId);
         entry.outputMode = "partial-result";
-        const partial = event.partialResult as { content?: (TextContent | ImageContent)[] } | undefined;
+        const partial = event.partialResult as PiToolResultView | undefined;
         if (!partial?.content?.length) return [];
-        return [{ kind: "tool_result", toolCallId: event.toolCallId, output: mapPiToolContent(partial.content) }];
+        return [{ kind: "tool_result", toolCallId: event.toolCallId, output: mapPiToolResult(partial) }];
       }
       case "tool_execution_end": {
         executing.delete(event.toolCallId);
-        const result = event.result as { content?: (TextContent | ImageContent)[] } | undefined;
+        const result = event.result as PiToolResultView | undefined;
         if (event.isError) {
-          // 历史契约:失败工具的 output 是 {error} 裸载荷(前端与消息回放层按此解析)。
+          // 历史契约:失败工具的 output 是 {error} 裸载荷(前端与消息回放层按此解析;
+          // 与聊天引擎 toolExecutionErrorPayload 一致,失败不附 metadata)。
           const text = result?.content?.length ? contentText(result.content) : "Tool execution failed";
           return [{ kind: "tool_result", toolCallId: event.toolCallId, output: [{ error: text }] }];
         }
-        return [{
-          kind: "tool_result",
-          toolCallId: event.toolCallId,
-          output: result?.content?.length ? mapPiToolContent(result.content) : [],
-        }];
+        return [{ kind: "tool_result", toolCallId: event.toolCallId, output: mapPiToolResult(result) }];
       }
       case "bash_execution_update": {
         // 归属仲裁:显式 id 优先;无 id 时仅当恰有一个工具在执行。找不到归属或该卡已被
