@@ -211,8 +211,9 @@ export function loadConversationMetasFromDb(db: InstanceType<typeof Database>): 
   }));
 }
 
-/** pi_compactions 列(JSON 数组)解析:空/损坏/非数组回 null(= 无压缩记录)。 */
-function safeParseJsonArray(text: string | null | undefined): JsonValue[] | null {
+/** pi_compactions 列(JSON 数组)解析:空/损坏/非数组回 null(= 无压缩记录)。
+ *  read-queries.ts 复用本函数(同口径),不再私有复制。 */
+export function safeParseJsonArray(text: string | null | undefined): JsonValue[] | null {
   if (!text) return null;
   try {
     const parsed: unknown = JSON.parse(text);

@@ -326,14 +326,18 @@ function insertInjectionMessages(items: Message[], targetIndex: number, injectio
   items.splice(insertIndex, 0, ...messages);
 }
 
-export function applyPromptInjectionsToMessages(messages: Message[], injections: Array<Record<string, JsonValue>>) {
+export function applyPromptInjectionsToMessages(
+  messages: Message[],
+  injections: Array<Record<string, JsonValue>>,
+  options?: { skipSystem?: boolean },
+) {
   const result = messages.map((item) => cloneJson(item));
   const systemIndex = result.findIndex((item) => item.role === "SYSTEM");
   const systemContent = systemIndex >= 0 ? applySystemPromptInjections(textFromParts(result[systemIndex].parts), injections) : "";
   if (systemIndex >= 0) {
     if (systemContent) result[systemIndex] = { ...result[systemIndex], parts: [{ type: "text", text: systemContent }] };
     else result.splice(systemIndex, 1);
-  } else {
+  } else if (!options?.skipSystem) {
     const injectedSystem = applySystemPromptInjections("", injections);
     if (injectedSystem) result.unshift(message("SYSTEM", [{ type: "text", text: injectedSystem }]));
   }

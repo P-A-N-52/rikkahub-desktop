@@ -4,9 +4,12 @@
 // (P7:上下文从 history 灌注,零 jsonl)→ 事件桥 → sink。覆盖:首轮生成、DB 历史
 // 灌注回放(硬证据:上游请求体携带灌注的历史)、既有压缩记录重放(pi 引擎上下文
 // 以摘要起头=编码器 appendCompaction 语义生效)、手动压缩捕获、预中止。
-// 自动压缩(threshold/overflow)的触发条件由 pi 内部按"本会话内真实 usage"判定,
-// 灌注存量消息 usage 恒 0(zeroUsage)不参与计量——该路径由 capturedCompactions 的
-// 捕获单元(context-encoder.test 的压缩记录重放 + 本文件手动压缩端到端)共同钉住。
+//
+// 生产语义 + 零落盘契约:pi 自动压缩(threshold/overflow)由引擎按"本会话内真实
+// usage"判定,灌注存量消息 usage 恒 0(zeroUsage)不参与计量——自动压缩只在真实
+// 长会话里自然触发,测试环境不复现。该路径的正确性由 capturedCompactions 的捕获
+// 单元(context-encoder.test 的压缩记录重放 + 本文件手动压缩端到端)共同钉住;
+// inMemory 会话的零文件生命周期即 P7 契约本身。
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";

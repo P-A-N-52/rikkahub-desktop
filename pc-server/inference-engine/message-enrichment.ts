@@ -1,0 +1,255 @@
+// inference-engine/message-enrichment.ts — 会话消息 → 模型视野的引擎无关富化层
+//
+// 定位:把"DB 里用户写的消息"变成"模型该看到的消息"的全部文本加工集中在一处,
+// 聊天引擎(conversation-encoding)与 pi 工作区引擎(orchestrator → context-encoder)
+// 共用同一份裁决——四件套(消息模板/时间提醒/lorebook+模式注入/上下文滞回截断)
+// 从此与"谁跑 agent 循环"无关。新增引擎接进来的唯一义务:先过 enrichMessages,
+// 再按自己的协议编码。
+//
+// 幂等纪律(双引擎分层的接缝):注入/提醒产生的是合成消息,不进 DB。EnrichResult
+// 用 syntheticIds 显式列出它们的 id——pi 编码器第二轮起按 id 剥除后从 DB 原文
+// 重新富化,注入语义"每次生成重新裁决"不变(安卓 PromptInjectionTransformer 同
+// 语义),DB 里永远不会沉淀出第二条 lorebook 正文。消息对象本身零改动(不挂
+// metadata 标记,不扩 Message 类型)。
+//
+// 稳定→易变排序的缓存哲学与 conversationTransformedMessages 一致:系统位注入
+// (before/after_system_prompt)不进本层消息序列,由调用方并入各自的系统提示词面
+// (聊天引擎:internalMessages[0];pi:appendSystemPrompt 条目),保证聊天位序列稳定。
+
+import type { Assistant, Conversation, JsonValue, Message, MessagePart, Model } from "../foundation/types";
+import { applyPlaceholders, cloneJson, getStringArray, message, textFromParts } from "../foundation/utils";
+import { state } from "../persistence/json-store";
+import {
+  activePromptInjections as activePromptInjectionsCore,
+  applyMessageTemplateToParts,
+  applyPromptInjectionsToMessages,
+  templateVariables as templateVariablesCore,
+} from "../assistants";
+
+// ---- 模板变量(与 conversation-encoding.templateVariables 同一装配,集中到此) ----
+
+export function templateVariables(messageText: string, role: string, assistant: Assistant, modelItem: Model, at?: Date) {
+  return templateVariablesCore(
+    messageText,
+    role,
+    assistant,
+    modelItem,
+    String(state.settings.displaySetting.userNickname ?? "").trim() || "User",
+    at,
+  );
+}
+
+// ---- 时间提醒(逐字搬迁自 conversation-encoding.timeReminderContent) ----
+
+function messageTimestamp(msg: Message): Date | undefined {
+  const parsed = Date.parse(String(msg.createdAt ?? ""));
+  return Number.isFinite(parsed) ? new Date(parsed) : undefined;
+}
+
+function timeReminderContent(current: Message, previous?: Message) {
+  const currentTime = new Date(current.createdAt);
+  const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(currentTime);
+  const timeText = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(currentTime);
+  if (!previous) return `<time_reminder>Current time: ${weekday}, ${timeText}</time_reminder>`;
+  const gapSeconds = Math.floor((Date.parse(current.createdAt) - Date.parse(previous.createdAt)) / 1000);
+  // createdAt 不可解析时 gapSeconds 为 NaN(NaN<=3600 为 false),原实现会输出 "NaN d",
+  // 用否定式条件一并挡掉;间隔 <=1h 不提醒,故不存在分钟级分支。
+  if (!(gapSeconds > 3600)) return "";
+  const gapText = gapSeconds < 86400
+    ? `${Math.floor(gapSeconds / 3600)} h`
+    : `${Math.floor(gapSeconds / 86400)} d`;
+  return `<time_reminder>Current time: ${weekday}, ${timeText} (${gapText} since last message)</time_reminder>`;
+}
+
+/** 在 USER 消息前插时间提醒(首条 USER 恒提醒,后续间隔 >1h 提醒)。
+ *  previousUserMessage: 调用方若已把 system 等前缀拼在序列前,传最后一条非 USER
+ *  消息作为"首条 USER 的前一条"基准,保持与聊天引擎原语义(首条提醒看 gap)一致。
+ *  返回新数组;提醒消息是新对象,调用方经 EnrichResult.syntheticIds 识别。 */
+export function applyTimeReminders(
+  messages: Message[],
+  assistant: Assistant,
+  previousUserMessage?: Message,
+): { messages: Message[]; syntheticIds: Set<string> } {
+  if (!assistant.enableTimeReminder) return { messages, syntheticIds: new Set() };
+  const out: Message[] = [];
+  const syntheticIds = new Set<string>();
+  let firstUserReminderInjected = false;
+  let previous = previousUserMessage;
+  for (const selected of messages) {
+    if (selected.role === "USER") {
+      const reminder = timeReminderContent(selected, firstUserReminderInjected ? previous : undefined);
+      if (reminder) {
+        const reminderMessage = message("USER", [{ type: "text", text: reminder }]);
+        syntheticIds.add(reminderMessage.id);
+        out.push(reminderMessage);
+      }
+      firstUserReminderInjected = true;
+    }
+    out.push(selected);
+    previous = selected;
+  }
+  return { messages: out, syntheticIds };
+}
+
+// ---- lorebook / 模式注入 ----
+
+export interface ConversationInjectionOverride {
+  modeInjectionIds: string[];
+  lorebookIds: string[];
+}
+
+/** 生效注入集合(专题9:助手允许会话级绑定时,生效 id 集完全来自会话)。 */
+export function activePromptInjections(
+  conversation: Conversation,
+  assistant: Assistant,
+  messages: Message[],
+): Array<Record<string, JsonValue>> {
+  const override = assistant.allowConversationPromptInjection === true
+    ? {
+        modeInjectionIds: getStringArray(conversation.modeInjectionIds),
+        lorebookIds: getStringArray(conversation.lorebookIds),
+      }
+    : undefined;
+  return activePromptInjectionsCore(assistant, messages, state.settings.lorebooks, state.settings.modeInjections, override);
+}
+
+/** 注入按位置分两路:系统位(before/after_system_prompt)返回文本,由调用方并入
+ *  系统提示词面;聊天位(top/bottom/at_depth)走 applyPromptInjectionsToMessages
+ *  插队,插队消息带 enrich:synthetic 标记。 */
+export function splitInjectionsByPlacement(injections: Array<Record<string, JsonValue>>) {
+  const system = injections.filter((injection) => {
+    const position = String(injection.position ?? "").toLowerCase();
+    return position === "before_system_prompt" || position === "after_system_prompt";
+  });
+  const chat = injections.filter((injection) => {
+    const position = String(injection.position ?? "").toLowerCase();
+    return position !== "before_system_prompt" && position !== "after_system_prompt";
+  });
+  return { system, chat };
+}
+
+// ---- 消息模板(占位符 + 模板包装,逐消息应用) ----
+
+/** 对单条消息应用占位符(非 ASSISTANT 的 {{message}} 等)与模板包装。
+ *  与 conversation-encoding 里两条消费路径(OpenAI messages / Responses input)
+ *  共用的 per-message 加工,抽出来供 pi 编码器复用。 */
+export function applyTemplateToMessage(
+  selected: Message,
+  template: string,
+  role: string,
+  assistant: Assistant,
+  modelItem: Model,
+): MessagePart[] {
+  const rawContent = textFromParts(selected.parts);
+  const messageAt = messageTimestamp(selected);
+  if (selected.role === "ASSISTANT") {
+    // 助手消息无占位符展开(rawContent 不进模板变量),只套模板。
+    return applyMessageTemplateToParts(selected.parts, "assistant", template, messageAt);
+  }
+  const placeholderParts = selected.parts.map((part) =>
+    part.type === "text"
+      ? { ...part, text: applyPlaceholders(String(part.text ?? ""), templateVariables(rawContent, role, assistant, modelItem, messageAt)) }
+      : part,
+  );
+  return applyMessageTemplateToParts(placeholderParts, role, template, messageAt);
+}
+
+// ---- 上下文滞回截断(专题11-P2-1) ----
+
+/** 滞回窗口起点:limit>0 且超长时,起点按步长 S=ceil(limit×0.2) 量化前移。
+ *  与 conversationTransformedMessages 同一公式,抽出来供两引擎共用。 */
+export function truncationStartFor(messageCount: number, contextLimit: number): number {
+  if (!(contextLimit > 0) || messageCount <= contextLimit) return 0;
+  const step = Math.max(1, Math.ceil(contextLimit * 0.2));
+  return Math.floor((messageCount - contextLimit) / step) * step;
+}
+
+// ---- 主编排:富化管线(两引擎共用) ----
+
+export interface EnrichOptions {
+  conversation: Conversation;
+  assistant: Assistant;
+  model: Model;
+  /** 剥除指定 id 的合成消息(pi 编码器第二轮起:传入上一轮的 syntheticIds)。 */
+  stripSyntheticIds?: Set<string>;
+  /** 时间提醒的"首条 USER 前一条"基准(聊天引擎传 system 消息,pi 路径无此前缀)。 */
+  timeReminderAnchor?: Message;
+}
+
+export interface EnrichResult {
+  /** 富化后的消息序列(系统位注入不在内——那是系统提示词面的事)。 */
+  messages: Message[];
+  /** 系统位注入文本(before/after 已按序拼接;调用方并入系统提示词面)。 */
+  systemInjectionBefore: string;
+  systemInjectionAfter: string;
+  /** 命中的注入条目(诊断/测试断言用)。 */
+  injections: Array<Record<string, JsonValue>>;
+  /** 本轮产生的合成消息 id(时间提醒/聊天位注入);pi 编码器据此在下轮剥除。 */
+  syntheticIds: Set<string>;
+}
+
+/** 消息富化主管线:截断 → 模板/占位符 → 时间提醒 → 注入(聊天位)。
+ *  系统位注入单列返回。产物 messages 已完成模板渲染——调用方(聊天编码器/pi 编码器)
+ *  直接消费,不得再套 applyMessageTemplateToParts,否则 {{message}} 会被双重包装。
+ *  纯函数:不改 conversation/assistant,合成消息 id 经 syntheticIds 显式返回。 */
+export function enrichMessages(baseMessages: Message[], options: EnrichOptions): EnrichResult {
+  const { conversation, assistant, model } = options;
+  const template = assistant.messageTemplate?.trim() || "{{ message }}";
+
+  // 0. pi 路径第二轮起:剥除上一轮的合成消息(按 id),从 DB 原文重新富化。
+  const source = options.stripSyntheticIds?.size
+    ? baseMessages.filter((msg) => !options.stripSyntheticIds!.has(msg.id))
+    : baseMessages;
+
+  // 1. 上下文滞回截断(与聊天引擎同一裁决;pi 侧与 keepRecentTokens 并存——
+  //    富化层决定"哪些消息有资格进上下文",pi 内部截断是引擎自己的安全网)。
+  const start = truncationStartFor(source.length, assistant.contextMessageLimit);
+  const windowed = start > 0 ? source.slice(start) : source;
+
+  // 2. 模板/占位符逐消息渲染(一次到位:pi 编码器与聊天编码器吃同一份渲染产物)。
+  const templated = windowed.map((msg) => {
+    const role = msg.role === "SYSTEM" ? "system" : msg.role === "TOOL" ? "tool" : msg.role === "ASSISTANT" ? "assistant" : "user";
+    return { ...msg, parts: applyTemplateToMessage(msg, template, role, assistant, model) };
+  });
+
+  // 3. 时间提醒(在模板之后、注入之前——提醒本身不套模板,与聊天引擎现状一致)。
+  const { messages: withReminders, syntheticIds: reminderIds } = applyTimeReminders(
+    templated,
+    assistant,
+    options.timeReminderAnchor,
+  );
+
+  // 4. lorebook/模式注入:系统位文本抽出,聊天位消息插队(合成 id 并入返回集)。
+  //    skipSystem:true——系统位已由调用方(聊天引擎 systemParts / pi appendSystemPrompt)
+  //    承载,消息序列里不再 unshift 合成 SYSTEM。
+  const injections = activePromptInjections(conversation, assistant, withReminders);
+  const { system, chat } = splitInjectionsByPlacement(injections);
+  const withRemindersIds = new Set(withReminders.map((msg) => msg.id));
+  const injected = applyPromptInjectionsToMessages(withReminders, chat, { skipSystem: true });
+  const syntheticIds = new Set(reminderIds);
+  for (const msg of injected) {
+    if (!withRemindersIds.has(msg.id)) syntheticIds.add(msg.id);
+  }
+
+  const systemTextOf = (position: string) =>
+    system
+      .filter((injection) => String(injection.position ?? "").toLowerCase() === position)
+      .map((injection) => String(injection.content ?? "").trim())
+      .filter(Boolean)
+      .join("\n");
+
+  return {
+    messages: injected,
+    systemInjectionBefore: systemTextOf("before_system_prompt"),
+    systemInjectionAfter: systemTextOf("after_system_prompt"),
+    injections,
+    syntheticIds,
+  };
+}
+
+/** pi 编码器入口前的最终一步:把富化产物剥回"可编码"形状。
+ *  合成消息(提醒/注入)不进引擎上下文——它们由每轮富化重新裁决;
+ *  真实消息按富化后的 parts 编码(模板已渲染)。 */
+export function encodableMessages(enriched: Message[], syntheticIds: Set<string>): Message[] {
+  return enriched.filter((msg) => !syntheticIds.has(msg.id)).map((msg) => cloneJson(msg));
+}

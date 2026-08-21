@@ -8,7 +8,8 @@
 //   JS 侧处理换来与旧行为的逐字等价。SQL 只负责 WHERE assistant_id 与基准排序。
 // - 返回的对象是一次性快照，**不得修改**——它们不在 working set 里，改了既不持久化也不广播。
 import type { Database } from "bun:sqlite";
-import type { Conversation, JsonValue } from "../foundation/types";
+import type { Conversation } from "../foundation/types";
+import { safeParseJsonArray } from "./index";
 
 /** 会话元数据（messages 恒为空数组）。形状与 Conversation 一致以复用 toListDto 等既有转换。 */
 export type ConversationMeta = Conversation;
@@ -58,22 +59,11 @@ function rowToMeta(row: MetaRow): ConversationMeta {
     lorebookIds: parseIdArray(row.lorebook_ids),
     workspaceId: row.workspace_id ?? null,
     workspaceCwd: row.workspace_cwd ?? null,
-    piCompactions: safeParseCompactions(row.pi_compactions),
+    piCompactions: safeParseJsonArray(row.pi_compactions),
   };
 }
 
 const META_COLUMNS = "id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd, pi_compactions";
-
-/** pi_compactions 列解析(与 conversations/index.ts safeParseJsonArray 同口径)。 */
-function safeParseCompactions(text: string | null | undefined): JsonValue[] | null {
-  if (!text) return null;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as JsonValue[]) : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 某助手的全部会话元数据，ORDER BY create_at DESC, id DESC——

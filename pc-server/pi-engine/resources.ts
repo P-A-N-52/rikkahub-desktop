@@ -30,7 +30,7 @@ import type { Assistant, Conversation, Model } from "../foundation/types";
 import { getStringArray, renderTemplate } from "../foundation/utils";
 import { piAgentDir, skillsDir } from "../foundation/paths";
 import { frozenContextBlocks } from "../inference-engine/context-snapshots";
-import { templateVariables } from "../inference-engine/conversation-encoding";
+import { templateVariables } from "../inference-engine/message-enrichment";
 import { buildSearchContext } from "../search";
 import { reportError } from "../observability/app-errors";
 
@@ -97,6 +97,7 @@ export function buildPiAppendSystemPrompt(
   conversation: Conversation,
   assistant: Assistant,
   model: Model,
+  extra?: string[],
 ): string[] {
   const [memoryBlock, recentChatsBlock] = frozenContextBlocks(assistant, conversation.id);
   return [
@@ -104,6 +105,7 @@ export function buildPiAppendSystemPrompt(
     buildSearchContext(),
     memoryBlock,
     recentChatsBlock,
+    ...(extra ?? []),
     stableGuidanceLines(),
   ].filter(Boolean);
 }
@@ -119,12 +121,12 @@ function isWithinRoot(path: string, root: string): boolean {
   return target === rootCmp || target.startsWith(rootCmp.endsWith(sep) ? rootCmp : rootCmp + sep);
 }
 
-// ---- diagnostics 上报(进程级去重:同一告警每轮 reload 都会重现,只报一次) ----
+// ---- diagnostics 上报(按内容键控:同一告警重复 reload 只报一次,内容变了复报) ----
 
 const reportedDiagnostics = new Set<string>();
 
-/** 单测隔离用。 */
-export function resetReportedSkillDiagnostics(): void {
+/** 技能开关/库路径变更后调用,让同一告警在新配置下重新评估是否上报。 */
+export function invalidateReportedSkillDiagnostics(): void {
   reportedDiagnostics.clear();
 }
 
@@ -141,8 +143,11 @@ export async function createPiSessionResources(options: {
   cwd: string;
   /** 工作区边界根(AGENTS.md 过滤基准)。 */
   root: string;
+  /** P8 注入面统一:lorebook/模式注入的系统位文本(before/after_system_prompt),
+   *  追加在人设/记忆之后、stableGuidanceLines 之前——与聊天引擎 systemParts 同位。 */
+  extraAppendSystemPrompt?: string[];
 }): Promise<PiSessionResources> {
-  const { conversation, assistant, model, cwd, root } = options;
+  const { conversation, assistant, model, cwd, root, extraAppendSystemPrompt } = options;
   // inMemory:零文件 I/O(不读不写任何 settings.json);projectTrusted:false 是给
   // resource-loader 的发现逻辑看的(.pi/SYSTEM.md 门控)。压缩面 P5 接管:threshold/
   // overflow 自动压缩显式开启(数值与 pi 默认一致,但不再依赖库默认值漂移),
@@ -169,7 +174,7 @@ export async function createPiSessionResources(options: {
     agentsFilesOverride: ({ agentsFiles }) => ({
       agentsFiles: agentsFiles.filter((file) => isAbsolute(file.path) && isWithinRoot(file.path, root)),
     }),
-    appendSystemPrompt: buildPiAppendSystemPrompt(conversation, assistant, model),
+    appendSystemPrompt: buildPiAppendSystemPrompt(conversation, assistant, model, extraAppendSystemPrompt),
   });
   // sdk 只对自建 loader 调 reload(sdk.ts:182-186),外部传入的必须自己加载。
   await resourceLoader.reload();

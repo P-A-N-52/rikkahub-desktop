@@ -1,9 +1,16 @@
 // pi-engine/context-encoder.ts — DB 会话历史 → pi 引擎上下文灌注(P7 会话数据统一)
 //
-// 定位:SQLite 是两种模式共用的唯一事实源。每轮把"UI 可见的选中路径历史"确定性重建为
-// pi 引擎消息,灌入 SessionManager.inMemory(),由 createAgentSession 在构造点消费
-// (sdk.ts:188 buildSessionContext,与 jsonl 恢复走同一内部路径)。UI 编辑/重生成/fork
-// 从此真正改写引擎记忆——所见即所记,双表征的"引擎只追加、UI 可截断"容忍分叉消失。
+// 定位:SQLite 是两种模式共用的唯一事实源。每轮把"UI 可见的选中路径历史"经
+// message-enrichment 富化(模板/提醒/注入/截断)后,确定性重建为 pi 引擎消息,
+// 灌入 SessionManager.inMemory(),由 createAgentSession 在构造点消费
+// (sdk.ts:188 buildSessionContext,与 jsonl 恢复走同一内部路径)。UI 编辑/重生成/
+// fork 从此真正改写引擎记忆——所见即所记,双表征的"引擎只追加、UI 可截断"容忍
+// 分叉消失。
+//
+// 富化与保真的接缝(P8):模板渲染会改变文本长度,fidelity 注解的 len 按原始 parts
+// 记录——takeText 的 charOffset + len > full.length 判定会让整行自动退化 legacy,
+// 剥 thinking 后重放。这是设计内行为(编辑即退化),不是缺陷;合成消息(提醒/注入)
+// 由 orchestrator 经 encodableMessages 剥除,不进本编码器。
 //
 // 确定性=缓存稳定性(§4.8 硬约束):同一历史两次编码逐字节一致(单测锁定)。所有输入
 // 均来自行级数据(parts/annotations/createdAt/modelId),不掺时钟与随机数;附件文本化
