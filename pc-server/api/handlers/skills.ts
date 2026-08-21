@@ -4,13 +4,15 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { state } from "../../persistence/json-store";
-import { defaultSkillContent, listSkillFiles, listSkills, parseSkillFrontmatter, readSkillContent, safeSkillDir, skillMetadataFromFile } from "../../tools/skills";
+import { defaultSkillContent, listSkillFiles, listSkillsWithDiagnostics, parseSkillFrontmatter, readSkillContent, safeSkillDir, skillMetadataFromFile } from "../../tools/skills";
 import { error, json, readJson } from "../request";
 import { updateSettings } from "../../app-config";
 import { importSkillFromBuffer, importSkillFromGitHub } from "../../tools/skills-import";
 
 export async function handleSkillRoutes(request: Request, _url: URL, path: string): Promise<Response | null> {
-  if (path === "skills" && request.method === "GET") return json(listSkills());
+  // P4:列表带诊断(available=false 的技能 pi 拒加载,前端内联警告;字段只增不减,
+  // 旧消费方向后兼容)。
+  if (path === "skills" && request.method === "GET") return json(listSkillsWithDiagnostics());
   const skillFiles = path.match(/^skills\/([^/]+)\/files$/);
   if (skillFiles && request.method === "GET") {
     const name = decodeURIComponent(skillFiles[1]);

@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Plus,
   Trash2,
+  TriangleAlert,
   Upload,
   WandSparkles,
 } from "lucide-react";
@@ -49,6 +50,10 @@ interface SkillProfile {
   compatibility?: string;
   allowedTools?: string[];
   content?: string;
+  // P4 规范化诊断(后端 listSkillsWithDiagnostics):available=false 表示引擎拒绝加载
+  // (description 缺失);issues 是逐字镜像 pi 校验规则的英文技术文案,原样内联展示。
+  available?: boolean;
+  issues?: Array<{ level: "error" | "warning"; message: string }>;
 }
 
 export function McpExtensionsSection({
@@ -1783,12 +1788,20 @@ function SkillsEditor({
       renderItem={(item) => {
         const name = textValue(item.name);
         const enabled = (assistant.enabledSkills as string[] | undefined)?.includes(name) ?? false;
+        const issues = (item.issues as SkillProfile["issues"]) ?? [];
+        const hasError = item.available === false || issues.some((issue) => issue.level === "error");
         return (
           <div className="flex min-w-0 items-center gap-2 text-left">
             <span
               className={`size-2 shrink-0 rounded-full ${enabled ? "bg-emerald-500" : "bg-red-500"}`}
             />
             <span className="block min-w-0 truncate font-medium">{name}</span>
+            {issues.length > 0 ? (
+              <TriangleAlert
+                className={`size-3.5 shrink-0 ${hasError ? "text-red-500" : "text-amber-500"}`}
+                aria-label={issues.map((issue) => issue.message).join("; ")}
+              />
+            ) : null}
           </div>
         );
       }}
@@ -1876,6 +1889,22 @@ function SkillsEditor({
         {selectedSkill?.description ? (
           <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
             {selectedSkill.description}
+          </div>
+        ) : null}
+        {selectedSkill?.issues?.length ? (
+          <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+            <div className="text-xs font-medium">{t("settings:mcp.skill_issues_title")}</div>
+            {selectedSkill.available === false ? (
+              <div className="text-xs text-red-500">{t("settings:mcp.skill_unavailable_hint")}</div>
+            ) : null}
+            {selectedSkill.issues.map((issue) => (
+              <div
+                key={issue.message}
+                className={`font-mono text-xs ${issue.level === "error" ? "text-red-500" : "text-amber-600 dark:text-amber-400"}`}
+              >
+                {issue.message}
+              </div>
+            ))}
           </div>
         ) : null}
         <div className="rounded-md border">

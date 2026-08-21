@@ -113,7 +113,13 @@
       "preview_truncated": "文件过大，仅显示前 512KB",
       "binary_preview": "二进制文件（{{size}}），无法预览",
       "workspace_missing": "工作区不存在或已删除",
-      "failed": "操作失败"
+      "failed": "操作失败",
+      "agents_edit": "编辑 AGENTS.md",
+      "agents_dialog_title": "编辑 {{name}}",
+      "agents_dialog_create_hint": "此工作区还没有项目指引文件。以下是一份默认模板，保存后将创建 AGENTS.md，AI 在该工作区工作时会读取它。",
+      "agents_dialog_edit_hint": "AI 在该工作区工作时会读取此文件中的项目指引（保存后新一轮对话生效）。",
+      "agents_save": "保存",
+      "agents_saved": "AGENTS.md 已保存"
     }
   },
   "custom_theme_dialog": {

@@ -637,6 +637,8 @@
     "skill_imported": "Skill imported: {{name}}",
     "import_failed": "Import failed",
     "empty_skill": "No skills yet",
+    "skill_issues_title": "Validation",
+    "skill_unavailable_hint": "description is missing, so the AI engine will not load this skill (add it to the SKILL.md frontmatter)",
     "delete_skill_confirm": "Delete this skill?",
     "import_github": "Import from GitHub",
     "github_url_ph": "https://github.com/owner/repo or /tree/branch/sub/path",

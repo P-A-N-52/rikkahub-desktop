@@ -2,6 +2,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
+  BookOpenText,
   ChevronDown,
   ChevronRight,
   File,
@@ -30,6 +31,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { Textarea } from "~/components/ui/textarea";
 import { extractErrorMessage } from "~/lib/error";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
@@ -53,6 +55,15 @@ type FilePreview =
   | { kind: "image"; dataUrl: string; size: number }
   | { kind: "binary"; size: number };
 
+// AGENTS.md 编辑入口(P4,方案 §3.3):读写"pi 实际加载的项目上下文文件"
+// (AGENTS.md/CLAUDE.md 候选,后端裁定);无则以默认模板引导创建。
+interface AgentsFileState {
+  fileName: string;
+  exists: boolean;
+  content: string;
+  template: string;
+}
+
 function joinRel(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
 }
@@ -74,6 +85,10 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
   const [preview, setPreview] = React.useState<{ path: string; data: FilePreview | null } | null>(null);
   const [renameTarget, setRenameTarget] = React.useState<{ path: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ path: string; isDir: boolean } | null>(null);
+  // null=关闭;{data:null}=加载中。draft 独立受控,取消不落盘。
+  const [agentsDialog, setAgentsDialog] = React.useState<{ data: AgentsFileState | null } | null>(null);
+  const [agentsDraft, setAgentsDraft] = React.useState("");
+  const [agentsSaving, setAgentsSaving] = React.useState(false);
 
   const loadDir = React.useCallback(
     async (relPath: string) => {
@@ -155,6 +170,34 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
       await api.post(`workspaces/${workspaceId}/files/reveal`, { path: relPath });
     } catch (err) {
       toast.error(extractErrorMessage(err, t("workbench.files.failed")));
+    }
+  };
+
+  const openAgentsDialog = async () => {
+    setAgentsDialog({ data: null });
+    try {
+      const res = await api.get<{ agentsFile: AgentsFileState }>(`workspaces/${workspaceId}/agents-file`);
+      setAgentsDialog((current) => (current ? { data: res.agentsFile } : current));
+      setAgentsDraft(res.agentsFile.exists ? res.agentsFile.content : res.agentsFile.template);
+    } catch (err) {
+      toast.error(extractErrorMessage(err, t("workbench.files.failed")));
+      setAgentsDialog(null);
+    }
+  };
+
+  const saveAgentsFile = async () => {
+    if (!agentsDialog?.data) return;
+    setAgentsSaving(true);
+    try {
+      const wasNew = !agentsDialog.data.exists;
+      await api.put(`workspaces/${workspaceId}/agents-file`, { content: agentsDraft });
+      toast.success(t("workbench.files.agents_saved"));
+      setAgentsDialog(null);
+      if (wasNew) void loadDir(""); // 新建文件后根目录列表出现 AGENTS.md
+    } catch (err) {
+      toast.error(extractErrorMessage(err, t("workbench.files.failed")));
+    } finally {
+      setAgentsSaving(false);
     }
   };
 
@@ -277,6 +320,16 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
           type="button"
           size="icon-sm"
           variant="ghost"
+          aria-label={t("workbench.files.agents_edit")}
+          title={t("workbench.files.agents_edit")}
+          onClick={() => void openAgentsDialog()}
+        >
+          <BookOpenText className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
           aria-label={t("workbench.files.refresh")}
           onClick={() => {
             setChildren({});
@@ -307,6 +360,42 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
               <Button type="submit">{t("workbench.files.confirm")}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={agentsDialog !== null} onOpenChange={(open) => { if (!open) setAgentsDialog(null); }}>
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {t("workbench.files.agents_dialog_title", { name: agentsDialog?.data?.fileName ?? "AGENTS.md" })}
+            </DialogTitle>
+            <DialogDescription>
+              {agentsDialog?.data && !agentsDialog.data.exists
+                ? t("workbench.files.agents_dialog_create_hint")
+                : t("workbench.files.agents_dialog_edit_hint")}
+            </DialogDescription>
+          </DialogHeader>
+          {agentsDialog?.data === null ? (
+            <div className="flex h-48 items-center justify-center">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <Textarea
+              value={agentsDraft}
+              onChange={(event) => setAgentsDraft(event.target.value)}
+              spellCheck={false}
+              className="min-h-64 flex-1 resize-none font-mono text-xs leading-5"
+            />
+          )}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setAgentsDialog(null)}>
+              {t("workbench.files.cancel")}
+            </Button>
+            <Button type="button" disabled={agentsSaving || !agentsDialog?.data} onClick={() => void saveAgentsFile()}>
+              {agentsSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t("workbench.files.agents_save")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

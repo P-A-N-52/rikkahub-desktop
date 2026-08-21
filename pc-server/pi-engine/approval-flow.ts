@@ -1,0 +1,51 @@
+// pi-engine/approval-flow.ts — 审批内化生命周期(P3 内联于 workspace-tools,P4 抽取共用)
+//
+// 单一事实源:pending 卡 → approval-gate 等待 → 放行/拒绝/中止收敛的完整状态机。
+// 消费者:workspace-tools(七个工作区工具)与 general-tools(MCP 桥/通用工具)。
+// 两边的差异只在"审批判定"(工作区三档矩阵 vs MCP 档位规则),判定结果作为参数传入,
+// 生命周期本身零分叉——审批语义改版(如 §4.4 回退面)只动这一处。
+//
+// 纪律:与 approval-gate 同族,零 pi 导入(消费方各自持有 pi ToolDefinition 类型),
+// 也不碰 parts/SQLite/SSE——sink 事件由应用器统一落地。
+
+import type { ToolApprovalState } from "../foundation/types";
+import type { GenerationEventSink } from "../inference-engine/events";
+import { waitForToolApproval } from "./approval-gate";
+
+export interface ApprovalFlowContext {
+  conversationId: string;
+  toolCallId: string;
+  sink: GenerationEventSink;
+  signal?: AbortSignal;
+}
+
+/** 走完审批生命周期。approval 为非 pending(auto 等)时立即返回 false(免审执行);
+ *  pending 时挂卡等待:批准 → 收敛 approved 并返回 true(userApproved 知情同意门);
+ *  拒绝 → 收敛 denied 并抛历史契约文案(桥映射为 {error} 载荷,与聊天引擎逐字一致);
+ *  中止 → 卡收敛 denied(绝不悬 pending)再上抛 AbortError,pi 记 error tool result。 */
+export async function gateToolApproval(approval: ToolApprovalState, ctx: ApprovalFlowContext): Promise<boolean> {
+  if (approval.type !== "pending") return false;
+  ctx.sink({ kind: "tool_approval_updated", toolCallId: ctx.toolCallId, approvalState: approval });
+  let decision: { approved: boolean; reason?: string };
+  try {
+    decision = await waitForToolApproval(ctx.conversationId, ctx.toolCallId, ctx.signal);
+  } catch (err) {
+    ctx.sink({
+      kind: "tool_approval_updated",
+      toolCallId: ctx.toolCallId,
+      approvalState: { type: "denied", reason: "Generation stopped before the approval decision" },
+    });
+    throw err;
+  }
+  if (!decision.approved) {
+    ctx.sink({
+      kind: "tool_approval_updated",
+      toolCallId: ctx.toolCallId,
+      approvalState: { type: "denied", reason: decision.reason ?? "" },
+    });
+    const reason = (decision.reason ?? "").trim() || "No reason provided";
+    throw new Error(`Tool execution denied by user. Reason: ${reason}`);
+  }
+  ctx.sink({ kind: "tool_approval_updated", toolCallId: ctx.toolCallId, approvalState: { type: "approved" } });
+  return true;
+}

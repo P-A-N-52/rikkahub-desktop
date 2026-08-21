@@ -9,10 +9,8 @@
 // 有 snippet 才进 Available tools)。
 //
 // 审批内化(方案 §4.4):execute 里查三档矩阵(tools/approval.initialApprovalState,
-// 与聊天引擎同一判定函数)→ 需审批则经 sink 挂 pending 卡 + approval-gate 登记等待 →
-// 用户决定后放行(userApproved=true,危险命令知情同意门)或拒绝(抛历史契约文案,
-// pi 记为 error tool result,模型看到的拒绝语与聊天引擎逐字一致)。中止时把卡收敛为
-// denied 再上抛——卡绝不悬在 pending。
+// 与聊天引擎同一判定函数)→ 生命周期(挂卡/等待/放行/拒绝/中止收敛)在共享状态机
+// approval-flow.gateToolApproval 里,与 MCP 桥/通用工具(general-tools)同一份。
 //
 // executionMode 全部 "sequential":pi 默认并行执行工具批(agent.ts:230),批内任一
 // sequential 即整批顺序(agent-loop.ts:422)——审批卡"执行到哪个弹哪个"的节奏、
@@ -31,7 +29,7 @@ import type { WorkspaceToolName } from "../workspace/approval";
 import { executeWorkspaceToolCore, jsonSafeDetails, openAiWorkspaceTools } from "../workspace/runtime";
 import type { WorkspaceToolOutput } from "../workspace/tools/types";
 import { prepareEditArguments } from "../workspace/tools/edit";
-import { waitForToolApproval } from "./approval-gate";
+import { gateToolApproval } from "./approval-flow";
 
 type PiToolParameters = ToolDefinition["parameters"];
 type PiToolResult = Awaited<ReturnType<ToolDefinition["execute"]>>;
@@ -99,40 +97,16 @@ function buildTool(
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate) {
       const args = (params ?? {}) as Record<string, JsonValue>;
-      // —— 审批内化:参数齐备的终局判定(与聊天引擎 initialApprovalState 同一函数) ——
+      // —— 审批内化:参数齐备的终局判定(与聊天引擎 initialApprovalState 同一函数),
+      // 生命周期走共享状态机;返回 true = 用户对 pending 卡显式批准,是危险命令
+      // 拦截的知情同意放行门(workspace/runtime.ts),仅此路径可置 true。 ——
       const approval = initialApprovalState(name, ctx.assistant, ctx.conversation, JSON.stringify(args));
-      let userApproved = false;
-      if (approval.type === "pending") {
-        ctx.sink({ kind: "tool_approval_updated", toolCallId, approvalState: approval });
-        let decision: { approved: boolean; reason?: string };
-        try {
-          decision = await waitForToolApproval(ctx.conversation.id, toolCallId, signal);
-        } catch (err) {
-          // 中止(停止生成/生成收尾清扫):卡收敛为 denied,绝不悬在 pending;
-          // 错误上抛后 pi 记 error tool result,引擎记忆与 UI 双双终局。
-          ctx.sink({
-            kind: "tool_approval_updated",
-            toolCallId,
-            approvalState: { type: "denied", reason: "Generation stopped before the approval decision" },
-          });
-          throw err;
-        }
-        if (!decision.approved) {
-          ctx.sink({
-            kind: "tool_approval_updated",
-            toolCallId,
-            approvalState: { type: "denied", reason: decision.reason ?? "" },
-          });
-          // 与聊天引擎拒绝文案逐字一致(orchestrator.executeApprovedToolPart):
-          // 桥把 error tool result 映射为 {error} 载荷,模型与前端看到同一契约。
-          const reason = (decision.reason ?? "").trim() || "No reason provided";
-          throw new Error(`Tool execution denied by user. Reason: ${reason}`);
-        }
-        ctx.sink({ kind: "tool_approval_updated", toolCallId, approvalState: { type: "approved" } });
-        // 用户对 pending 卡显式批准:userApproved 是危险命令拦截的知情同意放行门
-        // (workspace/runtime.ts),仅此路径可置 true——与聊天引擎恢复路径同语义。
-        userApproved = true;
-      }
+      const userApproved = await gateToolApproval(approval, {
+        conversationId: ctx.conversation.id,
+        toolCallId,
+        sink: ctx.sink,
+        signal,
+      });
       const result = await executeWorkspaceToolCore(name, args, {
         conversationId: ctx.conversation.id,
         userApproved,

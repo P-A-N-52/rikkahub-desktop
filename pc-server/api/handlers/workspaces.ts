@@ -4,7 +4,7 @@
 import type { Workspace } from "../../foundation/types";
 import type { WorkspaceDto } from "../../foundation/types/dto";
 import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, trustWorkspace, updateWorkspace, workspaceStatus } from "../../workspace";
-import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, renameWorkspaceEntry, revealWorkspaceEntry } from "../../workspace/files";
+import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, readWorkspaceAgentsFile, renameWorkspaceEntry, revealWorkspaceEntry, writeWorkspaceAgentsFile } from "../../workspace/files";
 import { mountedWorkspaceToolNames, refreshShellAvailability, shellAvailability } from "../../workspace/runtime";
 import { error, json, readJson } from "../request";
 
@@ -94,6 +94,24 @@ export async function handleWorkspaceRoutes(request: Request, _url: URL, path: s
       return null;
     } catch (err) {
       return error(err instanceof Error ? err.message : "文件操作失败", 400);
+    }
+  }
+
+  // ---- AGENTS.md 编辑入口(P4,§3.3):读写 pi 实际加载的项目上下文文件 ----
+  if (sub === "agents-file") {
+    const workspace = getWorkspace(workspaceId);
+    if (!workspace) return error("Workspace not found", 404);
+    try {
+      if (request.method === "GET") {
+        return json({ agentsFile: readWorkspaceAgentsFile(workspace) });
+      }
+      if (request.method === "PUT") {
+        const body = await readJson<{ content?: string }>(request);
+        return json({ agentsFile: writeWorkspaceAgentsFile(workspace, String(body.content ?? "")) });
+      }
+      return null;
+    } catch (err) {
+      return error(err instanceof Error ? err.message : "AGENTS.md 操作失败", 400);
     }
   }
 

@@ -54,6 +54,9 @@ import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/
 import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
 import { runPiGeneration } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
+import { createPiGeneralTools } from "../pi-engine/general-tools";
+import { createPiSessionResources } from "../pi-engine/resources";
+import { piPromptInputFromParts } from "../pi-engine/attachments";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
 import { flushConvDirtyNow, getConversation, getConversationsDb, markConversationRowDirty, markMessageNodeDirty, persistConversation, scheduleThrottledConvFlush } from "./index";
@@ -451,13 +454,17 @@ async function runPostGenerationTasks(conversationId: string, snapshot: Conversa
   }
 }
 
-/** pi 引擎生成装配(P3 路由,方案 §4.2/§4.3):
- *  - promptText 取末 USER 节点选中消息文本(重新生成/编辑重发会向引擎记忆追加同一
- *    用户消息——引擎记忆是工作上下文,可容忍;分支级记忆语义 P5 与 forkFrom 一并裁决);
- *  - 七工具经 customTools 注册,审批内化在工具 execute(pi-engine/workspace-tools.ts);
+/** pi 引擎生成装配(P3 路由 + P4 资源统一,方案 §4.2/§4.3/§三):
+ *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
+ *    图片走 pi 原生 images 通道;重新生成/编辑重发会向引擎记忆追加同一用户消息——
+ *    引擎记忆是工作上下文,可容忍;分支级记忆语义 P5 与 forkFrom 一并裁决);
+ *  - 工具面 = 七个工作区工具 + 通用工具/MCP 桥(P4),审批全部内化在工具 execute;
+ *  - 资源面 = createPiSessionResources(技能白名单/AGENTS.md 边界过滤/人设+记忆冻结
+ *    appendSystemPrompt/受控 settings);
  *  - jsonl 文件名回调即时写列+标脏:流式中途崩溃也不丢"会话↔jsonl"关联。 */
 async function runPiWorkspaceGeneration(
   conversation: Conversation,
+  assistantNode: MessageNode,
   runtime: WorkspaceRuntime,
   deps: { assistant: Assistant; providerItem: Provider; selectedModel: Model },
   sink: GenerationEventSink,
@@ -467,19 +474,33 @@ async function runPiWorkspaceGeneration(
     .reverse()
     .find((node) => (node.messages[node.selectIndex] ?? node.messages[0])?.role === "USER");
   const promptMessage = lastUserNode ? (lastUserNode.messages[lastUserNode.selectIndex] ?? lastUserNode.messages[0]) : null;
-  const promptText = promptMessage ? textFromParts(promptMessage.parts).trim() : "";
-  if (!promptText) {
-    // pi 引擎按"末条用户文本"驱动(附件面 P4);无文本输入直接走失败分支给出人话。
-    throw new Error("工作区会话缺少可发送的用户文本消息,无法驱动工作区引擎。");
+  const promptInput = promptMessage
+    ? piPromptInputFromParts(promptMessage.parts, deps.selectedModel)
+    : { text: "", images: [] };
+  if (!promptInput.text && !promptInput.images.length) {
+    // 无文本且无图片输入直接走失败分支给出人话。
+    throw new Error("工作区会话缺少可发送的用户消息内容,无法驱动工作区引擎。");
   }
+  const resources = await createPiSessionResources({
+    conversation,
+    assistant: deps.assistant,
+    model: deps.selectedModel,
+    cwd: runtime.cwd,
+    root: runtime.root,
+  });
   const result = await runPiGeneration({
     provider: deps.providerItem,
     model: deps.selectedModel,
     conversationId: conversation.id,
     storedSessionFileName: conversation.piSessionFile ?? null,
     cwd: runtime.cwd,
-    promptText,
-    tools: createPiWorkspaceTools({ conversation, assistant: deps.assistant, sink }),
+    promptText: promptInput.text,
+    images: promptInput.images,
+    resources,
+    tools: [
+      ...createPiWorkspaceTools({ conversation, assistant: deps.assistant, sink }),
+      ...createPiGeneralTools({ conversation, assistant: deps.assistant, sink, messageNodeId: assistantNode.id }),
+    ],
     sink,
     signal,
     onSessionFile: (fileName) => {
@@ -515,7 +536,7 @@ async function runGeneration(
   // 工作区不可用(缺根/未信任)回落聊天引擎纯对话——openAiWorkspaceTools 同一判定
   // 返回空工具面,与 M4 降级语义一致。
   if (deps.piRuntime) {
-    return runPiWorkspaceGeneration(conversation, deps.piRuntime, deps, sink, signal);
+    return runPiWorkspaceGeneration(conversation, assistantNode, deps.piRuntime, deps, sink, signal);
   }
   return callProviderStreaming(conversation, assistantMessage, assistantNode, {
     signal,

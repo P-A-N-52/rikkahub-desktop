@@ -3,7 +3,7 @@
 // 边界断言（assertInsideWorkspace：realpath+带分隔符前缀，软链/盘符兄弟目录逃逸同样被抓）。
 // 所有函数以 workspace root 为界；rel 路径来自前端，视作不可信输入。
 
-import { readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import type { Workspace } from "../foundation/types";
@@ -91,6 +91,78 @@ export function deleteWorkspaceEntry(workspace: Workspace, relPath: string): voi
 
 function comparable(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+// ---- AGENTS.md(P4,方案 §3.3:项目级指引 = 工作区根下的真实文件,文件即入口) ----
+
+/** pi 的项目上下文文件候选名(resource-loader.loadContextFileFromDir 逐字同序):
+ *  首个命中者即 pi 实际加载的文件。编辑入口读写"pi 眼中的那个文件",都不存在时
+ *  新建标准名 AGENTS.md。 */
+const PROJECT_CONTEXT_CANDIDATES = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] as const;
+
+const AGENTS_FILE_MAX_BYTES = 512 * 1024;
+
+/** 默认模板(无则引导创建时的初始内容;单一事实源在后端,前端 GET 即得)。 */
+export const DEFAULT_AGENTS_TEMPLATE = `# AGENTS.md
+
+Project-specific instructions for the AI agent working in this workspace.
+
+## Overview
+
+(Describe what this project is and what the agent should know about it.)
+
+## Conventions
+
+- (Coding style, naming, directory layout, tools to prefer or avoid...)
+
+## Boundaries
+
+- (Things the agent must not touch or change without asking.)
+`;
+
+export interface WorkspaceAgentsFile {
+  /** 实际存在的候选文件名;不存在时为将要创建的 "AGENTS.md"。 */
+  fileName: string;
+  exists: boolean;
+  content: string;
+  /** 供前端"新建"时预填的默认模板。 */
+  template: string;
+}
+
+function findProjectContextFile(workspace: Workspace): string | null {
+  for (const name of PROJECT_CONTEXT_CANDIDATES) {
+    const path = join(workspace.root, name);
+    try {
+      if (statSync(path).isFile()) return name;
+    } catch {
+      // 不存在/不可读继续下一个候选
+    }
+  }
+  return null;
+}
+
+export function readWorkspaceAgentsFile(workspace: Workspace): WorkspaceAgentsFile {
+  const found = findProjectContextFile(workspace);
+  if (!found) return { fileName: "AGENTS.md", exists: false, content: "", template: DEFAULT_AGENTS_TEMPLATE };
+  const path = resolveInside(workspace, found);
+  return {
+    fileName: found,
+    exists: true,
+    content: readFileSync(path, "utf-8"),
+    template: DEFAULT_AGENTS_TEMPLATE,
+  };
+}
+
+export function writeWorkspaceAgentsFile(workspace: Workspace, content: string): WorkspaceAgentsFile {
+  if (Buffer.byteLength(content, "utf-8") > AGENTS_FILE_MAX_BYTES) {
+    throw new Error("AGENTS.md is too large (limit 512KB)");
+  }
+  // 写到 pi 实际加载的那个候选(已有 CLAUDE.md 的项目就地编辑,不产生被遮蔽的第二份);
+  // 都没有则新建标准名。候选名是白名单常量,边界断言纯属纪律。
+  const fileName = findProjectContextFile(workspace) ?? "AGENTS.md";
+  const path = assertInsideWorkspace(join(workspace.root, fileName), workspace.root);
+  writeFileSync(path, content, "utf-8");
+  return { fileName, exists: true, content, template: DEFAULT_AGENTS_TEMPLATE };
 }
 
 /** 在系统资源管理器中显示(选中目标)。服务端与用户同机(本地桌面应用),直接 spawn。 */

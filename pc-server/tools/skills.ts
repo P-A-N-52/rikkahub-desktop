@@ -54,15 +54,103 @@ export function skillMetadataFromFile(skillName: string): SkillMetadata | null {
   if (!file || !existsSync(file)) return null;
   const content = readFileSync(file, "utf8");
   const frontmatter = parseSkillFrontmatter(content);
-  const name = frontmatter.name?.trim();
+  // P4 对齐 pi(skills.ts loadSkillFromFile):name 缺省回退目录名——否则 pi 能加载的
+  // 技能在我们列表里不可见,enabledSkills 白名单永远勾不上;description 缺失与 pi
+  // 同为硬性不加载(诊断面见 listSkillsWithDiagnostics)。
+  const name = frontmatter.name?.trim() || skillName;
   const description = frontmatter.description?.trim();
-  if (!name || !description) return null;
+  if (!description) return null;
   return {
     name,
     description,
     compatibility: frontmatter.compatibility,
     allowedTools: frontmatter["allowed-tools"]?.split(/\s+/).filter(Boolean) ?? [],
   };
+}
+
+// ---- 规范化校验(P4,方案 §3.1:技能编辑器校验提示 + 设置页内联诊断) ----
+
+export interface SkillValidationIssue {
+  /** error = pi 拒绝加载(技能完全不生效);warning = pi 加载但告警。 */
+  level: "error" | "warning";
+  message: string;
+}
+
+const MAX_SKILL_NAME_LENGTH = 64;
+const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
+
+/** 校验规则与消息文案逐字镜像 pi(coding-agent/src/core/skills.ts validateName/
+ *  validateDescription;契约测试对照 pi loadSkillsFromDir 的 diagnostics 钉住,pi 升级
+ *  改规则会被测试抓住)。末条"目录名不一致"是我们自己的补充(聊天引擎 use_skill 按
+ *  目录名定位,错位则技能查无此人),不镜像 pi。 */
+export function validateSkillMetadata(
+  dirName: string,
+  frontmatter: Record<string, string>,
+): SkillValidationIssue[] {
+  const issues: SkillValidationIssue[] = [];
+  const description = frontmatter.description?.trim();
+  if (!description) {
+    issues.push({ level: "error", message: "description is required" });
+  } else if (description.length > MAX_SKILL_DESCRIPTION_LENGTH) {
+    issues.push({
+      level: "warning",
+      message: `description exceeds ${MAX_SKILL_DESCRIPTION_LENGTH} characters (${description.length})`,
+    });
+  }
+  const name = frontmatter.name?.trim() || dirName;
+  if (name.length > MAX_SKILL_NAME_LENGTH) {
+    issues.push({ level: "warning", message: `name exceeds ${MAX_SKILL_NAME_LENGTH} characters (${name.length})` });
+  }
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    issues.push({ level: "warning", message: "name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)" });
+  }
+  if (name.startsWith("-") || name.endsWith("-")) {
+    issues.push({ level: "warning", message: "name must not start or end with a hyphen" });
+  }
+  if (name.includes("--")) {
+    issues.push({ level: "warning", message: "name must not contain consecutive hyphens" });
+  }
+  if (frontmatter.name?.trim() && frontmatter.name.trim() !== dirName) {
+    issues.push({
+      level: "warning",
+      message: `name "${frontmatter.name.trim()}" does not match its folder "${dirName}" (skill lookup uses the folder name in chat sessions)`,
+    });
+  }
+  return issues;
+}
+
+export interface SkillWithDiagnostics extends SkillMetadata {
+  /** false = pi 拒绝加载(description 缺失),列表可见但不会生效。 */
+  available: boolean;
+  issues: SkillValidationIssue[];
+}
+
+/** 设置页专用:含"不可用技能"(description 缺失,listSkills 语义排除的)与逐项诊断。
+ *  聊天/pi 引擎的挂载面继续走 listSkills(可用技能),两个消费者两个函数。 */
+export function listSkillsWithDiagnostics(): SkillWithDiagnostics[] {
+  mkdirSync(skillsDir, { recursive: true });
+  const result: SkillWithDiagnostics[] = [];
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = safeSkillFile(entry.name, "SKILL.md");
+    if (!file || !existsSync(file)) continue;
+    const frontmatter = parseSkillFrontmatter(readFileSync(file, "utf8"));
+    const issues = validateSkillMetadata(entry.name, frontmatter);
+    const metadata = skillMetadataFromFile(entry.name);
+    result.push(
+      metadata
+        ? { ...metadata, available: true, issues }
+        : {
+          name: frontmatter.name?.trim() || entry.name,
+          description: frontmatter.description?.trim() ?? "",
+          compatibility: frontmatter.compatibility,
+          allowedTools: frontmatter["allowed-tools"]?.split(/\s+/).filter(Boolean) ?? [],
+          available: false,
+          issues,
+        },
+    );
+  }
+  return result;
 }
 
 export function listSkills(): SkillMetadata[] {

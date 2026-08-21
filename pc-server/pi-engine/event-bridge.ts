@@ -71,8 +71,9 @@ function contentText(content: readonly (TextContent | ImageContent)[]): string {
     .join("\n");
 }
 
-/** pi 工具结果的宽松视图(AgentToolResult;details 只认我们 customTools 打的
- *  {workspace:{tool,details}} 标记,其他引擎侧 details 不进 part)。 */
+/** pi 工具结果的宽松视图(AgentToolResult;details 只认我们 customTools 打的两种标记:
+ *  {workspace:{tool,details}}(工作区工具,还原为 part metadata)与
+ *  {app:{output}}(通用工具/MCP 桥,entries 整批还原),其他引擎侧 details 不进 part)。 */
 interface PiToolResultView {
   content?: (TextContent | ImageContent)[];
   details?: unknown;
@@ -85,10 +86,23 @@ function workspaceMetadataOf(details: unknown): Record<string, JsonValue> | null
   return { workspace: workspace as JsonValue };
 }
 
+/** 通用工具桥的 {app:{output}} 标记:general-tools 已把聊天引擎实体化产物
+ *  (realizeToolResult,含 /api/files 图片 URL)原样打包,直接作为 part.output——
+ *  UI 渲染契约与聊天引擎逐字一致,不经 pi content 往返(那会把文件 URL 图降级)。 */
+function appOutputOf(details: unknown): ToolOutputEntry[] | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const app = (details as Record<string, unknown>).app;
+  if (!app || typeof app !== "object" || Array.isArray(app)) return null;
+  const output = (app as Record<string, unknown>).output;
+  return Array.isArray(output) ? (output as ToolOutputEntry[]) : null;
+}
+
 /** 工具结果 → ToolOutputEntry[](tool_execution_update/end 共用)。metadata 附着规则
  *  与聊天引擎 runtime.toToolResult 逐字一致:挂首个 text 条目;无 text 条目而 details
  *  存在时,补一个空 text 载体。 */
 export function mapPiToolResult(result: PiToolResultView | undefined): ToolOutputEntry[] {
+  const appOutput = appOutputOf(result?.details);
+  if (appOutput) return appOutput;
   const entries = result?.content?.length ? mapPiToolContent(result.content) : [];
   const metadata = workspaceMetadataOf(result?.details);
   if (!metadata) return entries;

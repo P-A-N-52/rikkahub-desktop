@@ -26,6 +26,7 @@ import { reportError } from "../observability/app-errors";
 import { createPiModelRuntime, mapProviderModelToPi } from "./model-bridge";
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "./approval-gate";
+import type { PiSessionResources } from "./resources";
 import { piSessionFileNameFor, piSessionsDir, quarantineCorruptPiSession, resolvePiSessionPath } from "./session-files";
 
 export interface PiGenerationContext {
@@ -38,9 +39,15 @@ export interface PiGenerationContext {
   storedSessionFileName?: string | null;
   /** 会话工作目录(工作区边界内的绝对路径)。 */
   cwd: string;
-  /** 本轮用户输入(纯文本;附件面 P4)。 */
+  /** 本轮用户输入(文本;文档/OCR 已由 pi-engine/attachments 文本化)。 */
   promptText: string;
-  /** customTools(生产侧 = createPiWorkspaceTools 的七工具;不传 = 纯对话)。 */
+  /** 图片附件(pi 原生 prompt images 通道,P4 附件面)。 */
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  /** 资源装配(P4:技能/AGENTS.md/appendSystemPrompt/受控 settings,
+   *  生产侧 = createPiSessionResources;不传 = 纯对话,pi 默认资源面全关不了——
+   *  仅测试/冒烟场景使用,生产路由必须传)。 */
+  resources?: PiSessionResources;
+  /** customTools(生产侧 = 七个工作区工具 + 通用工具/MCP 桥;不传 = 纯对话)。 */
   tools?: ToolDefinition[];
   /** 生成事件下沉(生产侧 = conversations/generation-apply 的应用器)。 */
   sink: GenerationEventSink;
@@ -125,6 +132,12 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     // (sdk.ts:246-251 + agent-session._refreshToolRegistry,§七-3 实证)。
     noTools: "builtin",
     customTools: ctx.tools ?? [],
+    // P4 资源统一:受控 ResourceLoader(技能白名单/AGENTS.md 边界过滤/appendSystemPrompt)
+    // + 受控 SettingsManager(inMemory,封死 .pi/settings.json 注入面)。
+    // 注意 sdk 只对自建 loader 调 reload,resources 在装配处已 reload 完毕。
+    ...(ctx.resources
+      ? { resourceLoader: ctx.resources.resourceLoader, settingsManager: ctx.resources.settingsManager }
+      : {}),
   });
 
   const bridge = createPiEventBridge();
@@ -139,7 +152,10 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     if (ctx.signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
     // expandPromptTemplates:false——用户消息逐字直达模型。pi 默认会把 "/" 开头的输入
     // 当模板/扩展命令拦截(agent-session.ts:1122),我们的会话 UX 不走 pi 命令面。
-    await session.prompt(ctx.promptText, { expandPromptTemplates: false });
+    await session.prompt(ctx.promptText, {
+      expandPromptTemplates: false,
+      ...(ctx.images?.length ? { images: ctx.images } : {}),
+    });
   } finally {
     ctx.signal?.removeEventListener("abort", onAbort);
     unsubscribe();

@@ -113,7 +113,13 @@
       "preview_truncated": "File is large; showing the first 512KB only",
       "binary_preview": "Binary file ({{size}}), preview unavailable",
       "workspace_missing": "Workspace missing or deleted",
-      "failed": "Operation failed"
+      "failed": "Operation failed",
+      "agents_edit": "Edit AGENTS.md",
+      "agents_dialog_title": "Edit {{name}}",
+      "agents_dialog_create_hint": "This workspace has no project instructions file yet. Below is a default template; saving it creates AGENTS.md, which the AI reads when working in this workspace.",
+      "agents_dialog_edit_hint": "The AI reads project instructions from this file when working in this workspace (changes apply from the next turn).",
+      "agents_save": "Save",
+      "agents_saved": "AGENTS.md saved"
     }
   },
   "custom_theme_dialog": {

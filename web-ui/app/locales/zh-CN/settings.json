@@ -637,6 +637,8 @@
     "skill_imported": "Skill 已导入：{{name}}",
     "import_failed": "导入失败",
     "empty_skill": "还没有 Skill",
+    "skill_issues_title": "规范化检查",
+    "skill_unavailable_hint": "缺少 description，AI 引擎不会加载该技能（在 SKILL.md 的 frontmatter 中补上即可）",
     "delete_skill_confirm": "删除这个 Skill？",
     "import_github": "从 GitHub 导入",
     "github_url_ph": "https://github.com/owner/repo 或 /tree/branch/sub/path",

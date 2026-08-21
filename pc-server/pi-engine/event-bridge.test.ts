@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { AgentSessionEvent } from "../../pi/packages/coding-agent/src/core/agent-session.ts";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall, Usage } from "../../pi/packages/ai/src/types.ts";
-import type { Conversation, Message, MessageNode, ToolPart } from "../foundation/types";
+import type { Conversation, Message, MessageNode, ToolOutputEntry, ToolPart } from "../foundation/types";
 import type { GenerationEvent } from "../inference-engine/events";
 import { createGenerationEventApplier } from "../conversations/generation-apply";
 import { message } from "../foundation/utils";
@@ -146,6 +146,24 @@ describe("pi 事件桥:纯映射", () => {
         isError: true,
       }),
     ).toEqual([{ kind: "tool_result", toolCallId: "call-3", output: [{ error: "boom" }] }]);
+  });
+
+  test("details.app.output 优先于 content:通用工具结构化输出(含图)忠实还原", () => {
+    const bridge = createPiEventBridge();
+    bridge.handle({ type: "tool_execution_start", toolCallId: "call-app", toolName: "search_web", args: {} });
+    const appOutput: ToolOutputEntry[] = [
+      { type: "text", text: "1. Result" },
+      { type: "image", url: "/api/files/img-1.png" },
+    ];
+    expect(
+      bridge.handle({
+        type: "tool_execution_end",
+        toolCallId: "call-app",
+        toolName: "search_web",
+        result: { content: [{ type: "text", text: "model-facing text" }], details: { app: { output: appOutput } } },
+        isError: false,
+      }),
+    ).toEqual([{ kind: "tool_result", toolCallId: "call-app", output: appOutput }]);
   });
 
   test("bash_execution_update:显式 id 累加;无 id 归唯一在执行工具;歧义/未建卡丢弃", () => {
