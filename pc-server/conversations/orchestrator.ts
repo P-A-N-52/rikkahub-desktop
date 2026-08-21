@@ -114,7 +114,7 @@ export async function callProvider(
     // 此前用 ?key= query，官方两者都收，但主流中转网关只解析 header，query 会被判 invalid key。
     headers["x-goog-api-key"] = providerItem.apiKey;
     const baseUrl = providerItem.baseUrl;
-    body = buildGoogleRequestBody(messagesForApi, picked.model, assistant, conversation);
+    body = buildGoogleRequestBody(messagesForApi, picked.model, assistant);
     const finalBody = applyCustomBody(body, assistant, picked.model);
     // 有 hooks（来自会话）时走 SSE 流式 + 工具循环；辅助调用无 hooks 时退回非流式。
     if (hooks?.message != null) {
@@ -130,7 +130,7 @@ export async function callProvider(
     const messages = messagesForApi;
     const systemContent = messages.find((item) => item.role === "system")?.content;
     const functionTools = supportsAbility(picked.model, "TOOL")
-      ? conversationFunctionTools(assistant, conversation)
+      ? conversationFunctionTools(assistant)
       : [];
     const claudeTools = claudeToolsFromOpenAiTools(functionTools, providerItem);
     const normalizedReasoning = reasoningLevelNormalized(assistant.reasoningLevel);
@@ -164,7 +164,7 @@ export async function callProvider(
 
   headers.Authorization = `Bearer ${providerItem.apiKey}`;
   if (providerItem.useResponseApi) {
-    const functionTools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
+    const functionTools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant) : [];
     const builtInTools = responseApiBuiltInTools(picked.model);
     const systemContent = conversationResponseApiInstructions(conversation, assistant);
     const reasoning = responseApiReasoningForProvider(providerItem, picked.model, assistant.reasoningLevel);
@@ -194,7 +194,7 @@ export async function callProvider(
     if (!body.tools.length) delete body.tools;
     return fetchText(url, headers, applyCustomBody(body, assistant, picked.model), providerItem, (raw) => raw.output_text ?? raw.output?.flatMap((item: any) => item.content ?? []).map((item: any) => item.text ?? "").join("\n"), signal);
   }
-  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
+  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant) : [];
   body = {
     model: selectedModel,
     messages: messagesForApi,
@@ -236,7 +236,7 @@ export async function callProviderStreaming(
     // 默认 true，仅当用户显式关闭时才不回传历史 reasoning_content。
     providerItem.type === "openai" ? providerItem.includeHistoryReasoning !== false : true,
   );
-  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant, conversation) : [];
+  const tools = supportsAbility(picked.model, "TOOL") ? conversationFunctionTools(assistant) : [];
   const hooks: StreamHooksWithSink = {
     message: assistantMessage,
     conversation,

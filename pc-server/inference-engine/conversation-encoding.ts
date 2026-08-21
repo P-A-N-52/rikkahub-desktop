@@ -11,7 +11,6 @@ import { buildSearchContext } from "../search";
 import { findModel } from "../model-providers";
 import { listSkills } from "../tools/skills";
 import { conversationFunctionTools } from "../tools/bound";
-import { buildWorkspacePromptSegment } from "../workspace/prompt";
 import { GOOGLE_SAFETY_SETTINGS, apiContentFromParts, apiContentText, appendAssistantApiMessages, googleContentsFromApiMessages, googleFunctionDeclarations, googleGenerationConfig, hasBuiltInTool, responseApiMessagesFromUiMessages, supportsAbility, supportsOutputModality } from "./message-builder";
 import { isEmptyAssistantPlaceholder } from "./parts";
 
@@ -74,11 +73,11 @@ ${body}
 </available_skills>`;
 }
 
-export function buildGoogleRequestBody(messagesForApi: ApiMessage[], modelItem: Model, assistant: Assistant, conversation?: Conversation | null) {
+export function buildGoogleRequestBody(messagesForApi: ApiMessage[], modelItem: Model, assistant: Assistant) {
   const systemContent = messagesForApi.find((item) => item.role === "system")?.content;
   const hasImageOutput = supportsOutputModality(modelItem, "IMAGE");
   const functionTools = supportsAbility(modelItem, "TOOL")
-    ? conversationFunctionTools(assistant, conversation)
+    ? conversationFunctionTools(assistant)
     : [];
   const functionDeclarations = googleFunctionDeclarations(functionTools);
   // 内置工具（googleSearch/urlContext）目前与函数工具互斥，优先内置工具，镜像安卓
@@ -144,10 +143,10 @@ function conversationTransformedMessages(conversation: Conversation, assistant: 
   // 专题11-P1-2:system 各区块按“稳定→易变”排列。专题12 进一步把记忆/最近会话
   // 冻结为会话级快照(context-snapshots.ts)——它们在 system 里一变,后面整个会话
   // 历史的前缀缓存都会失效;冻结后同一会话内 system 逐字节不变。
-  // 工作区段居首（agent 身份先于助手人设，两者叠加而非互斥，§9.8）；内容会话内
-  // 稳定（AGENTS.md 冻结快照），不破前缀缓存（§9.2）。非工作区会话恒为空串。
+  // P6 退役:原居首的工作区段(buildWorkspacePromptSegment)已移除——它与生成路由
+  // 同用 workspaceRuntimeForConversation 判定,工作区可用必走 pi 会话(agent 身份由
+  // pi 系统提示词+appendSystemPrompt 承载),不可用时该段本就返回空串,两头皆死代码。
   const systemParts = [
-    buildWorkspacePromptSegment(conversation),
     effectiveSystemPrompt
       ? renderTemplate(effectiveSystemPrompt, templateVariables("", "system", assistant, picked.model))
       : "",

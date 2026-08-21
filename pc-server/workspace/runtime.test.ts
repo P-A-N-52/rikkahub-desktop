@@ -1,7 +1,7 @@
-// workspace/runtime.test.ts — 工作区运行时集成测试(M1-4)
+// workspace/runtime.test.ts — 工作区运行时集成测试(M1-4;P6 起提示词段随
+// workspace/prompt.ts 退役,聊天引擎不再有工作区段)
 // 覆盖:条件挂载(非工作区/不可用/未信任)、执行守卫链(解绑会话/危险命令/知情同意放行)、
-// pi 内核全链路(write→read→edit 经有界 Operations)、审批矩阵经 tools/approval 联动、
-// 提示词段(结构锚点 + AGENTS.md 冻结快照)。
+// pi 内核全链路(write→read→edit 经有界 Operations)、审批矩阵经 tools/approval 联动。
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +15,6 @@ const { configureWorkingSet } = await import("../conversations/working-set");
 const { getConversationMeta } = await import("../conversations/read-queries");
 const ws = await import("./index");
 const runtime = await import("./runtime");
-const prompt = await import("./prompt");
 const approval = await import("../tools/approval");
 
 const db = conversations.openConversationsDb();
@@ -324,36 +323,4 @@ describe("shell runner 硬化(M1-5)", () => {
       runtime.runWorkspaceTool("bash", { command: "sleep 30", timeout: 1 }, { conversationId: conversation.id }),
     ).rejects.toThrow(/timed out after 1 seconds/);
   }, 15_000);
-});
-
-describe("提示词段(buildWorkspacePromptSegment)", () => {
-  test("非工作区会话为空串;工作区会话含 pi 结构锚点", () => {
-    expect(prompt.buildWorkspacePromptSegment(bindConversation(null) as never)).toBe("");
-    const workspace = ws.createWorkspace({ type: "managed", name: "prompt" });
-    const conversation = bindConversation(workspace.id);
-    const segment = prompt.buildWorkspacePromptSegment(conversation as never);
-    expect(segment).toContain("Available tools:");
-    expect(segment).toContain("- read: Read file contents");
-    expect(segment).toContain("Guidelines:");
-    expect(segment).toContain("Use write only for new files or complete rewrites.");
-    expect(segment).toContain(`Current working directory: ${workspace.root.replace(/\\/g, "/")}`);
-    expect(segment).not.toContain("<project_context>"); // 无 AGENTS.md
-  });
-
-  test("AGENTS.md 注入 <project_context> 且会话级冻结(中途修改不重读)", () => {
-    const workspace = ws.createWorkspace({ type: "managed", name: "agents" });
-    writeFileSync(join(workspace.root, "AGENTS.md"), "Always use tabs.");
-    const conversation = bindConversation(workspace.id);
-    const first = prompt.buildWorkspacePromptSegment(conversation as never);
-    expect(first).toContain('<project_instructions path="AGENTS.md">');
-    expect(first).toContain("Always use tabs.");
-
-    writeFileSync(join(workspace.root, "AGENTS.md"), "CHANGED MID-CONVERSATION");
-    const second = prompt.buildWorkspacePromptSegment(conversation as never);
-    expect(second).toBe(first); // 冻结:逐字节不变(§9.2 缓存纪律)
-
-    prompt.invalidateWorkspacePromptSnapshots();
-    const third = prompt.buildWorkspacePromptSegment(conversation as never);
-    expect(third).toContain("CHANGED MID-CONVERSATION");
-  });
 });

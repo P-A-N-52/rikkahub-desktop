@@ -1,9 +1,11 @@
 // workspace/runtime.ts — 工作区工具运行时(M1-4:挂载判定 + 执行分发)
 // 职责边界:本模块把"会话 → 工作区 → pi 工具实例"串成一条线——
-//   挂载:openAiWorkspaceTools(conversation) 产出进模型的 tools 声明(条件挂载,§9.2);
-//   执行:executeWorkspaceToolCore(name, args, ctx) 是唯一的守卫+执行内核(P3 起双消费:
-//     聊天引擎经 runWorkspaceTool 拿调度器 ToolResult 形状;pi 引擎 customTools 直接拿
-//     WorkspaceToolOutput 原始形状,见 pi-engine/workspace-tools.ts)。
+//   声明:openAiWorkspaceTools(conversation) 产出工具声明(P6 起唯一消费者是
+//     pi-engine/workspace-tools 的 customTools 装配;聊天引擎挂载点已退役);
+//   执行:executeWorkspaceToolCore(name, args, ctx) 是唯一的守卫+执行内核(pi 引擎
+//     customTools 拿 WorkspaceToolOutput 原始形状,见 pi-engine/workspace-tools.ts;
+//     runWorkspaceTool 的调度器 ToolResult 形状仅剩防御面:模型幻觉工具名经
+//     tools/execution 分发到此,安全壳报"工作区不可用")。
 // 审批矩阵在 tools/approval.ts(纯函数在 ./approval.ts);路径边界在 ./boundary.ts;
 // 工具内核是 ./tools/ 下的 pi 原样移植,本层不复制其任何逻辑。
 
