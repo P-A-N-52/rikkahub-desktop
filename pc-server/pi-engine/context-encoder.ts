@@ -7,10 +7,16 @@
 // fork 从此真正改写引擎记忆——所见即所记,双表征的"引擎只追加、UI 可截断"容忍
 // 分叉消失。
 //
-// 富化与保真的接缝(P8):模板渲染会改变文本长度,fidelity 注解的 len 按原始 parts
+// 富化与保真的接缝(P8/P9):模板渲染会改变文本长度,fidelity 注解的 len 按原始 parts
 // 记录——takeText 的 charOffset + len > full.length 判定会让整行自动退化 legacy,
-// 剥 thinking 后重放。这是设计内行为(编辑即退化),不是缺陷;合成消息(提醒/注入)
-// 由 orchestrator 经 encodableMessages 剥除,不进本编码器。
+// 剥 thinking 后重放。这是设计内行为(编辑即退化),不是缺陷。P9 起合成消息(提醒/
+// 注入)随富化全序列灌进本编码器(orchestrator 把 EnrichResult.messages 整列传入,
+// syntheticIds 标出合成行):它们只有 USER/ASSISTANT 两种 role,现有路径全覆盖
+// (USER→encodeUser,ASSISTANT 无注解→legacy),零特判;但 synthetic 行不进
+// entryIdsByMessageId(压缩切点反查按 DB 消息 id 说话)也不进 degradedMessageIds
+// (legacy 是合成行唯一可走的路径,非"用户编辑过")。合成行恒在压缩切点之后——
+// 富化层的 windowStartMessageId 窗口锚保证(orchestrator 以 effectivePiCompaction
+// 的切点为锚),永不进被 appendCompaction 摘要吸收的旧历史。
 //
 // 确定性=缓存稳定性(§4.8 硬约束):同一历史两次编码逐字节一致(单测锁定)。所有输入
 // 均来自行级数据(parts/annotations/createdAt/modelId),不掺时钟与随机数;附件文本化
@@ -370,6 +376,23 @@ function encodeUser(message: Message, model: Model): UserMessage | null {
   return { role: "user", content, timestamp: timestampOf(message) };
 }
 
+// ----- 行级可编码性判定(窗口锚与压缩重放共用的单源谓词) -----
+
+/** 该行能否编出 ≥1 个条目(与编码循环同源判定)。effectivePiCompaction 用它把
+ *  "切点落在零条目行"的压缩记录判为不适用,与编码器内部重放过滤行为一致。 */
+function encodesToEntries(message: Message, model: Model): boolean {
+  if (message.role === "USER") {
+    const input = piPromptInputFromParts(message.parts, model);
+    return Boolean(input.text) || input.images.length > 0;
+  }
+  if (message.role === "ASSISTANT") {
+    return message.parts.some((part) =>
+      isRecord(part) && (part.type === "text" || part.type === "tool"),
+    );
+  }
+  return false; // SYSTEM 行不进引擎上下文
+}
+
 // ----- 主入口 -----
 
 /** DB 压缩记录(P7:conversation 级 piCompactions 元素,替代 jsonl CompactionEntry)。 */
@@ -382,26 +405,33 @@ export interface PiCompactionRecord {
 }
 
 export interface PiHistoryEncodeResult {
-  /** DB messageId → 灌注生成的 pi entry id 列表(压缩切点映射用)。 */
+  /** DB messageId → 灌注生成的 pi entry id 列表(压缩切点映射用;合成行不在内)。 */
   entryIdsByMessageId: Map<string, string[]>;
-  /** 走了 legacy 退化的 assistant 行(诊断/测试)。 */
+  /** 走了 legacy 退化的 assistant 行(诊断/测试;合成行不在内——legacy 是其设计路径)。 */
   degradedMessageIds: string[];
 }
 
-/** 把选中路径历史灌注进(空的)inMemory SessionManager。history 不含本轮新用户输入
- *  (那条走 session.prompt);compactions 只取"切点仍在历史中"的最新一条生效(pi
- *  buildContextEntries 只认最后一条 compaction,更早的被覆盖)。 */
+/** 把选中路径历史灌注进(空的)inMemory SessionManager。history 是富化全序列
+ *  (P9:含合成行——提醒/注入,syntheticIds 标出),不含本轮新用户输入(那条走
+ *  session.prompt);compactions 只取"切点仍在历史中"的最新一条生效(pi
+ *  buildContextEntries 只认最后一条 compaction,更早的被覆盖)。合成行照常编码
+ *  但跳过两个登记(见头注)。 */
 export function seedPiSessionFromHistory(options: {
   manager: SessionManager;
   history: Message[];
   model: Model;
+  /** 富化层 EnrichResult.syntheticIds(P9):标记合成行,挡在切点映射与退化诊断外。 */
+  syntheticIds?: Set<string>;
   compactions?: PiCompactionRecord[];
 }): PiHistoryEncodeResult {
   const { manager, history, model } = options;
+  const syntheticIds = options.syntheticIds ?? new Set<string>();
   const entryIdsByMessageId = new Map<string, string[]>();
   const degradedMessageIds: string[] = [];
+  let firstSeededEntryId: string | null = null;
 
   for (const message of history) {
+    const synthetic = syntheticIds.has(message.id);
     const entryIds: string[] = [];
     if (message.role === "USER") {
       const encoded = encodeUser(message, model);
@@ -411,22 +441,56 @@ export function seedPiSessionFromHistory(options: {
       let decoded = fidelity ? decodeWithFidelity(message, fidelity) : null;
       if (!decoded) {
         decoded = decodeLegacy(message, model);
-        if (decoded.length) degradedMessageIds.push(message.id);
+        // 合成行不进退化名单:无注解走 legacy 是它唯一可走的路径(设计内),非编辑痕迹。
+        if (decoded.length && !synthetic) degradedMessageIds.push(message.id);
       }
       for (const piMessage of decoded) entryIds.push(manager.appendMessage(piMessage));
     }
     // SYSTEM 行不进引擎上下文:工作区会话的 system 面由 resources(系统提示词/appendSystemPrompt)全权承载
-    if (entryIds.length) entryIdsByMessageId.set(message.id, entryIds);
+    // 合成行不进切点映射:id 非 DB id,压缩切点若经外收拢落上来,反查 miss 由
+    // captureRoundCompactions 的 null 路径兜底(orchestrator 按尾消息收拢,现有语义)。
+    if (entryIds.length) {
+      if (firstSeededEntryId === null) firstSeededEntryId = entryIds[0];
+      if (!synthetic) entryIdsByMessageId.set(message.id, entryIds);
+    }
   }
 
-  // 压缩:取切点仍在场的最新记录,firstKeptEntryId 指向切点消息的首个灌注 entry
+  // 压缩:取切点仍在场的最新记录。firstKept 指向"切点行之前、不可吸收的开头段"
+  // 之后的第一个 entry,而非恒等于序列首 entry:
+  // - 生产路径(P9):富化窗口锚(windowStartMessageId)已把切点前的真实历史挡在
+  //   序列外,窗口内排在切点行之前的只可能是 top_of_chat 注入/首条时间提醒(都插
+  //   在窗口首条 USER 之前)——它们是配置快照,必须留在可见区;直接按切点行算
+  //   firstKept 会把它们盖进摘要区。故生产序列的首个 entry 就是正确的 firstKept。
+  // - 无窗口锚的直灌调用(本文件单测/潜在测试场景):切点前的真实历史在序列里,
+  //   它们理应被摘要吸收——firstKept 取切点行的首 entry,维持既有语义。
   const applicable = (options.compactions ?? [])
     .filter((record) => entryIdsByMessageId.has(record.cutMessageId))
     .at(-1);
   if (applicable) {
-    const firstKept = entryIdsByMessageId.get(applicable.cutMessageId)![0]!;
-    manager.appendCompaction(applicable.summary, firstKept, applicable.tokensBefore);
+    const cutEntryIds = entryIdsByMessageId.get(applicable.cutMessageId)!;
+    const summaryBoundary = syntheticIds.size
+      ? firstSeededEntryId
+      : cutEntryIds[0];
+    manager.appendCompaction(applicable.summary, summaryBoundary ?? cutEntryIds[0]!, applicable.tokensBefore);
   }
 
   return { entryIdsByMessageId, degradedMessageIds };
+}
+
+/** 有效压缩切点判定(P9 单源):富化层取窗口锚(windowStartMessageId)前调用。
+ *  与编码器内部重放过滤同一谓词(该行能否编出 ≥1 条目),切点落在空行/被删消息/
+ *  零条目行上的记录一律视为不生效——取最新一条切点在场的记录,无则 null。 */
+export function effectivePiCompaction(
+  compactions: PiCompactionRecord[],
+  history: Message[],
+  model: Model,
+): PiCompactionRecord | null {
+  return (
+    compactions
+      .filter((record) => {
+        const cut = history.find((msg) => msg.id === record.cutMessageId);
+        return cut !== undefined && encodesToEntries(cut, model);
+      })
+      .at(-1) ?? null
+  );
 }

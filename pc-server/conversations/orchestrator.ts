@@ -60,7 +60,7 @@ import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
 import { piPromptInputFromParts } from "../pi-engine/attachments";
-import type { PiCompactionRecord } from "../pi-engine/context-encoder";
+import { effectivePiCompaction, type PiCompactionRecord } from "../pi-engine/context-encoder";
 import { encodableMessages, enrichMessages, applyTemplateToMessage } from "../inference-engine/message-enrichment";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
@@ -509,14 +509,16 @@ function applyCapturedPiCompactions(conversation: Conversation, captured: Captur
   scheduleThrottledConvFlush();
 }
 
-/** pi 引擎生成装配(P3 路由 + P4 资源统一 + P7 会话数据统一 + P8 注入面统一):
+/** pi 引擎生成装配(P3 路由 + P4 资源统一 + P7 会话数据统一 + P8/P9 注入面统一):
  *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
  *    图片走 pi 原生 images 通道);prompt 文本经消息模板渲染(四件套之一);
  *  - 引擎上下文 = 编码器从富化后的选中路径历史(不含本轮 prompt 消息)确定性重建,
  *    压缩记录从 conversation.piCompactions 进同一灌注——重新生成/编辑重发/分支切换
  *    天然生效(UI 选中路径就是引擎记忆,所见即所记);
  *  - 消息富化 = enrichMessages(四件套共享层):模板/时间提醒/lorebook+模式注入/
- *    滞回截断,与聊天引擎同一份裁决;系统位注入经 appendSystemPrompt 进 pi 系统面;
+ *    窗口化(滞回截断 ∨ 压缩切点锚,P9)——聊天位注入/时间提醒随富化全序列(含
+ *    合成行)灌进 pi 引擎,与聊天引擎逐字同生效;合成行由 syntheticIds 标出,编码器
+ *    挡在切点映射/退化诊断外;系统位注入经 appendSystemPrompt 进 pi 系统面;
  *  - 工具面 = 七个工作区工具 + 通用工具/MCP 桥(P4),审批全部内化在工具 execute;
  *  - 资源面 = createPiSessionResources(技能白名单/AGENTS.md 边界过滤/人设+记忆冻结
  *    appendSystemPrompt/受控 settings)。 */
@@ -545,15 +547,19 @@ async function runPiWorkspaceGeneration(
     throw new Error("工作区会话缺少可发送的用户消息内容,无法驱动工作区引擎。");
   }
 
-  // 四件套富化:历史消息(不含本轮 prompt)经共享层裁决,合成消息(提醒/注入)
-  // 由 syntheticIds 标出,不进引擎上下文——每轮重新富化,DB 零沉淀。
+  // 四件套富化(P9 灌注统一):历史消息(不含本轮 prompt)经共享层裁决;压缩切点
+  // (effectivePiCompaction 单源判定)作为富化窗口锚——注入行/提醒恒在窗口内、恒在
+  // 切点之后:既进模型视野,又永不落进被摘要吸收的旧历史。富化全序列(含合成行)
+  // 进引擎,每轮从 DB 原文重新裁决,DB 零沉淀。
   const historySource = selectedConversationMessages(conversation).filter((msg) => msg.id !== promptMessage?.id);
+  const compactionRecords = parsePiCompactions(conversation.piCompactions);
+  const cut = effectivePiCompaction(compactionRecords, historySource, deps.selectedModel);
   const enriched = enrichMessages(historySource, {
     conversation,
     assistant: deps.assistant,
     model: deps.selectedModel,
+    windowStartMessageId: cut?.cutMessageId,
   });
-  const history = encodableMessages(enriched.messages, enriched.syntheticIds);
 
   // 系统位注入(before/after_system_prompt)经 appendSystemPrompt 进 pi 系统面——
   // 与人设/记忆/搜索指引同一插槽,位置在 pi Guidelines 之后、project_context 之前。
@@ -573,8 +579,9 @@ async function runPiWorkspaceGeneration(
     modelLimits: piModelLimitsFor(deps.providerItem, deps.selectedModel, deps.assistant),
     conversationId: conversation.id,
     cwd: runtime.cwd,
-    history,
-    compactions: parsePiCompactions(conversation.piCompactions),
+    history: enriched.messages,
+    syntheticIds: enriched.syntheticIds,
+    compactions: compactionRecords,
     promptText: promptInput.text,
     images: promptInput.images,
     resources,
@@ -605,11 +612,16 @@ export async function compactPiWorkspaceConversation(
   const assistant = findAssistant(conversation.assistantId);
   const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
   // 压缩的对象是"模型实际看到的消息":与生成路径同一富化裁决(模板/提醒/注入),
-  // 合成消息不进引擎上下文——压缩摘要只覆盖真实历史。
+  // 但合成消息经 encodableMessages 剥回纯真实行(P9)——手动压缩是用户策展行为,
+  // 摘要只覆盖真实对话;注入是配置不是对话,时间提醒只描述节奏,均不进摘要。
+  // 窗口锚照常生效:切点前的历史已被上一轮摘要吸收,压缩对象从切点起即可。
+  const compactionRecords = parsePiCompactions(conversation.piCompactions);
+  const cut = effectivePiCompaction(compactionRecords, selectedConversationMessages(conversation), picked.model);
   const enriched = enrichMessages(selectedConversationMessages(conversation), {
     conversation,
     assistant,
     model: picked.model,
+    windowStartMessageId: cut?.cutMessageId,
   });
   const history = encodableMessages(enriched.messages, enriched.syntheticIds);
   const systemInjection = [enriched.systemInjectionBefore, enriched.systemInjectionAfter].filter(Boolean).join("\n");
@@ -629,7 +641,7 @@ export async function compactPiWorkspaceConversation(
       conversationId: conversation.id,
       cwd: runtime.cwd,
       history,
-      compactions: parsePiCompactions(conversation.piCompactions),
+      compactions: compactionRecords,
       resources,
       customInstructions,
       signal,

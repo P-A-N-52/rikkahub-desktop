@@ -113,7 +113,7 @@ function conversationTransformedMessages(conversation: Conversation, assistant: 
     conversation,
     assistant,
     model: picked.model,
-    // 聊天引擎的输入是 DB 原文(无合成消息),stripSyntheticIds 留空;pi 路径第二轮起才传。
+    // 聊天引擎无持久摘要,无压缩切点锚;pi 路径传 effectivePiCompaction 切点(P9)。
     timeReminderAnchor: systemMessage ?? undefined,
   });
 

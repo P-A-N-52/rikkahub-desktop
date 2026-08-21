@@ -1,8 +1,8 @@
 // inference-engine/message-enrichment.test.ts — 引擎无关富化层契约测试
 //
 // 锁定四件套的共享裁决:模板渲染一次到位、时间提醒间隔语义、lorebook/模式注入
-// 按位置分流(系统位文本 vs 聊天位插队)、滞回截断窗口、二次富化幂等(合成消息
-// 按 syntheticIds 剥除后不重复注入)。聊天引擎与 pi 引擎共用此层,行为必须逐字一致。
+// 按位置分流(系统位文本 vs 聊天位插队)、窗口化(滞回截断 ∨ 压缩切点锚,P9)。
+// 聊天引擎与 pi 引擎共用此层,行为必须逐字一致。
 
 import { describe, expect, test, beforeAll } from "bun:test";
 import type { Assistant, Conversation, Message, State } from "../foundation/types";
@@ -14,7 +14,16 @@ beforeAll(() => {
   setState({
     settings: {
       displaySetting: { userNickname: "Test User" },
-      lorebooks: [],
+      lorebooks: [
+        {
+          id: "book-1",
+          enabled: true,
+          entries: [
+            { id: "entry-top", enabled: true, constantActive: true, position: "top_of_chat", role: "USER", content: "TOP_INJECTION_TEXT" },
+            { id: "entry-bottom", enabled: true, constantActive: true, position: "bottom_of_chat", role: "USER", content: "BOTTOM_INJECTION_TEXT" },
+          ],
+        },
+      ],
       modeInjections: [],
       chatModelId: "m1",
     },
@@ -151,22 +160,67 @@ describe("message-enrichment", () => {
     expect(result.messages.map((msg) => (msg.parts[0] as { text?: string }).text)).toEqual(["r2", "m3"]);
   });
 
-  test("幂等二次富化:按 syntheticIds 剥除后,合成消息不重复产生", () => {
-    const a = assistant({ enableTimeReminder: true });
-    const base = [userMessage("hello", "2026-08-22T10:00:00Z")];
-    const first = enrichMessages(base, { conversation: conversation(), assistant: a, model });
-    expect(first.syntheticIds.size).toBe(1);
-    // 第二轮:把第一轮产物(含合成提醒)再喂进来,剥除后重新富化
-    const second = enrichMessages(first.messages, {
+  test("窗口锚:锚在滞回截断起点之后 → 锚说了算,窗口内首条即锚消息", () => {
+    const a = assistant({ contextMessageLimit: 2 });
+    const base = Array.from({ length: 6 }, (_, i) => userMessage(`m${i}`, `2026-08-22T10:0${i}:00Z`));
+    // 滞回起点=4(保留 4/5);锚=5(更晚)→ 窗口从 5 起(两种边界取 max)。
+    const result = enrichMessages(base, {
       conversation: conversation(),
       assistant: a,
       model,
-      stripSyntheticIds: first.syntheticIds,
+      windowStartMessageId: base[5].id,
     });
-    // 合成消息被剥除后重新生成,总数不变、id 不同(新对象)
-    expect(second.syntheticIds.size).toBe(1);
-    expect([...second.syntheticIds][0]).not.toBe([...first.syntheticIds][0]);
-    expect(second.messages).toHaveLength(first.messages.length);
+    expect(result.messages.map((msg) => (msg.parts[0] as { text?: string }).text)).toEqual(["m5"]);
+  });
+
+  test("窗口锚:锚在滞回截断起点之前 → 截断说了算(两种窗口边界取 max)", () => {
+    const a = assistant({ contextMessageLimit: 2 });
+    const base = Array.from({ length: 6 }, (_, i) => userMessage(`m${i}`, `2026-08-22T10:0${i}:00Z`));
+    // 滞回起点=4(保留 4/5);锚=1(更早)→ 仍从 4 起(取 max)。
+    const result = enrichMessages(base, {
+      conversation: conversation(),
+      assistant: a,
+      model,
+      windowStartMessageId: base[1].id,
+    });
+    expect(result.messages.map((msg) => (msg.parts[0] as { text?: string }).text)).toEqual(["m4", "m5"]);
+  });
+
+  test("窗口锚:锚 id 不在序列(陈旧压缩记录/消息被删)→ 视为无锚,行为不变", () => {
+    const a = assistant({ contextMessageLimit: 2 });
+    const base = Array.from({ length: 6 }, (_, i) => userMessage(`m${i}`, `2026-08-22T10:0${i}:00Z`));
+    const result = enrichMessages(base, {
+      conversation: conversation(),
+      assistant: a,
+      model,
+      windowStartMessageId: "gone",
+    });
+    expect(result.messages.map((msg) => (msg.parts[0] as { text?: string }).text)).toEqual(["m4", "m5"]);
+  });
+
+  test("窗口锚下 top_of_chat 注入落在窗口首位,底位注入不晚于窗口末条(P9 灌注统一的富化侧保证)", () => {
+    const a = assistant({ lorebookIds: ["book-1"] });
+    const base = [
+      userMessage("m0", "2026-08-22T10:00:00Z"),
+      userMessage("m1", "2026-08-22T10:01:00Z"),
+      userMessage("m2", "2026-08-22T10:02:00Z"),
+    ];
+    const result = enrichMessages(base, {
+      conversation: conversation(),
+      assistant: a,
+      model,
+      windowStartMessageId: base[1].id, // 切点=m1:窗口=[m1,m2]
+    });
+    // 注入行与窗口内真实行交错:top 在 m1 前、bottom 贴末条插入(插队语义是
+    // "倒数第一前",末条是 USER 时落在它之前——与聊天引擎同一裁决,非新行为)。
+    const texts = result.messages.map((msg) => (msg.parts[0] as { text?: string }).text);
+    expect(texts).toEqual(["TOP_INJECTION_TEXT", "m1", "BOTTOM_INJECTION_TEXT", "m2"]);
+    const syntheticTexts = result.messages
+      .filter((msg) => result.syntheticIds.has(msg.id))
+      .map((msg) => (msg.parts[0] as { text: string }).text);
+    expect(syntheticTexts).toEqual(["TOP_INJECTION_TEXT", "BOTTOM_INJECTION_TEXT"]);
+    // m0 在切点之前,被窗口锚排除(永不进被摘要吸收的旧历史)。
+    expect(texts).not.toContain("m0");
   });
 
   test("encodableMessages:合成消息被剥除,真实消息保留(模板已渲染)", () => {

@@ -15,6 +15,8 @@
 // 会话↔jsonl 文件关联。pi 自动压缩发生在 prompt 内部,结果捕获为
 // capturedCompactions(firstKeptEntryId 反查灌注映射回到 DB 消息 id),由调用方落
 // conversation.piCompactions——下一轮经编码器 appendCompaction 重放,语义逐字等价。
+// P9 灌注统一:history 是富化全序列(含合成行,orchestrator 以压缩切点为富化窗口
+// 锚),聊天位注入/时间提醒在工作区会话与聊天引擎逐字同生效。
 //
 // P3 工具面:noTools:"builtin"——pi 内建 read/bash/edit/write 一律不启用(它们绕开
 // 我们的审批与边界壳),我们的七工具经 ctx.tools 以 customTools 注册
@@ -44,8 +46,12 @@ export interface PiGenerationContext {
   conversationId: string;
   /** 会话工作目录(工作区边界内的绝对路径)。 */
   cwd: string;
-  /** P7:选中路径上的历史消息(不含本轮新用户输入——那条走 session.prompt)。 */
+  /** P9:选中路径上的历史消息(富化全序列,含合成行——提醒/聊天位注入,
+   *  syntheticIds 标出;不含本轮新用户输入——那条走 session.prompt)。 */
   history: Message[];
+  /** P9:富化层 EnrichResult.syntheticIds,透传编码器(合成行照常编码,挡在切点
+   *  映射与退化诊断外)。生产侧生成路径必传;手动压缩路径传 real-only 序列,不传。 */
+  syntheticIds?: Set<string>;
   /** P7:既有压缩记录(conversation.piCompactions 解析产物;编码器只取切点仍在
    *  历史中的最新一条生效)。 */
   compactions?: PiCompactionRecord[];
@@ -117,6 +123,7 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     manager,
     history: ctx.history,
     model: ctx.model,
+    syntheticIds: ctx.syntheticIds,
     compactions: ctx.compactions,
   });
   const seededEntryIds = new Set(manager.getEntries().map((entry) => entry.id));

@@ -34,6 +34,11 @@ beforeAll(async () => {
     { content: "第二轮回答", usage: { prompt_tokens: 25, completion_tokens: 4 } },
     // 手动压缩用例剧本:session.compact 的上游调用(摘要)。
     { content: "手动压缩摘要:聊了两轮问答。" },
+    // "压缩记录重放"用例吃掉这一条后成功返回(旧剧本在此耗尽、该用例走 500 失败
+    // 分支;加 P9 用例后它顺位拿到这条,行为同样成立——断言只看请求体不看响应)。
+    { content: "重放用例响应" },
+    // P9 合成行灌注用例剧本(第 5 次上游请求)。
+    { content: "P9 灌注回答" },
   ]);
   cwd = mkdtempSync(join(tmpdir(), "pi-runner-cwd-"));
 });
@@ -135,8 +140,7 @@ describe("pi runner 集成(P7 统一会话数据)", () => {
       history: [user1, asst1, user2, asst2],
       compactions: [{ cutMessageId: user2.id, summary: "手动压缩摘要:聊了两轮问答。", tokensBefore: 1234 }],
     });
-    // 本轮假上游应答不复读剧本(剧本已耗尽→500 会走 runner 失败分支);
-    // 我们关心的是"发出去的请求体"——它在失败前已入 server.requests。
+    // 该用例只断言请求体(压缩语义硬证据),不依赖响应剧本——拿到成功或 500 均可。
     await runPiGeneration(ctx).catch(() => undefined);
     const request = server.requests.at(-1) as { messages?: Array<{ role: string; content?: unknown }> };
     const serialized = JSON.stringify(request?.messages ?? []);
@@ -156,5 +160,38 @@ describe("pi runner 集成(P7 统一会话数据)", () => {
     const { ctx } = testContext("conv-runner-abort", "别发出去");
     await expect(runPiGeneration({ ...ctx, signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
     expect(server.requests.length).toBe(requestsBefore);
+  }, 20_000);
+
+  test("P9 合成行灌注:富化全序列(含注入/提醒)进引擎,上游请求体可见", async () => {
+    // 复刻 orchestrator 生成路径的装配形状:history = 富化全序列,syntheticIds 标出
+    // 合成行;压缩切点作富化窗口锚(这里直接给一个已对齐的切点场景:切点=user2,
+    // 切点前的真实行已被富化窗口挡在序列外——富化层职责,此处直接给结果)。
+    const user2 = message("USER", [{ type: "text", text: "P9 新问" }]);
+    const asst2 = message("ASSISTANT", [{ type: "text", text: "P9 新答" }]);
+    const topInjection = message("USER", [{ type: "text", text: "P9_TOP_INJECTION" }]);
+    const reminder = message("USER", [{ type: "text", text: "<time_reminder>P9 时间提醒</time_reminder>" }]);
+    // 模拟富化产物:窗口=[top 注入, 提醒(user2 前), user2, asst2]。
+    const history = [topInjection, reminder, user2, asst2];
+    const syntheticIds = new Set([topInjection.id, reminder.id]);
+    const { ctx } = testContext("conv-runner-p9", "P9 本轮", {
+      history,
+      syntheticIds,
+      compactions: [{ cutMessageId: user2.id, summary: "P9 旧史摘要", tokensBefore: 55 }],
+    });
+    const result = await runPiGeneration(ctx);
+    expect(result.text).toBe("P9 灌注回答");
+
+    const request = server.requests.at(-1) as { messages?: Array<{ role: string; content?: unknown }> };
+    const serialized = JSON.stringify(request?.messages ?? []);
+    // 注入/提醒/摘要同场:压缩重放盖不住窗口首位的 top 注入(firstKept=序列首 entry)。
+    expect(serialized).toContain("P9_TOP_INJECTION");
+    expect(serialized).toContain("P9 时间提醒");
+    expect(serialized).toContain("P9 旧史摘要");
+    expect(serialized).toContain("P9 新问");
+    // 切点前的真实历史不在场(窗口锚 + 摘要吸收,双重保证):伪造文本验证"任何
+    // 未灌注内容都不出现"。
+    expect(serialized).not.toContain("P9 未灌注的旧内容");
+    // 合成行不污染退化诊断(legacy 是其设计路径,非编辑痕迹)。
+    expect(result.degradedMessageIds).toEqual([asst2.id]);
   }, 20_000);
 });

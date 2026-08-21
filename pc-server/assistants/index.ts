@@ -278,18 +278,8 @@ export function activePromptInjections(
     .sort((left, right) => Number(right.priority ?? 0) - Number(left.priority ?? 0));
 }
 
-function applySystemPromptInjections(systemPrompt: string, injections: Array<Record<string, JsonValue>>) {
-  let before = "";
-  let after = "";
-  for (const injection of injections) {
-    const content = String(injection.content ?? "").trim();
-    if (!content) continue;
-    const position = normalizeInjectionPosition(injection.position);
-    if (position === "before_system_prompt") before += `${content}\n`;
-    if (position === "after_system_prompt") after += `\n${content}`;
-  }
-  return `${before}${systemPrompt}${after}`.trim();
-}
+// 系统位注入拼接(before/after_system_prompt)已归 message-enrichment 富化管线
+// (EnrichResult.systemInjectionBefore/After,P8);本层只剩聊天位插队。
 
 function mergedInjectionMessages(injections: Array<Record<string, JsonValue>>): Message[] {
   const grouped = new Map<string, string[]>();
@@ -326,21 +316,15 @@ function insertInjectionMessages(items: Message[], targetIndex: number, injectio
   items.splice(insertIndex, 0, ...messages);
 }
 
+/** 聊天位注入插队(P9 收窄后唯一职责):top_of_chat/bottom_of_chat/at_depth 三种
+ *  位置的注入按序插进消息序列。系统位注入(before/after_system_prompt)已归
+ *  message-enrichment 的富化管线(EnrichResult.systemInjectionBefore/After)——
+ *  本函数不再碰 SYSTEM 行。 */
 export function applyPromptInjectionsToMessages(
   messages: Message[],
   injections: Array<Record<string, JsonValue>>,
-  options?: { skipSystem?: boolean },
 ) {
   const result = messages.map((item) => cloneJson(item));
-  const systemIndex = result.findIndex((item) => item.role === "SYSTEM");
-  const systemContent = systemIndex >= 0 ? applySystemPromptInjections(textFromParts(result[systemIndex].parts), injections) : "";
-  if (systemIndex >= 0) {
-    if (systemContent) result[systemIndex] = { ...result[systemIndex], parts: [{ type: "text", text: systemContent }] };
-    else result.splice(systemIndex, 1);
-  } else if (!options?.skipSystem) {
-    const injectedSystem = applySystemPromptInjections("", injections);
-    if (injectedSystem) result.unshift(message("SYSTEM", [{ type: "text", text: injectedSystem }]));
-  }
 
   const firstUserIndex = result.findIndex((item) => item.role === "USER");
   insertInjectionMessages(

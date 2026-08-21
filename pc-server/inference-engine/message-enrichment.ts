@@ -2,15 +2,19 @@
 //
 // 定位:把"DB 里用户写的消息"变成"模型该看到的消息"的全部文本加工集中在一处,
 // 聊天引擎(conversation-encoding)与 pi 工作区引擎(orchestrator → context-encoder)
-// 共用同一份裁决——四件套(消息模板/时间提醒/lorebook+模式注入/上下文滞回截断)
+// 共用同一份裁决——四件套(消息模板/时间提醒/lorebook+模式注入/上下文窗口化)
 // 从此与"谁跑 agent 循环"无关。新增引擎接进来的唯一义务:先过 enrichMessages,
-// 再按自己的协议编码。
+// 再按自己的协议编码。窗口化 = 滞回截断 ∨ 压缩切点锚(P9:pi 的压缩切点经
+// windowStartMessageId 接入同一入口——注入行恒在窗口内、恒在切点之后,聊天位
+// 注入/时间提醒在两种模式下逐字生效)。
 //
-// 幂等纪律(双引擎分层的接缝):注入/提醒产生的是合成消息,不进 DB。EnrichResult
-// 用 syntheticIds 显式列出它们的 id——pi 编码器第二轮起按 id 剥除后从 DB 原文
-// 重新富化,注入语义"每次生成重新裁决"不变(安卓 PromptInjectionTransformer 同
-// 语义),DB 里永远不会沉淀出第二条 lorebook 正文。消息对象本身零改动(不挂
-// metadata 标记,不扩 Message 类型)。
+// 幂等纪律(双引擎分层的接缝):注入/提醒产生的是合成消息,不写 DB——pi 每轮从
+// DB 原文重新富化,注入语义"每次生成重新裁决"不变(安卓 PromptInjectionTransformer
+// 同语义),DB 里永远不会沉淀出第二条 lorebook 正文。EnrichResult 用 syntheticIds
+// 显式列出它们的 id——pi 生成路径把富化全序列(含合成行)灌进引擎,编码器据 id
+// 把合成行挡在压缩切点映射与退化诊断之外(context-encoder 头注);手动压缩则经
+// encodableMessages 剥回纯真实行(注入是配置不是对话,不进用户策展的摘要)。
+// 消息对象本身零改动(不挂 metadata 标记,不扩 Message 类型)。
 //
 // 稳定→易变排序的缓存哲学与 conversationTransformedMessages 一致:系统位注入
 // (before/after_system_prompt)不进本层消息序列,由调用方并入各自的系统提示词面
@@ -170,8 +174,11 @@ export interface EnrichOptions {
   conversation: Conversation;
   assistant: Assistant;
   model: Model;
-  /** 剥除指定 id 的合成消息(pi 编码器第二轮起:传入上一轮的 syntheticIds)。 */
-  stripSyntheticIds?: Set<string>;
+  /** 窗口锚(P9):从这条消息(含)起保留,与滞回截断起点取 max。生产侧唯一传法是
+   *  pi 压缩切点(effectivePiCompaction 的 cutMessageId)——压缩重放会隐藏切点之前
+   *  的条目,把切点接入窗口边界后,注入行/提醒恒在切点之后:既进模型视野,又永不
+   *  落进被摘要吸收的旧历史。id 不在序列中(陈旧压缩记录/消息被删)时视为无锚。 */
+  windowStartMessageId?: string;
   /** 时间提醒的"首条 USER 前一条"基准(聊天引擎传 system 消息,pi 路径无此前缀)。 */
   timeReminderAnchor?: Message;
 }
@@ -184,27 +191,28 @@ export interface EnrichResult {
   systemInjectionAfter: string;
   /** 命中的注入条目(诊断/测试断言用)。 */
   injections: Array<Record<string, JsonValue>>;
-  /** 本轮产生的合成消息 id(时间提醒/聊天位注入);pi 编码器据此在下轮剥除。 */
+  /** 本轮产生的合成消息 id(时间提醒/聊天位注入);生成路径随全序列灌进 pi 编码器
+   *  (挡在切点映射/退化诊断之外),手动压缩路径经 encodableMessages 剥除。 */
   syntheticIds: Set<string>;
 }
 
-/** 消息富化主管线:截断 → 模板/占位符 → 时间提醒 → 注入(聊天位)。
- *  系统位注入单列返回。产物 messages 已完成模板渲染——调用方(聊天编码器/pi 编码器)
- *  直接消费,不得再套 applyMessageTemplateToParts,否则 {{message}} 会被双重包装。
- *  纯函数:不改 conversation/assistant,合成消息 id 经 syntheticIds 显式返回。 */
+/** 消息富化主管线:窗口化(滞回截断 ∨ 压缩切点锚) → 模板/占位符 → 时间提醒 →
+ *  注入(聊天位)。系统位注入单列返回。产物 messages 已完成模板渲染——调用方(聊天
+ *  编码器/pi 编码器)直接消费,不得再套 applyMessageTemplateToParts,否则 {{message}}
+ *  会被双重包装。纯函数:不改 conversation/assistant,合成消息 id 经 syntheticIds
+ *  显式返回。 */
 export function enrichMessages(baseMessages: Message[], options: EnrichOptions): EnrichResult {
   const { conversation, assistant, model } = options;
   const template = assistant.messageTemplate?.trim() || "{{ message }}";
 
-  // 0. pi 路径第二轮起:剥除上一轮的合成消息(按 id),从 DB 原文重新富化。
-  const source = options.stripSyntheticIds?.size
-    ? baseMessages.filter((msg) => !options.stripSyntheticIds!.has(msg.id))
-    : baseMessages;
-
-  // 1. 上下文滞回截断(与聊天引擎同一裁决;pi 侧与 keepRecentTokens 并存——
-  //    富化层决定"哪些消息有资格进上下文",pi 内部截断是引擎自己的安全网)。
-  const start = truncationStartFor(source.length, assistant.contextMessageLimit);
-  const windowed = start > 0 ? source.slice(start) : source;
+  // 1. 窗口化:滞回截断与压缩切点锚取 max(锚不在序列中视为无锚)。与聊天引擎
+  //    "先截断、后提醒/注入"同序——合成行天然落在窗口内、压缩切点之后。
+  const hysteresisStart = truncationStartFor(baseMessages.length, assistant.contextMessageLimit);
+  const anchorIndex = options.windowStartMessageId
+    ? baseMessages.findIndex((msg) => msg.id === options.windowStartMessageId)
+    : -1;
+  const start = Math.max(hysteresisStart, anchorIndex >= 0 ? anchorIndex : 0);
+  const windowed = start > 0 ? baseMessages.slice(start) : baseMessages;
 
   // 2. 模板/占位符逐消息渲染(一次到位:pi 编码器与聊天编码器吃同一份渲染产物)。
   const templated = windowed.map((msg) => {
@@ -220,12 +228,10 @@ export function enrichMessages(baseMessages: Message[], options: EnrichOptions):
   );
 
   // 4. lorebook/模式注入:系统位文本抽出,聊天位消息插队(合成 id 并入返回集)。
-  //    skipSystem:true——系统位已由调用方(聊天引擎 systemParts / pi appendSystemPrompt)
-  //    承载,消息序列里不再 unshift 合成 SYSTEM。
   const injections = activePromptInjections(conversation, assistant, withReminders);
   const { system, chat } = splitInjectionsByPlacement(injections);
   const withRemindersIds = new Set(withReminders.map((msg) => msg.id));
-  const injected = applyPromptInjectionsToMessages(withReminders, chat, { skipSystem: true });
+  const injected = applyPromptInjectionsToMessages(withReminders, chat);
   const syntheticIds = new Set(reminderIds);
   for (const msg of injected) {
     if (!withRemindersIds.has(msg.id)) syntheticIds.add(msg.id);
@@ -247,9 +253,10 @@ export function enrichMessages(baseMessages: Message[], options: EnrichOptions):
   };
 }
 
-/** pi 编码器入口前的最终一步:把富化产物剥回"可编码"形状。
- *  合成消息(提醒/注入)不进引擎上下文——它们由每轮富化重新裁决;
- *  真实消息按富化后的 parts 编码(模板已渲染)。 */
+/** 手动压缩路径专用:把富化产物剥回"可编码"的纯真实行(P9 起生成路径不再剥——
+ *  合成消息随全序列灌进 pi 引擎,聊天位注入/时间提醒在工作区会话同样生效)。
+ *  手动压缩的摘要应只覆盖真实对话:注入是配置不是对话,提醒只描述节奏,均不进
+ *  用户策展的摘要。 */
 export function encodableMessages(enriched: Message[], syntheticIds: Set<string>): Message[] {
   return enriched.filter((msg) => !syntheticIds.has(msg.id)).map((msg) => cloneJson(msg));
 }

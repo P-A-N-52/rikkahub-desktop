@@ -9,13 +9,13 @@ import { describe, expect, test } from "bun:test";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { JsonValue, Message, Model, ToolPart } from "../foundation/types";
 import { message } from "../foundation/utils";
-import { seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
+import { effectivePiCompaction, seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
 
 const model = { modelId: "test-model", inputModalities: ["TEXT", "IMAGE"] } as unknown as Model;
 
-function seed(history: Message[], compactions?: PiCompactionRecord[]) {
+function seed(history: Message[], compactions?: PiCompactionRecord[], syntheticIds?: Set<string>) {
   const manager = SessionManager.inMemory(process.cwd());
-  const result = seedPiSessionFromHistory({ manager, history, model, compactions });
+  const result = seedPiSessionFromHistory({ manager, history, model, compactions, syntheticIds });
   return { manager, result, messages: manager.buildSessionContext().messages };
 }
 
@@ -287,5 +287,71 @@ describe("DB→pi 编码器:压缩与确定性", () => {
     const first = seed(history, records).messages;
     const second = seed(history, records).messages;
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+});
+
+describe("DB→pi 编码器:P9 合成行灌注", () => {
+  /** P9 形状:窗口 = [top 注入(合成 USER), 切点 user2, asst2, bottom 注入(合成 USER)]。 */
+  function syntheticFixture() {
+    const user1 = message("USER", [{ type: "text", text: "旧问" }]);
+    const asst1 = message("ASSISTANT", [{ type: "text", text: "旧答" }]);
+    const user2 = message("USER", [{ type: "text", text: "新问" }]);
+    const asst2 = message("ASSISTANT", [{ type: "text", text: "新答" }]);
+    const topInjection = message("USER", [{ type: "text", text: "TOP_INJECTION" }]);
+    const assistantInjection = message("ASSISTANT", [{ type: "text", text: "ASSISTANT_INJECTION" }]);
+    const bottomInjection = message("USER", [{ type: "text", text: "BOTTOM_INJECTION" }]);
+    const history = [topInjection, user2, assistantInjection, asst2, bottomInjection];
+    const syntheticIds = new Set([topInjection.id, assistantInjection.id, bottomInjection.id]);
+    const compactions: PiCompactionRecord[] = [{ cutMessageId: user2.id, summary: "旧史摘要", tokensBefore: 100 }];
+    return { user1, asst1, user2, asst2, history, syntheticIds, compactions };
+  }
+
+  test("合成 USER/ASSISTANT 行照常编码进上下文,但不进切点映射与退化名单", () => {
+    const { history, syntheticIds, compactions, user2, asst2 } = syntheticFixture();
+    const { messages, result } = seed(history, compactions, syntheticIds);
+    const flat = JSON.stringify(messages);
+    // 全序列进模型视野(P9 核心:注入不再被剥除)。
+    expect(flat).toContain("TOP_INJECTION");
+    expect(flat).toContain("ASSISTANT_INJECTION");
+    expect(flat).toContain("BOTTOM_INJECTION");
+    // 登记排除:切点映射只认真实行,退化名单不含合成行(legacy 是其设计路径)。
+    expect([...result.entryIdsByMessageId.keys()]).toEqual([user2.id, asst2.id]);
+    expect(result.degradedMessageIds).toEqual([asst2.id]);
+  });
+
+  test("压缩重放 + 合成行:窗口锚保证合成行在切点之后(appendCompaction 不再盖住 top 注入)", () => {
+    const { history, syntheticIds, compactions } = syntheticFixture();
+    const { messages } = seed(history, compactions, syntheticIds);
+    const flat = JSON.stringify(messages);
+    // 摘要在场,切点前的旧史被取代——但窗口锚已把切点前条目挡在序列外,这里只剩
+    // "摘要吸收旧史"与"合成行在场"两件事同时成立。
+    expect(flat).toContain("旧史摘要");
+    expect(flat).not.toContain("旧问");
+    expect(flat).toContain("TOP_INJECTION");
+    expect(flat).toContain("新问");
+  });
+
+  test("effectivePiCompaction:切点在场且可编 → 生效;零条目行/被删消息 → 不生效;取最新一条", () => {
+    const { user1, asst1, user2 } = syntheticFixture();
+    const emptyRow = message("USER", []); // 编码后零条目(拒发条件)
+    const history = [user1, asst1, emptyRow, user2];
+    const valid = { cutMessageId: user2.id, summary: "s1", tokensBefore: 1 };
+    expect(effectivePiCompaction([valid], history, model)).toBe(valid);
+    // 切点指向零条目行 → 不生效(与编码器内部重放过滤同一谓词)。
+    expect(effectivePiCompaction([{ cutMessageId: emptyRow.id, summary: "s2", tokensBefore: 1 }], history, model)).toBeNull();
+    // 切点不在序列(被删/编辑分支)→ 不生效。
+    expect(effectivePiCompaction([{ cutMessageId: "gone", summary: "s3", tokensBefore: 1 }], history, model)).toBeNull();
+    // 多条记录取最新一条生效。
+    const older = { cutMessageId: user1.id, summary: "older", tokensBefore: 1 };
+    expect(effectivePiCompaction([older, valid], history, model)).toBe(valid);
+  });
+
+  test("effectivePiCompaction 与编码器重放口径一致:判定生效的记录,编码器必重放", () => {
+    const { user1, asst1, user2, asst2, history, syntheticIds, compactions } = syntheticFixture();
+    const effective = effectivePiCompaction(compactions, [user1, asst1, user2, asst2], model);
+    expect(effective?.cutMessageId).toBe(user2.id);
+    const { messages } = seed(history, compactions, syntheticIds);
+    // 编码器内部过滤没有把 effectivePiCompaction 判生效的记录再丢掉。
+    expect(JSON.stringify(messages)).toContain("旧史摘要");
   });
 });
