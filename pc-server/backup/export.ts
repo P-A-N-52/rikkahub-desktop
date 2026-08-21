@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import type { JsonValue } from "../foundation/types";
 import type { Settings } from "../foundation/types/settings";
 import { isRecord, safeJsonStringify } from "../foundation/utils";
-import { dataDir, filesDir, skillsDir } from "../foundation/paths";
+import { dataDir, filesDir, piSessionsDir, skillsDir } from "../foundation/paths";
 import { reportError } from "../observability/app-errors";
 import { tempDir } from "../foundation/platform";
 import { state } from "../persistence/json-store";
@@ -803,6 +803,25 @@ export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?
       const skillsStage = join(stageDir, "skills");
       mkdirSync(skillsStage, { recursive: true });
       copyDirRecursive(skillsDir, skillsStage);
+    }
+    // P5 拍板:pi 引擎记忆(工作区会话的 jsonl)纳入自家恢复面——与 pc-backup.json
+    // 同级的 PC 专属目录,安卓端按已知前缀读取、未知目录容忍跳过(跨端语义不变)。
+    // 只收 *.jsonl;损坏隔离件(.corrupt-*)是本机取证残留,不进备份。单文件失败不
+    // 阻断备份:恢复端缺 jsonl 自动降级为全新引擎记忆(§4.6),UI 历史不受影响。
+    if (existsSync(piSessionsDir)) {
+      const sessionFiles = readdirSync(piSessionsDir).filter((name) => name.endsWith(".jsonl"));
+      if (sessionFiles.length > 0) {
+        onProgress?.("正在打包引擎记忆...");
+        const piStage = join(stageDir, "pi-sessions");
+        mkdirSync(piStage, { recursive: true });
+        for (const name of sessionFiles) {
+          try {
+            copyFileSync(join(piSessionsDir, name), join(piStage, name));
+          } catch (copyErr) {
+            reportError("backup", "warn", `引擎记忆文件暂存失败,该会话恢复后将降级为全新引擎记忆:${name}`, copyErr, "pi_session_stage_failed");
+          }
+        }
+      }
     }
     // 安卓对齐批6:fonts/ 透传(安卓 2.4.2 新增自定义聊天字体)。PC 不消费,仅忠实搬运,
     // 保证 APP→PC→APP 往返不丢字体文件(导入侧对应 importFontsDirIfPresent)。

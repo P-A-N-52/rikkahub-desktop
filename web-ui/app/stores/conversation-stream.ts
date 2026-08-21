@@ -30,6 +30,7 @@ import {
   applyPolledConversationSnapshot,
   releaseConversationEntry,
   retainConversationEntry,
+  setConversationEngineStatus,
   setConversationError,
   setConversationSubscribing,
   useConversationStore,
@@ -42,6 +43,7 @@ import type {
   ConversationSnapshotEventDto,
   ConversationSnapshotMetaEventDto,
   ConversationTextDeltaEventDto,
+  EngineStatusEventDto,
 } from "~/types";
 
 export type ConversationStreamEvent =
@@ -262,6 +264,9 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
   record.controller = controller;
   setConversationSubscribing(id, true);
   setConversationError(id, null);
+  // 引擎状态是瞬态语义:服务端不重放,重连即重置——断连期间错过 busy:false 帧
+  // 不能让"压缩中"挂死在界面上。
+  setConversationEngineStatus(id, { busy: false });
 
   // 唯一数据路径:SSE 连接首帧即全量快照(服务端 openSse 保证),不发并行 GET
   // (连接预算纪律,见 services/app-events.ts 顶部注释)。
@@ -274,6 +279,13 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
 
         if (event === "error" && data.type === "error") {
           toast.error(data.message);
+          return;
+        }
+
+        // pi 引擎瞬态状态(P5):载荷无 type 字段(非快照/增量协议成员),按事件名分流。
+        // 只进 engineStatus 侧栈,不触碰 detail/协商/轮询。
+        if (event === "engine-status") {
+          setConversationEngineStatus(id, data as unknown as EngineStatusEventDto);
           return;
         }
 
@@ -403,6 +415,7 @@ function closeStream(id: string, record: StreamRecord): void {
     clearInterval(record.pollTimer);
     record.pollTimer = null;
   }
+  setConversationEngineStatus(id, { busy: false }); // 无订阅即无来源,不留残影
   releaseConversationEntry(id);
 }
 

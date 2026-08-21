@@ -23,7 +23,7 @@ import type { GenerationEventSink } from "../inference-engine/events";
 import type { Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
 import { reportError } from "../observability/app-errors";
-import { createPiModelRuntime, mapProviderModelToPi } from "./model-bridge";
+import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "./model-bridge";
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "./approval-gate";
 import type { PiSessionResources } from "./resources";
@@ -33,6 +33,9 @@ export interface PiGenerationContext {
   /** 生效 provider/model(调用方经 findModel 解析,providerOverwrite 已展开)。 */
   provider: Provider;
   model: Model;
+  /** 模型极限(P5:orchestrator 从 models.dev/助手配置取值;不传用 model-bridge 保守默认)。
+   *  contextWindow 决定 pi 自动压缩阈值(contextWindow - reserveTokens),必须尽量真实。 */
+  modelLimits?: PiModelLimits;
   /** 会话身份与引擎记忆。 */
   conversationId: string;
   /** pi_session_file 列的当前值(无记录传 null)。 */
@@ -111,7 +114,7 @@ export function openOrCreatePiSession(options: {
 
 export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGenerationResult> {
   if (ctx.signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
-  const mapped = mapProviderModelToPi(ctx.provider, ctx.model);
+  const mapped = mapProviderModelToPi(ctx.provider, ctx.model, ctx.modelLimits);
   if (!mapped.ok) throw new Error(`该模型无法在工作区引擎使用：${mapped.reason}`);
   const { runtime, model } = await createPiModelRuntime(mapped.mapping);
 
@@ -177,4 +180,100 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     resumed: opened.resumed,
     stopReason: outcome.stopReason,
   };
+}
+
+// ===== P5:pi 原生手动压缩 =====
+
+export interface PiCompactionContext {
+  provider: Provider;
+  model: Model;
+  modelLimits?: PiModelLimits;
+  conversationId: string;
+  storedSessionFileName?: string | null;
+  cwd: string;
+  /** 受控资源装配(生产必传:压缩会话也不许打开 .pi/settings.json 注入面)。 */
+  resources?: PiSessionResources;
+  /** 用户附加指示(compress 框的 additionalPrompt → pi compact customInstructions)。 */
+  customInstructions?: string;
+  /** 生成事件下沉:压缩路径只产 engine_status(压缩中/摘要重试),经桥同一映射。 */
+  sink: GenerationEventSink;
+  signal?: AbortSignal;
+  onSessionFile?: (fileName: string) => void;
+}
+
+export interface PiCompactionResult {
+  sessionFileName: string;
+  summary: string;
+  tokensBefore: number;
+  /** pi 对压缩后上下文的估算(可选字段,拿不到为 null;仅展示/日志用途)。 */
+  estimatedTokensAfter: number | null;
+}
+
+/** pi 已知压缩失败信息 → 人话(其余原样上抛,handler 统一转 400)。 */
+const PI_COMPACT_ERROR_TEXT: Record<string, string> = {
+  "Already compacted": "引擎记忆刚完成压缩,无需再次压缩。",
+  "Nothing to compact (session too small)": "引擎记忆还很小,暂无可压缩的历史。",
+};
+
+/**
+ * 手动压缩工作区会话的引擎记忆(方案 P5:手动压缩按钮改调 pi 原生 compaction)。
+ * 装配面与 runPiGeneration 同款(模型运行时/受控资源/事件桥),差别只在驱动动作:
+ * prompt → session.compact。压缩摘要由 pi 追加进 jsonl(appendCompaction),UI 历史
+ * 不动——双表征语义下,决定上游上下文的是引擎记忆,不是 UI 历史。
+ */
+export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompactionResult> {
+  if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
+  const mapped = mapProviderModelToPi(ctx.provider, ctx.model, ctx.modelLimits);
+  if (!mapped.ok) throw new Error(`该模型无法在工作区引擎使用：${mapped.reason}`);
+  const { runtime, model } = await createPiModelRuntime(mapped.mapping);
+
+  const opened = openOrCreatePiSession({
+    conversationId: ctx.conversationId,
+    storedFileName: ctx.storedSessionFileName,
+    cwd: ctx.cwd,
+  });
+  ctx.onSessionFile?.(opened.fileName);
+
+  const { session } = await createAgentSession({
+    cwd: ctx.cwd,
+    agentDir: piAgentDir,
+    modelRuntime: runtime,
+    model,
+    sessionManager: opened.manager,
+    noTools: "builtin",
+    customTools: [],
+    ...(ctx.resources
+      ? { resourceLoader: ctx.resources.resourceLoader, settingsManager: ctx.resources.settingsManager }
+      : {}),
+  });
+
+  const bridge = createPiEventBridge();
+  const unsubscribe = session.subscribe((event) => {
+    for (const generationEvent of bridge.handle(event)) ctx.sink(generationEvent);
+  });
+  const onAbort = () => {
+    session.abortCompaction();
+  };
+  ctx.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
+    const result = await session.compact(ctx.customInstructions?.trim() || undefined);
+    return {
+      sessionFileName: opened.fileName,
+      summary: result.summary,
+      tokensBefore: result.tokensBefore,
+      estimatedTokensAfter: result.estimatedTokensAfter ?? null,
+    };
+  } catch (err) {
+    // 取消统一为 AbortError(compact 内部以普通 Error("Compaction cancelled") 上抛)。
+    const message = err instanceof Error ? err.message : String(err);
+    if (ctx.signal?.aborted || message === "Compaction cancelled") {
+      throw new DOMException("Compaction cancelled", "AbortError");
+    }
+    throw new Error(PI_COMPACT_ERROR_TEXT[message] ?? `工作区引擎压缩失败：${message}`);
+  } finally {
+    ctx.signal?.removeEventListener("abort", onAbort);
+    unsubscribe();
+    session.dispose();
+  }
 }

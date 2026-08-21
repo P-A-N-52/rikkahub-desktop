@@ -9,7 +9,7 @@
 // 本模块纪律:纯文件名/路径/清理策略,零 pi 导入——会话删除级联(conversations/helpers)
 // 走这里,生产模块图在 P3 路由切换前不引入 pi 树。SessionManager 装配在 runner.ts。
 
-import { existsSync, renameSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { piSessionsDir } from "../foundation/paths";
 
@@ -24,6 +24,26 @@ export function piSessionFileNameFor(conversationId: string): string {
  *  (自家 DB 本可信,但这层是搬迁/导入外部备份后的防线,成本为零)。 */
 export function resolvePiSessionPath(fileName: string): string {
   return join(piSessionsDir, basename(fileName));
+}
+
+/** fork 复制引擎记忆(P5 裁决:引擎记忆随 fork 走,独立副本杜绝双会话共写同一 jsonl
+ *  的互相污染)。引擎记忆是"工作上下文"语义(重新生成/编辑重发同样只追加不回退),
+ *  不按 fork 点截断——与 UI 历史按 fork 点截断的差异可容忍。源缺失/复制失败返回
+ *  null = 分支从全新引擎记忆开始(UI 历史完整,与损坏降级同语义)。 */
+export function copyPiSessionFileForFork(
+  sourceFileName: string | null | undefined,
+  targetConversationId: string,
+): string | null {
+  if (!sourceFileName) return null;
+  const sourcePath = resolvePiSessionPath(sourceFileName);
+  if (!existsSync(sourcePath)) return null;
+  const targetName = piSessionFileNameFor(targetConversationId);
+  try {
+    copyFileSync(sourcePath, resolvePiSessionPath(targetName));
+    return targetName;
+  } catch {
+    return null;
+  }
 }
 
 /** 隔离损坏的 jsonl:改名 `.corrupt-<ts>` 留证。改名失败(文件锁)退而求删,

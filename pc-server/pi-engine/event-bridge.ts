@@ -282,8 +282,28 @@ export function createPiEventBridge() {
         entry.bashText += event.delta;
         return [{ kind: "tool_result", toolCallId: targetId, output: [{ type: "text", text: entry.bashText }] }];
       }
-      // 生命周期/会话状态事件:P2 无 part 操作。agent_end 的终局语义经 outcome() 由
-      // runner 消费;compaction/auto_retry/summarization_retry 状态提示 P5 接 UI。
+      // 引擎瞬态状态(P5):压缩/自动重试/摘要重试 → engine_status,协调器直通 SSE
+      // 状态条,不落库不产 part。end/finished 一律回 busy:false(状态条即清)。
+      case "compaction_start":
+        return [{ kind: "engine_status", status: { busy: true, phase: "compacting", reason: event.reason } }];
+      case "compaction_end":
+        return [{ kind: "engine_status", status: { busy: false } }];
+      case "auto_retry_start":
+        return [
+          {
+            kind: "engine_status",
+            status: { busy: true, phase: "retrying", attempt: event.attempt, maxAttempts: event.maxAttempts },
+          },
+        ];
+      case "auto_retry_end":
+        return [{ kind: "engine_status", status: { busy: false } }];
+      case "summarization_retry_scheduled":
+        // 摘要生成失败自动重试:对用户仍是"压缩中"(reason 桥不可知,归 manual 展示同文案)。
+        return [{ kind: "engine_status", status: { busy: true, phase: "compacting" } }];
+      case "summarization_retry_finished":
+        return [{ kind: "engine_status", status: { busy: false } }];
+      // 生命周期/会话状态事件:无 part 操作。agent_end 的终局语义经 outcome() 由
+      // runner 消费。
       case "agent_start":
       case "agent_end":
       case "agent_settled":
@@ -291,16 +311,10 @@ export function createPiEventBridge() {
       case "turn_end":
       case "message_start":
       case "queue_update":
-      case "compaction_start":
-      case "compaction_end":
       case "entry_appended":
       case "session_info_changed":
       case "thinking_level_changed":
-      case "auto_retry_start":
-      case "auto_retry_end":
-      case "summarization_retry_scheduled":
       case "summarization_retry_attempt_start":
-      case "summarization_retry_finished":
         return [];
       default: {
         // 穷举门:pi 升级新增事件类型 → 编译失败,倒逼校准映射字典。

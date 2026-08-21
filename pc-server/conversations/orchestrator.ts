@@ -9,7 +9,7 @@ import { classifyProxyError } from "../foundation/net";
 import { classifyContextOverflowError, classifyRateLimitError } from "../inference-engine/provider-errors";
 import { state } from "../persistence/json-store";
 import { addLog } from "../api/logs";
-import { broadcastConversation, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
+import { broadcastConversation, broadcastEngineStatus, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
 import { applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
 import {
@@ -39,6 +39,9 @@ import {
   fetchOpenAiText,
   fetchOpenAiTextStreaming,
   fetchText,
+  lookupContextLimit,
+  lookupOutputLimit,
+  modelsDevCache,
   streamClaudeChatWithTools,
   streamGoogleChatWithTools,
 } from "../inference-engine/providers";
@@ -52,7 +55,7 @@ import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } fr
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
-import { runPiGeneration } from "../pi-engine/runner";
+import { runPiCompaction, runPiGeneration } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
@@ -454,6 +457,16 @@ async function runPostGenerationTasks(conversationId: string, snapshot: Conversa
   }
 }
 
+/** pi 模型极限取值(P5 统计与压缩对齐):contextWindow 从 models.dev 查真实窗口
+ *  (决定 pi 自动压缩阈值),max_tokens 沿用助手配置(与聊天引擎同源),没配则查
+ *  models.dev 输出上限;都查不到时 model-bridge 用保守默认并在 max>窗口时收紧。 */
+function piModelLimitsFor(provider: Provider, model: Model, assistant: Assistant) {
+  return {
+    contextWindow: lookupContextLimit(modelsDevCache, provider.type, model.modelId),
+    maxTokens: assistant.maxTokens ?? lookupOutputLimit(modelsDevCache, provider.type, model.modelId),
+  };
+}
+
 /** pi 引擎生成装配(P3 路由 + P4 资源统一,方案 §4.2/§4.3/§三):
  *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
  *    图片走 pi 原生 images 通道;重新生成/编辑重发会向引擎记忆追加同一用户消息——
@@ -491,6 +504,7 @@ async function runPiWorkspaceGeneration(
   const result = await runPiGeneration({
     provider: deps.providerItem,
     model: deps.selectedModel,
+    modelLimits: piModelLimitsFor(deps.providerItem, deps.selectedModel, deps.assistant),
     conversationId: conversation.id,
     storedSessionFileName: conversation.piSessionFile ?? null,
     cwd: runtime.cwd,
@@ -511,6 +525,53 @@ async function runPiWorkspaceGeneration(
     },
   });
   return result.text;
+}
+
+/** P5:工作区会话手动压缩改走 pi 原生 compaction。压的是引擎记忆 jsonl(它才决定
+ *  发给上游的上下文),UI 历史一字不动;压缩摘要由 pi 写进 jsonl,下轮生成自然生效。
+ *  返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落 UI 历史压缩
+ *  (与生成路由的降级一致:聊天引擎从 UI 历史构建请求,压 UI 历史即压上下文)。
+ *  压缩期间经 engine_status 直通状态条,finally 兜底清除(取消/失败不挂"压缩中")。 */
+export async function compactPiWorkspaceConversation(
+  conversation: Conversation,
+  customInstructions: string,
+  signal?: AbortSignal,
+): Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter: number | null } | null> {
+  const runtime = workspaceRuntimeForConversation(conversation);
+  if (!runtime) return null;
+  const assistant = findAssistant(conversation.assistantId);
+  const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
+  const resources = await createPiSessionResources({
+    conversation,
+    assistant,
+    model: picked.model,
+    cwd: runtime.cwd,
+    root: runtime.root,
+  });
+  try {
+    return await runPiCompaction({
+      provider: picked.provider,
+      model: picked.model,
+      modelLimits: piModelLimitsFor(picked.provider, picked.model, assistant),
+      conversationId: conversation.id,
+      storedSessionFileName: conversation.piSessionFile ?? null,
+      cwd: runtime.cwd,
+      resources,
+      customInstructions,
+      signal,
+      sink: (event) => {
+        if (event.kind === "engine_status") broadcastEngineStatus(conversation.id, event.status);
+      },
+      onSessionFile: (fileName) => {
+        if (conversation.piSessionFile === fileName) return;
+        conversation.piSessionFile = fileName;
+        markConversationRowDirty(conversation.id);
+        scheduleThrottledConvFlush();
+      },
+    });
+  } finally {
+    broadcastEngineStatus(conversation.id, { busy: false });
+  }
 }
 
 /** 纯生成逻辑：驱动 Provider 流式/非流式调用，并通过 sink 发出生成事件。
@@ -646,7 +707,15 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     // P2(pi 引擎):内联 applyEvent 抽取为共享应用器(conversations/generation-apply.ts,
     // 逐字搬迁行为零变)——聊天引擎与 pi 事件桥共用同一份"事件→parts"写入字典。
     const applyEvent = createGenerationEventApplier({ conversation, node: assistantNode, message: currentMessage });
-    const sink: GenerationEventSink = (event) => applyEvent(event);
+    const sink: GenerationEventSink = (event) => {
+      // P5:引擎瞬态状态(压缩中/自动重试)不落库不产 part,直通会话 SSE 状态条;
+      // 其余事件照走应用器。generateAnswer finally 兜底 busy:false,中途 abort 不挂条。
+      if (event.kind === "engine_status") {
+        broadcastEngineStatus(conversation.id, event.status);
+        return;
+      }
+      applyEvent(event);
+    };
     const content = await runGeneration(
       conversation,
       currentMessage,
@@ -718,6 +787,9 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
   } finally {
     releaseConversation(conversation.id);
     completeConversationGeneration(conversation.id, controller);
+    // P5:生成终局兜底清引擎状态条——压缩/重试进行中 abort/失败时,end 事件可能永远
+    // 不来,不清会挂死"压缩中"。幂等,聊天引擎路径广播空集合无副作用。
+    if (piRuntime) broadcastEngineStatus(conversation.id, { busy: false });
     if (!conversationStillExists(conversation.id)) return;
     broadcastNodeUpdate(conversation, assistantNode);
     broadcastConversation(conversation);

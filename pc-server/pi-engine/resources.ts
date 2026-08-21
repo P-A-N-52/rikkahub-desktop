@@ -144,9 +144,10 @@ export async function createPiSessionResources(options: {
 }): Promise<PiSessionResources> {
   const { conversation, assistant, model, cwd, root } = options;
   // inMemory:零文件 I/O(不读不写任何 settings.json);projectTrusted:false 是给
-  // resource-loader 的发现逻辑看的(.pi/SYSTEM.md 门控)。压缩/重试等会话行为取 pi
-  // 默认值——与 P2/P3(默认 SettingsManager 但文件不存在)行为一致,P5 接管压缩面。
-  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+  // resource-loader 的发现逻辑看的(.pi/SYSTEM.md 门控)。压缩面 P5 接管:threshold/
+  // overflow 自动压缩显式开启(数值与 pi 默认一致,但不再依赖库默认值漂移),
+  // reserveTokens/keepRecentTokens 取 pi 默认;重试等其余会话行为仍取 pi 默认值。
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true } }, { projectTrusted: false });
   const enabledSkills = new Set(getStringArray(assistant.enabledSkills));
   // 技能库目录是我们的家,确保存在(与 tools/skills.listSkills 同款自愈)——否则冷启动
   // 未开过技能页时,pi 每轮 reload 都会对 additionalSkillPaths 报"path does not exist"。

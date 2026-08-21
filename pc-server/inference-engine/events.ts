@@ -22,9 +22,25 @@ export type GenerationEvent =
   | { kind: "tool_approval_updated"; toolCallId: string; approvalState: ToolApprovalState }
   | { kind: "tool_result"; toolCallId: string; output: ToolOutputEntry[] }
   | { kind: "usage"; usage: Message["usage"] }
+  // 引擎会话状态(P5,pi 引擎专属):压缩中/自动重试中等瞬态提示。不落库不产 part,
+  // 协调器直通 SSE 给前端状态条;busy=false 即清除。detail 是给状态条的展示参数。
+  | { kind: "engine_status"; status: EngineStatus }
   | { kind: "finished"; content: string; stopReason: string | null }
   | { kind: "error"; error: string }
   | { kind: "abort" };
+
+/** pi 引擎瞬态状态(会话级,SSE engine-status 事件载荷)。 */
+export type EngineStatus =
+  | { busy: false }
+  | {
+      busy: true;
+      phase: "compacting" | "retrying";
+      /** compacting:manual/threshold/overflow;retrying 无。 */
+      reason?: string;
+      /** retrying:第几次/共几次。 */
+      attempt?: number;
+      maxAttempts?: number;
+    };
 
 /** 事件接收器。Provider 流式函数在解析到增量时调用它。 */
 export type GenerationEventSink = (event: GenerationEvent) => void;

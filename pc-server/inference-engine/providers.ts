@@ -103,32 +103,51 @@ export async function loadModelsDev(force = false): Promise<void> {
 //    用户常用简短 id)。用 `modelId + "-"` 锚定,避免 gpt-4 误匹配 gpt-4o;
 // ③ 跨 provider:中转站可能 type=openai 但实际模型(如 deepseek)在别的 provider下;
 // ④ 都没有 → null(前端只显示分子)。
-export function lookupContextLimit(
+function lookupModelLimit(
   catalog: Record<string, any> | null,
   providerType: string,
   modelId: string,
+  field: "context" | "output",
 ): number | null {
   if (!catalog || !modelId) return null;
   const providerKey = providerType === "claude" ? "anthropic" : providerType;
-  const contextOf = (models: any): number | null => {
+  const limitOf = (models: any): number | null => {
     if (!models) return null;
-    const exact = models[modelId]?.limit?.context;
+    const exact = models[modelId]?.limit?.[field];
     if (typeof exact === "number" && exact > 0) return exact;
     for (const key of Object.keys(models)) {
       if (key.startsWith(`${modelId}-`) || key.startsWith(`${modelId}.`)) {
-        const v = models[key]?.limit?.context;
+        const v = models[key]?.limit?.[field];
         if (typeof v === "number" && v > 0) return v;
       }
     }
     return null;
   };
-  const primary = contextOf(catalog[providerKey]?.models);
+  const primary = limitOf(catalog[providerKey]?.models);
   if (primary) return primary;
   for (const key of Object.keys(catalog)) {
-    const v = contextOf(catalog[key]?.models);
+    const v = limitOf(catalog[key]?.models);
     if (v) return v;
   }
   return null;
+}
+
+export function lookupContextLimit(
+  catalog: Record<string, any> | null,
+  providerType: string,
+  modelId: string,
+): number | null {
+  return lookupModelLimit(catalog, providerType, modelId, "context");
+}
+
+// 按同一套匹配规则查模型输出上限(models.dev limit.output)。P5:pi 引擎请求 max_tokens
+// 与自动压缩预算需要真实值,查不到由调用方给保守默认。
+export function lookupOutputLimit(
+  catalog: Record<string, any> | null,
+  providerType: string,
+  modelId: string,
+): number | null {
+  return lookupModelLimit(catalog, providerType, modelId, "output");
 }
 
 // 给 message.usage 填充 contextLimit(基于 msg.modelId 查 models.dev)。cache 未加载或

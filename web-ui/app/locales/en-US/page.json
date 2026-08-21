@@ -60,6 +60,7 @@
     "compress": {
       "dialog_title": "Compress conversation history",
       "dialog_description": "Uses the context compression model from the default model and prompt settings to summarize earlier messages while keeping recent ones.",
+      "workspace_description": "Compacts the workspace engine's working memory: the current chat model summarizes earlier execution history. Your message history in the UI stays intact, and the next generation uses the compacted context.",
       "target_tokens": "Target tokens",
       "keep_recent": "Keep recent messages",
       "additional_prompt": "Additional requirements",
@@ -67,7 +68,13 @@
       "cancel": "Cancel",
       "start": "Start compression",
       "success": "Conversation history compressed",
+      "workspace_success": "Engine working memory compacted",
       "failed": "Compression failed"
+    },
+    "engine_status": {
+      "compacting": "Compacting engine context…",
+      "compacting_auto": "Context near limit, auto-compacting…",
+      "retrying": "Upstream error, retrying automatically ({{attempt}}/{{max}})…"
     },
     "translate": {
       "dialog_title": "Select translation language",

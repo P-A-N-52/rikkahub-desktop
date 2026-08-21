@@ -25,10 +25,17 @@ export type PiMappingResult = { ok: true; mapping: PiModelMapping } | { ok: fals
 
 // 我们不做成本核算（pi 用 cost 算展示成本，全 0 = 不产生虚假数字）。
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-// 我们的模型配置不含上下文窗口/输出上限（安卓同构无此字段），给 pi 保守通用默认。
-// 影响面：pi 的自动压缩阈值与请求 max_tokens；P5 统计对齐时若需要再精化为按模型推断。
+// 我们的模型配置不含上下文窗口/输出上限（安卓同构无此字段）。P5：调用方经 limits 传
+// models.dev 真实值（影响 pi 自动压缩阈值 contextWindow-reserveTokens 与请求 max_tokens），
+// 查不到时用保守通用默认——128k 窗口宁可让大窗口模型早压缩，也不给小窗口模型虚报。
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
+
+/** 调用方可注入的模型极限(orchestrator 从 models.dev/助手配置取值,本模块保持纯映射)。 */
+export interface PiModelLimits {
+  contextWindow?: number | null;
+  maxTokens?: number | null;
+}
 
 /** 协议映射（方案 §3.5 映射表）。返回 null = 无法映射，走诚实过滤面。 */
 export function piApiFor(provider: Provider): KnownApi | null {
@@ -53,7 +60,7 @@ function piBaseUrlFor(provider: Provider, api: KnownApi): string {
 }
 
 /** 映射不到时给用户看的原因（模型选择器过滤面与错误提示共用，方案"诚实披露，不硬塞"）。 */
-export function mapProviderModelToPi(provider: Provider, model: Model): PiMappingResult {
+export function mapProviderModelToPi(provider: Provider, model: Model, limits?: PiModelLimits): PiMappingResult {
   const api = piApiFor(provider);
   if (!api) {
     return {
@@ -70,6 +77,16 @@ export function mapProviderModelToPi(provider: Provider, model: Model): PiMappin
   const headers: Record<string, string> = {};
   applyModelRequestHeaders(headers, provider, model);
 
+  const contextWindow =
+    typeof limits?.contextWindow === "number" && limits.contextWindow > 0
+      ? limits.contextWindow
+      : DEFAULT_CONTEXT_WINDOW;
+  // max_tokens 不越过窗口(异常目录数据防御:output ≥ context 时请求会被上游拒绝)。
+  const maxTokens = Math.min(
+    typeof limits?.maxTokens === "number" && limits.maxTokens > 0 ? limits.maxTokens : DEFAULT_MAX_TOKENS,
+    contextWindow,
+  );
+
   const config: ProviderConfigInput = {
     name: provider.name,
     baseUrl: piBaseUrlFor(provider, api),
@@ -85,8 +102,8 @@ export function mapProviderModelToPi(provider: Provider, model: Model): PiMappin
         reasoning: model.abilities.includes("REASONING"),
         input: model.inputModalities.includes("IMAGE") ? ["text", "image"] : ["text"],
         cost: ZERO_COST,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
+        contextWindow,
+        maxTokens,
       },
     ],
   };

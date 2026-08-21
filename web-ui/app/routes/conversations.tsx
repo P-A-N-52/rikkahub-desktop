@@ -66,6 +66,7 @@ import { WorkbenchHost } from "~/components/workbench/workbench-host";
 import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
 import { WindowControlsBar } from "~/components/window-controls";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
+import { EngineStatusBar } from "~/components/workspace/engine-status-bar";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import {
@@ -1392,6 +1393,11 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   const hasMessages = useConversationStore((state) =>
     activeId ? (state.entries[activeId]?.detail?.messages.length ?? 0) > 0 : false,
   );
+  // P5:工作区会话的手动压缩走 pi 原生 compaction(压引擎记忆,UI 历史不动)——
+  // 压缩框隐藏"目标 Token/保留最近消息"(那是 UI 历史压缩的参数),文案换语义。
+  const isWorkspaceConversation = useConversationStore((state) =>
+    activeId ? Boolean(state.entries[activeId]?.detail?.workspaceId) : false,
+  );
   const detailLoading = useConversationStore((state) => {
     if (!activeId) return false;
     const entry = state.entries[activeId];
@@ -1662,7 +1668,11 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
       setCompressDialogOpen(false);
       refreshConversation(activeId);
       refreshList();
-      toast.success(t("conversations.compress.success"));
+      toast.success(
+        isWorkspaceConversation
+          ? t("conversations.compress.workspace_success")
+          : t("conversations.compress.success"),
+      );
     } catch (error) {
       // R7-4:用户主动取消不报错(取消不是失败)。
       if (!controller.signal.aborted) {
@@ -1672,7 +1682,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
       compressAbortRef.current = null;
       setCompressing(false);
     }
-  }, [activeId, compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, refreshList]);
+  }, [activeId, compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, isWorkspaceConversation, refreshList]);
 
   const handleStop = React.useCallback(async () => {
     if (!activeId) return;
@@ -1813,6 +1823,8 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
             ))}
           {/* 分块 TTS 播放条是全局单例状态,只挂在聚焦窗格,避免分栏时重复显示。 */}
           {focused ? <TtsPlayBar /> : null}
+          {/* pi 引擎瞬态状态条(P5):按窗格各自订阅本会话状态,分栏互不串扰。 */}
+          <EngineStatusBar conversationId={activeId} />
           <ChatInputArea
             draftKey={draftKey}
             isGenerating={conversationIsGenerating}
@@ -1884,47 +1896,57 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("conversations.compress.dialog_title")}</DialogTitle>
-            <DialogDescription>{t("conversations.compress.dialog_description")}</DialogDescription>
+            <DialogDescription>
+              {isWorkspaceConversation
+                ? t("conversations.compress.workspace_description")
+                : t("conversations.compress.dialog_description")}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
-            <div className="space-y-2">
-              <div className="text-sm font-medium">{t("conversations.compress.target_tokens")}</div>
-              <div className="grid grid-cols-4 gap-2">
-                {COMPRESS_TOKEN_OPTIONS.map((value) => (
-                  <Button
-                    key={value}
-                    type="button"
-                    variant={compressTargetTokens === value ? "default" : "outline"}
-                    onClick={() => setCompressTargetTokens(value)}
-                  >
-                    {value}
-                  </Button>
-                ))}
-              </div>
-              <Input
-                type="number"
-                min={256}
-                value={compressTargetTokens}
-                onChange={(event) =>
-                  setCompressTargetTokens(Math.max(256, Number(event.target.value) || 2000))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">{t("conversations.compress.keep_recent")}</div>
-              <div className="grid grid-cols-4 gap-2">
-                {COMPRESS_KEEP_OPTIONS.map((value) => (
-                  <Button
-                    key={value}
-                    type="button"
-                    variant={compressKeepRecent === value ? "default" : "outline"}
-                    onClick={() => setCompressKeepRecent(value)}
-                  >
-                    {value}
-                  </Button>
-                ))}
-              </div>
-            </div>
+            {/* P5:工作区会话走 pi 原生压缩,目标 Token/保留最近消息是 UI 历史压缩的
+                参数(服务端忽略),隐藏以免误导;额外要求透传为压缩自定义指示。 */}
+            {!isWorkspaceConversation ? (
+              <>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">{t("conversations.compress.target_tokens")}</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {COMPRESS_TOKEN_OPTIONS.map((value) => (
+                      <Button
+                        key={value}
+                        type="button"
+                        variant={compressTargetTokens === value ? "default" : "outline"}
+                        onClick={() => setCompressTargetTokens(value)}
+                      >
+                        {value}
+                      </Button>
+                    ))}
+                  </div>
+                  <Input
+                    type="number"
+                    min={256}
+                    value={compressTargetTokens}
+                    onChange={(event) =>
+                      setCompressTargetTokens(Math.max(256, Number(event.target.value) || 2000))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">{t("conversations.compress.keep_recent")}</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {COMPRESS_KEEP_OPTIONS.map((value) => (
+                      <Button
+                        key={value}
+                        type="button"
+                        variant={compressKeepRecent === value ? "default" : "outline"}
+                        onClick={() => setCompressKeepRecent(value)}
+                      >
+                        {value}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : null}
             <label className="block space-y-2">
               <span className="text-sm font-medium">
                 {t("conversations.compress.additional_prompt")}

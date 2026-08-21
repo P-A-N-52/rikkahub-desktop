@@ -1,11 +1,11 @@
-// pi-engine/pi-session-column.test.ts — pi_session_file 列与删除级联回归(P2)
+// pi-engine/pi-session-column.test.ts — pi_session_file 列与删除级联回归(P2/P5)
 //
-// 覆盖:新库 schema 往返、老库 ALTER 升级、PC 自家 dump 携带、fork 语义(引擎记忆不共享,
-// 由 handler 显式置空——此处锁定字段默认行为)、删除会话级联清 jsonl(真实 helpers 链路)。
+// 覆盖:新库 schema 往返、老库 ALTER 升级、PC 自家 dump 携带、fork 语义(P5 裁决:引擎
+// 记忆随 fork 复制为独立副本,绝不共写同一 jsonl)、删除会话级联清 jsonl(真实 helpers 链路)。
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import type { Conversation, State } from "../foundation/types";
 import {
@@ -22,7 +22,7 @@ import { deleteConversationsById } from "../conversations/helpers";
 import { generating } from "../conversations/generation-state";
 import { configureWorkingSet, registerConversation } from "../conversations/working-set";
 import { setState, state } from "../persistence/json-store";
-import { deletePiSessionFiles, piSessionsDir, resolvePiSessionPath } from "./session-files";
+import { copyPiSessionFileForFork, deletePiSessionFiles, piSessionsDir, resolvePiSessionPath } from "./session-files";
 
 // bun test 单进程跑全部文件:全局 state 用后必须恢复,不向后续测试文件泄漏
 // (workspace 系测试对 state 形状有自己的假设,泄漏最小 state 会让它们假失败)。
@@ -114,6 +114,18 @@ describe("pi_session_file 列", () => {
     expect(existsSync(resolvePiSessionPath(fileName))).toBe(true);
     deleteConversationsById(new Set(["conv-del-1"]));
     expect(existsSync(resolvePiSessionPath(fileName))).toBe(false);
+  });
+
+  test("copyPiSessionFileForFork:复制为目标确定性命名的独立副本;源缺失/空值返回 null(P5)", () => {
+    mkdirSync(piSessionsDir, { recursive: true });
+    const sourceName = "conv-fork-src.jsonl";
+    writeFileSync(resolvePiSessionPath(sourceName), '{"type":"session"}\n');
+    expect(copyPiSessionFileForFork(sourceName, "fork-1")).toBe("fork-1.jsonl");
+    // 独立副本:源后续变化不影响副本(双会话共写同一 jsonl 的污染面被切断)
+    writeFileSync(resolvePiSessionPath(sourceName), "changed\n");
+    expect(readFileSync(resolvePiSessionPath("fork-1.jsonl"), "utf-8")).toBe('{"type":"session"}\n');
+    expect(copyPiSessionFileForFork(null, "fork-2")).toBeNull();
+    expect(copyPiSessionFileForFork("missing.jsonl", "fork-3")).toBeNull();
   });
 
   test("deletePiSessionFiles:空值跳过、不存在不报错、路径分隔符被剥掉", () => {

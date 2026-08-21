@@ -226,18 +226,34 @@ describe("pi 事件桥:纯映射", () => {
       { type: "agent_end", messages: [], willRetry: false },
       { type: "agent_settled" },
       { type: "queue_update", steering: [], followUp: [] },
-      { type: "compaction_start", reason: "manual" },
-      { type: "compaction_end", reason: "manual", result: undefined, aborted: false, willRetry: false },
       { type: "session_info_changed", name: undefined },
       { type: "thinking_level_changed", level: "off" },
-      { type: "auto_retry_start", attempt: 1, maxAttempts: 4, delayMs: 100, errorMessage: "x" },
-      { type: "auto_retry_end", success: true, attempt: 1 },
-      { type: "summarization_retry_scheduled", attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: "x" },
       { type: "summarization_retry_attempt_start", source: "branchSummary" },
-      { type: "summarization_retry_finished" },
       { type: "bash_execution_update", delta: "orphan" },
     ];
     for (const event of silent) expect(bridge.handle(event)).toEqual([]);
+  });
+
+  test("压缩/自动重试/摘要重试 → engine_status 瞬态状态(P5)", () => {
+    const bridge = createPiEventBridge();
+    expect(bridge.handle({ type: "compaction_start", reason: "threshold" })).toEqual([
+      { kind: "engine_status", status: { busy: true, phase: "compacting", reason: "threshold" } },
+    ]);
+    expect(bridge.handle({ type: "compaction_end", reason: "threshold", result: undefined, aborted: false, willRetry: false })).toEqual([
+      { kind: "engine_status", status: { busy: false } },
+    ]);
+    expect(bridge.handle({ type: "auto_retry_start", attempt: 2, maxAttempts: 4, delayMs: 100, errorMessage: "x" })).toEqual([
+      { kind: "engine_status", status: { busy: true, phase: "retrying", attempt: 2, maxAttempts: 4 } },
+    ]);
+    expect(bridge.handle({ type: "auto_retry_end", success: true, attempt: 2 })).toEqual([
+      { kind: "engine_status", status: { busy: false } },
+    ]);
+    expect(bridge.handle({ type: "summarization_retry_scheduled", attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: "x" })).toEqual([
+      { kind: "engine_status", status: { busy: true, phase: "compacting" } },
+    ]);
+    expect(bridge.handle({ type: "summarization_retry_finished" })).toEqual([
+      { kind: "engine_status", status: { busy: false } },
+    ]);
   });
 
   test("mapPiUsage/mapPiToolContent 口径", () => {
@@ -342,8 +358,9 @@ describe("pi 事件桥:落地回放(生产同款应用器)", () => {
     expect(text.text).toBe("结论:OK");
     // loading 占位被首个真实内容剥离
     expect(msg.parts.some((part) => part.type === "loading")).toBe(false);
-    // usage 按 mergeTokenUsage 合并(两轮,后轮非零值覆盖)
-    expect(msg.usage).toEqual({ promptTokens: 20, completionTokens: 6, totalTokens: 26, cachedTokens: 0 });
+    // usage 按 mergeTokenUsage 合并(两轮,后轮非零值覆盖);P5 统计对齐:应用器统一补
+    // contextLimit 分母(测试环境 models.dev 缓存未加载 → null,前端降级只显示分子)
+    expect(msg.usage).toEqual({ promptTokens: 20, completionTokens: 6, totalTokens: 26, cachedTokens: 0, contextLimit: null });
   });
 
   test("bash 增量输出:tool part 单 text 条目纯前缀增长(SSE 可走 text_delta 快路),终局替换", () => {

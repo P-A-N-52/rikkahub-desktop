@@ -12,6 +12,7 @@ import type { Conversation, Message, MessageNode, StreamHooks } from "../foundat
 import type { GenerationEvent, GenerationEventSink, StreamHooksWithSink } from "../inference-engine/events";
 import { isRecord } from "../foundation/utils";
 import { touchStream } from "../api/sse";
+import { fillContextLimit } from "../inference-engine/providers";
 import { mergeTokenUsage } from "../inference-engine/tool-loop";
 import {
   addStreamImage,
@@ -108,6 +109,12 @@ export function createGenerationEventApplier(target: GenerationApplyTarget): Gen
       case "usage":
         // P1-3:多轮工具调用时每轮都发 usage 事件,merge 防后轮缺字段清零已知值。
         currentMessage.usage = mergeTokenUsage(currentMessage.usage, event.usage);
+        // P5 统计对齐:pi 路径的 usage 不经 providers 的填充点,在应用器统一补
+        // contextLimit(分母);已填则内部跳过,chat 路径幂等。
+        fillContextLimit(currentMessage);
+        break;
+      // engine_status:瞬态状态不落库不产 part,由协调器 sink 包装直通 SSE(P5)。
+      case "engine_status":
         break;
       // finished/error/abort:终局语义由生成入口(generateAnswer / pi runner 的返回与
       // 抛错)承载,不经应用器——与原内联 applyEvent 一致(其 switch 亦无这三个 case)。

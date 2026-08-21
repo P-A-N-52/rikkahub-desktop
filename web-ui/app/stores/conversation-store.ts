@@ -16,7 +16,7 @@
 import { create } from "zustand";
 
 import { applyNodeUpdate, applyTextDelta, mergeConversationSnapshot, prependOlderNodes, replaceNodesRange } from "~/lib/conversation-sync";
-import type { ConversationDto, ConversationNodesPageDto, ConversationNodeUpdateEventDto, ConversationSnapshotMetaEventDto, ConversationTextDeltaEventDto } from "~/types";
+import type { ConversationDto, ConversationNodesPageDto, ConversationNodeUpdateEventDto, ConversationSnapshotMetaEventDto, ConversationTextDeltaEventDto, EngineStatusEventDto } from "~/types";
 
 export interface ConversationEntry {
   /** 最后已知快照(含已应用的流式增量);null = 尚无内容(等快照)。 */
@@ -27,8 +27,14 @@ export interface ConversationEntry {
   error: string | null;
 }
 
+/** pi 引擎瞬态状态(P5):只存 busy 条目,busy:false 即删键。 */
+export type EngineBusyStatus = Extract<EngineStatusEventDto, { busy: true }>;
+
 interface ConversationStoreState {
   entries: Record<string, ConversationEntry>;
+  /** 按会话的引擎瞬态状态(压缩中/自动重试)。SSE engine-status 帧驱动;不参与
+   *  entries 的 LRU/缓存语义(瞬态,断流即清,不值得进快照协商)。 */
+  engineStatus: Record<string, EngineBusyStatus>;
 }
 
 const CACHE_MAX = 20;
@@ -77,6 +83,7 @@ const EMPTY_ENTRY: ConversationEntry = { detail: null, subscribing: false, error
 
 export const useConversationStore = create<ConversationStoreState>(() => ({
   entries: {},
+  engineStatus: {},
 }));
 
 /** 快照落地:清错误、结束订阅建立态。窗口化快照(I-2)与本地已加载的更早历史做
@@ -273,17 +280,37 @@ export function setConversationError(id: string, error: string | null): void {
   });
 }
 
+/** pi 引擎瞬态状态落地(SSE engine-status 帧 / 断流清理)。busy:false 删键,幂等。 */
+export function setConversationEngineStatus(id: string, status: EngineStatusEventDto): void {
+  useConversationStore.setState((state) => {
+    if (!status.busy) {
+      if (!(id in state.engineStatus)) return state;
+      const next = { ...state.engineStatus };
+      delete next[id];
+      return { engineStatus: next };
+    }
+    return { engineStatus: { ...state.engineStatus, [id]: status } };
+  });
+}
+
+/** 状态条订阅(窄选择器:仅该会话状态变化才重渲染)。无状态 = undefined(不渲染)。 */
+export function useConversationEngineStatus(id: string | null): EngineBusyStatus | undefined {
+  return useConversationStore((state) => (id ? state.engineStatus[id] : undefined));
+}
+
 /** 删除会话/清库时显式驱逐(原 detailCache.delete + resetDetail 的合并语义)。 */
 export function evictConversations(ids: readonly string[]): void {
   useConversationStore.setState((state) => {
-    const present = ids.filter((id) => id in state.entries);
+    const present = ids.filter((id) => id in state.entries || id in state.engineStatus);
     if (present.length === 0) return state;
     const next = { ...state.entries };
+    const nextStatus = { ...state.engineStatus };
     for (const id of present) {
       delete next[id];
+      delete nextStatus[id];
       dropLru(id);
     }
-    return { entries: next };
+    return { entries: next, engineStatus: nextStatus };
   });
 }
 
@@ -315,5 +342,5 @@ export function useConversationEntry(id: string | null): ConversationEntry | und
 export function resetConversationStoreForTest(): void {
   cachedOrder.length = 0;
   retention.clear();
-  useConversationStore.setState({ entries: {} });
+  useConversationStore.setState({ entries: {}, engineStatus: {} });
 }

@@ -2,10 +2,10 @@
 // 纪律：只负责 SSE 推送；不做持久化、不改会话数据。
 // generating Map 从 conversations/generation-state 导入(生成控制已收敛到会话域)。
 
-import type { StreamHooksWithSink } from "../inference-engine/events";
+import type { EngineStatus, StreamHooksWithSink } from "../inference-engine/events";
 import { initWorkingSetSseGuard, markConversationRowDirty, markMessageNodeDirty, scheduleThrottledConvFlush } from "../conversations";
 import { initAppErrorBroadcast } from "../observability/app-errors";
-import type { Conversation, ConversationListInvalidateEventDto, ConversationNodeUpdateEventDto, ConversationSnapshotEventDto, ConversationTextDeltaEventDto, JsonValue, MessageNode } from "../foundation/types";
+import type { Conversation, ConversationListInvalidateEventDto, ConversationNodeUpdateEventDto, ConversationSnapshotEventDto, ConversationTextDeltaEventDto, EngineStatusEventDto, JsonValue, MessageNode } from "../foundation/types";
 import { diffFingerprints, fingerprintNode, type NodeBroadcastFingerprint } from "./node-delta";
 import { conversationNegotiationToken } from "./snapshot-negotiation";
 import { nodeStamp, toSnapshotConversationDto } from "./snapshot-window";
@@ -205,6 +205,14 @@ export function broadcastConversation(conversation: Conversation, event = "snaps
   };
   broadcastTo(conversationClients.get(conversation.id), sseFrame(event, payload));
   broadcastList();
+}
+
+// P5(pi 引擎):会话级瞬态引擎状态(压缩中/自动重试中)直通会话 SSE 状态条。
+// 不落库、不产 part、不触碰会话列表——只在订阅该会话的前端内存里短暂存在;
+// SSE 重连即重置(瞬态语义,崩溃残帧不会挂死)。低频事件,无需合帧。
+export function broadcastEngineStatus(conversationId: string, status: EngineStatus) {
+  const payload: EngineStatusEventDto = status; // 编译期契约:EngineStatus ≡ 线上 DTO
+  broadcastTo(conversationClients.get(conversationId), sseFrame("engine-status", payload));
 }
 
 // ===== H-b(专题2):流式增量帧 =====

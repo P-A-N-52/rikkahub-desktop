@@ -270,3 +270,19 @@ export type ConversationErrorEventDto = {
   type: "error";
   message: string;
 };
+
+/** 会话详情 SSE:pi 引擎瞬态状态(事件名 engine-status,P5)。压缩中/自动重试中的
+ *  状态条载荷,busy:false 即清除。不落库、不进快照,SSE 重连即重置(瞬态语义)。
+ *  与 inference-engine/events.ts 的 EngineStatus 同构(api/sse.ts 赋值做编译期契约校验;
+ *  foundation 不反向 import 引擎层,故此处独立声明)。 */
+export type EngineStatusEventDto =
+  | { busy: false }
+  | {
+      busy: true;
+      phase: "compacting" | "retrying";
+      /** compacting:manual/threshold/overflow;retrying 无。 */
+      reason?: string;
+      /** retrying:第几次/共几次。 */
+      attempt?: number;
+      maxAttempts?: number;
+    };
