@@ -53,6 +53,10 @@
         "description": "Use extensive reasoning to answer."
       },
       "xhigh": {
+        "label": "Ultra",
+        "description": "Use ultra-high reasoning budget to answer."
+      },
+      "max": {
         "label": "Max",
         "description": "Use maximum reasoning to answer."
       }

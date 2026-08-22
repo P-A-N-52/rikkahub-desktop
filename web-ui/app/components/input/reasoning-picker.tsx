@@ -34,9 +34,9 @@ import {
 // 旧方案滑杆撑高弹层导致超出窗口顶部的 bug。模型胶囊经 useCurrentReasoningLabel
 // 显示"模型名 · 强度"后缀。
 
-type ReasoningLevel = "off" | "auto" | "low" | "medium" | "high" | "xhigh";
+type ReasoningLevel = "off" | "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
-const REASONING_LEVELS: ReasoningLevel[] = ["off", "auto", "low", "medium", "high", "xhigh"];
+const REASONING_LEVELS: ReasoningLevel[] = ["off", "auto", "low", "medium", "high", "xhigh", "max"];
 
 interface ReasoningPreset {
   key: ReasoningLevel;
@@ -67,6 +67,8 @@ function ReasoningIcon({ level, className }: { level: ReasoningLevel; className?
       return <BrainCircuit {...props} />;
     case "xhigh":
       return <Brain {...props} />;
+    case "max":
+      return <BrainCircuit {...props} />;
   }
 }
 

@@ -590,10 +590,10 @@ export function reasoningLevelNormalized(level: string | null | undefined) {
   return normalized === "off" || normalized === "none" ? "off" : normalized;
 }
 
-// Token budgets per level — mirrors Android's ReasoningLevel enum values.
+// Token budgets per level — mirrors Android's ReasoningLevel enum values (含 MAX=32000)。
 
 export function budgetTokensFor(level: string): number {
-  const map: Record<string, number> = { off: 0, low: 1_000, medium: 2_000, high: 8_000, xhigh: 16_000 };
+  const map: Record<string, number> = { off: 0, low: 1_000, medium: 2_000, high: 8_000, xhigh: 16_000, max: 32_000 };
   return map[level] ?? 8_000;
 }
 
@@ -1002,12 +1002,23 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
     return siliconflowThinkingModels.has(modelItem.modelId) ? { enable_thinking: enabled } : {};
   }
   if (["ark.cn-beijing.volces.com", "open.bigmodel.cn", "api.moonshot.cn", "api.deepseek.com"].includes(host)) {
-    return { thinking: { type: enabled ? "enabled" : "disabled" }, ...(host === "api.deepseek.com" && enabled && normalized !== "auto" ? { reasoning_effort: normalized } : {}) };
+    // 对齐 Android ChatCompletionsAPI:367-379——DeepSeek 官方开思考且非 auto 时补 reasoning_effort,
+    // 但只认 low/high/max 三档:medium/high 收拢成 high,xhigh 收拢成 max。
+    const deepseekEffort =
+      host === "api.deepseek.com" && enabled && normalized !== "auto"
+        ? normalized === "medium" || normalized === "high"
+          ? "high"
+          : normalized === "xhigh"
+            ? "max"
+            : normalized // low / max 原样
+        : undefined;
+    return { thinking: { type: enabled ? "enabled" : "disabled" }, ...(deepseekEffort ? { reasoning_effort: deepseekEffort } : {}) };
   }
   if (host === "integrate.api.nvidia.com") {
     if (normalized === "auto") return {};
     if (modelItem.modelId.toLowerCase().includes("deepseek-v4")) {
-      if (normalized === "xhigh") return { reasoning_effort: "max" };
+      // 对齐 Android ChatCompletionsAPI:384-390——xhigh/max 都升 "max",其余非 off 归 "high"。
+      if (normalized === "xhigh" || normalized === "max") return { reasoning_effort: "max" };
       if (normalized === "off") return { reasoning_effort: "none" };
       return { reasoning_effort: "high" };
     }

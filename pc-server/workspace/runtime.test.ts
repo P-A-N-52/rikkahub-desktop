@@ -177,20 +177,22 @@ describe("宽/严边界选择(权限档位改版:区外写入经批准放行)", 
     expect(readFileSync(join(workspace.root, "in-zone.txt"), "utf8")).toBe("in");
   });
 
-  test("宽界不是无界:系统目录与应用数据目录写入仍硬拒", async () => {
-    const workspace = ws.createWorkspace({ type: "managed", name: "wide-deny" });
+  test("宽界无黑名单:full_access 下系统目录与应用数据目录写入也放行(2026-08-23 改版)", async () => {
+    const workspace = ws.createWorkspace({ type: "managed", name: "wide-allow" });
     ws.updateWorkspace(workspace.id, { permissionPreset: "full_access" });
     const conversation = bindConversation(workspace.id);
+    // 系统目录:用黑名单内但重定向到测试临时区的安全路径,验证不再硬拒(不真写 C:\Windows / /etc)。
     const sysTarget = process.platform === "win32"
-      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "rkh-deny-test.txt")
-      : "/etc/rkh-deny-test.txt";
-    await expect(
-      runtime.runWorkspaceTool("write", { path: sysTarget, content: "x" }, { conversationId: conversation.id }),
-    ).rejects.toThrow(/operating-system directories/);
+      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "Temp", "rkh-allow-test.txt")
+      : "/tmp/rkh-allow-test.txt";
+    await runtime.runWorkspaceTool("write", { path: sysTarget, content: "x" }, { conversationId: conversation.id });
+    expect(readFileSync(sysTarget, "utf8")).toBe("x");
+    // 应用数据目录 pc-data:同不再硬拒。写测试专属工作区根下的文件,不碰真实状态文件。
     const { dataDir } = await import("../foundation/paths");
-    await expect(
-      runtime.runWorkspaceTool("write", { path: join(dataDir, "rkh-deny-test.txt"), content: "x" }, { conversationId: conversation.id }),
-    ).rejects.toThrow(/application data directory/);
+    const dataTarget = join(workspace.root, "appdata-ok.txt");
+    expect(dataTarget.startsWith(join(dataDir, "workspaces"))).toBe(true); // 确认该路径确实在 pc-data 内
+    await runtime.runWorkspaceTool("write", { path: dataTarget, content: "x" }, { conversationId: conversation.id });
+    expect(readFileSync(dataTarget, "utf8")).toBe("x");
   });
 });
 

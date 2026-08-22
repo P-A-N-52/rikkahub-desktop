@@ -5,7 +5,8 @@
 //   confirm_each(询问批准):write/edit/bash 恒审批;read 免审。
 //   balanced(默认权限):区内 write/edit 免审(类比安卓 /tmp 豁免:区内写入低风险);
 //     bash 仅危险命令审批;write/edit 目标在工作区边界外 → 审批。
-//   full_access(完全访问):全部免审,不受限制操作电脑文件(系统目录仍硬拒,boundary.ts)。
+//   full_access(完全访问):全部免审,不受限制操作电脑文件(含区外/系统目录/应用数据目录,
+//     boundary.ts 自 2026-08-23 起对宽界写入不设黑名单)。
 //
 // 两段式审批判定(取代旧"只依赖工具名+档位"不变量,§9.3 修订):
 //   建卡态 = 无参数下界 workspaceToolNeedsApproval(tool, preset)——Claude 流式在

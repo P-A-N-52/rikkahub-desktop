@@ -126,7 +126,8 @@ export function mountedWorkspaceToolNames(): WorkspaceToolName[] {
  *  - write/edit 走宽界当且仅当"用户显式批准了这次调用"(区外写入的知情同意)或
  *    档位为 full_access(不受限制操作电脑文件);其余走严界(realpath 断言)——
  *    词法审批判定看漏的逃逸(软链指向区外)在严界被兜底拒绝;
- *  - 宽界区内直通,区外仍硬拒系统目录与应用数据目录(boundary.ts,不给审批放行的机会)。 */
+ *  - 宽界区内直通;区外/系统目录/应用数据目录自 2026-08-23 起一律放行(boundary.ts,
+ *    full_access 不设黑名单,"完全访问"写坏风险由用户在审批卡上自行权衡)。 */
 function buildWorkspaceTool(
   name: WorkspaceToolName,
   runtime: WorkspaceRuntime,

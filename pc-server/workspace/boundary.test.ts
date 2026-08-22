@@ -107,9 +107,9 @@ describe("宽界 Operations(read 三档全宽;write 区内直通+黑名单)", ()
     await expect(Promise.resolve().then(() => editOps.readFile(join(skills, "demo", "SKILL.md")))).rejects.toThrow(WorkspaceBoundaryError);
   });
 
-  test("宽界 write:区内直通(managed 根在 dataDir 下不误伤);区外可写;系统目录/数据目录硬拒", async () => {
-    // 回归:managed 工作区根在 dataDir/workspaces/ 之下,宽界黑名单含 dataDir,
-    // 区内直通规则保证 full_access 档区内写不被误拒。
+  test("宽界 write:区内直通;区外可写;pc-data/系统目录自 2026-08-23 起不再硬拒", async () => {
+    // 回归:managed 工作区根在 dataDir/workspaces/ 之下,宽界已无黑名单,
+    // 区内直通照常,区外与 pc-data、系统目录也一律放行(体积闸门照旧)。
     const { dataDir } = await import("../foundation/paths");
     const wsRoot = join(dataDir, "workspaces", "wide-test", "files");
     mkdirSync(wsRoot, { recursive: true });
@@ -118,11 +118,17 @@ describe("宽界 Operations(read 三档全宽;write 区内直通+黑名单)", ()
     expect(readFileSync(join(wsRoot, "in-zone.txt"), "utf8")).toBe("in");
     await wideOps.writeFile(join(outside, "out-zone.txt"), "out");
     expect(readFileSync(join(outside, "out-zone.txt"), "utf8")).toBe("out");
-    await expect(wideOps.writeFile(join(dataDir, "hijack.txt"), "x")).rejects.toThrow(/application data directory/);
+    // pc-data 应用数据目录:命中旧黑名单但 now 放行。只写测试专属子目录,不碰真实状态文件。
+    const dataTarget = join(dataDir, "workspaces", "wide-test", "appdata-ok.txt");
+    await wideOps.writeFile(dataTarget, "x");
+    expect(readFileSync(dataTarget, "utf8")).toBe("x");
+    // 系统目录:同样不再硬拒。用指向系统目录黑名单内、但重定向到测试临时区的安全路径验证
+    // (仅证明黑名单不再拦截;不真正写 C:\Windows / /etc)。
     const sysTarget = process.platform === "win32"
-      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "rkh-wide.txt")
-      : "/etc/rkh-wide.txt";
-    await expect(wideOps.writeFile(sysTarget, "x")).rejects.toThrow(/operating-system directories/);
+      ? join(process.env.SystemRoot ?? String.raw`C:\Windows`, "Temp", "rkh-wide-ok.txt")
+      : "/tmp/rkh-wide-ok.txt";
+    await wideOps.writeFile(sysTarget, "x");
+    expect(readFileSync(sysTarget, "utf8")).toBe("x");
   });
 });
 

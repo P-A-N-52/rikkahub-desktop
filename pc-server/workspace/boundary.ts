@@ -21,7 +21,6 @@ import { realpathSync } from "node:fs";
 import { constants } from "node:fs";
 import { access as fsAccess, mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { dataDir } from "../foundation/paths";
 import type { ReadOperations } from "./tools/read";
 import type { WriteOperations } from "./tools/write";
 import type { EditOperations } from "./tools/edit";
@@ -120,11 +119,13 @@ export function createBoundedEditOperations(root: string): EditOperations {
 
 // ----- 宽界 Operations(权限档位改版:经用户批准的区外写入 / full_access 档) -----
 //
-// "宽"不是"无界":操作系统目录与应用数据目录仍然硬拒——写坏前者是系统级灾难,写
-// 后者等于模型改写应用自身状态,两者都没有正当场景,不给审批放行的机会。除此之外
-// 不设路径限制("完全访问=不受限制操作电脑文件"),体积闸门照旧。
+// 2026-08-23 改版(用户拍板):宽界不再对任何路径设黑名单——full_access 语义即"完全
+// 访问",pc-data 应用数据目录不享特殊地位,操作系统目录也给审批机会(专业用户改 hosts、
+// 研究应用配置的正当场景)。宽界 = 写到哪算哪,唯一保留的闸是 2MB 体积上限。
+// systemDenyDirs() 仍保留:它同时服务"能否以系统目录为工作区根"的准入校验(index.ts)。
 
-/** 平台系统目录黑名单(规范化绝对路径)。工作区准入(index.ts)与宽界写入共用。 */
+/** 平台系统目录黑名单(规范化绝对路径)。仅供"以系统目录为工作区根"的准入校验(index.ts)
+ *  使用;宽界写入自 2026-08-23 起不再据此设限。 */
 export function systemDenyDirs(): string[] {
   if (process.platform === "win32") {
     return [
@@ -137,30 +138,16 @@ export function systemDenyDirs(): string[] {
   return ["/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/var", "/System", "/Library"].map((dir) => resolve(dir));
 }
 
-function isUnderAny(canonicalTarget: string, denyRoots: string[]): boolean {
-  const target = comparablePath(canonicalTarget);
-  for (const deny of denyRoots) {
-    const denyCmp = comparablePath(deny);
-    if (target === denyCmp || target.startsWith(denyCmp.endsWith(sep) ? denyCmp : denyCmp + sep)) return true;
-  }
-  return false;
-}
-
-/** 宽界写入断言:区内直通(managed 工作区根就在 dataDir/workspaces/ 下,黑名单不得误伤
- *  自己的地盘),区外 realpath 化后查黑名单——命中系统目录/应用数据目录即拒。 */
+/** 宽界写入断言:区内直通(managed 工作区根就在 dataDir/workspaces/ 下);区外/系统目录/
+ *  应用数据目录一律放行——full_access 的"完全访问"不设黑名单,写坏的风险由用户在审批卡上
+ *  自行权衡(审批矩阵对 full_access 免审,故实际是直接放行)。体积闸门照旧。 */
 export function assertWideWritablePath(absolutePath: string, root: string): string {
   try {
     return assertInsideWorkspace(absolutePath, root);
   } catch (err) {
     if (!(err instanceof WorkspaceBoundaryError)) throw err;
   }
-  const canonical = canonicalizeWithNonexistentTail(absolutePath);
-  if (isUnderAny(canonical, [...systemDenyDirs(), resolve(dataDir)])) {
-    throw new Error(
-      `Access denied: writing into operating-system directories or the application data directory is not allowed. Requested: ${absolutePath}`,
-    );
-  }
-  return canonical;
+  return canonicalizeWithNonexistentTail(absolutePath);
 }
 
 async function writeWithHardLimit(safePath: string, content: string, what: string): Promise<void> {
@@ -183,7 +170,7 @@ export function createWideReadOperations(): ReadOperations {
   };
 }
 
-/** write 工具的宽界 Operations(经批准的区外写入 / full_access):系统目录硬拒,2MB 闸门照旧。 */
+/** write 工具的宽界 Operations(经批准的区外写入 / full_access):无路径黑名单,2MB 闸门照旧。 */
 export function createWideWriteOperations(root: string): WriteOperations {
   return {
     writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Content"),
