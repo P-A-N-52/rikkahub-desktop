@@ -15,6 +15,7 @@ const root = join(import.meta.dir, "..", "..");
 const { onRequest: pingHandler } = await import(join(root, "functions", "ping.ts"));
 const { onRequest: statsHandler } = await import(join(root, "functions", "api", "stats", "index.ts"));
 const { onRequest: rebuildHandler } = await import(join(root, "functions", "api", "admin", "rebuild.ts"));
+const { onRequest: purgeHandler } = await import(join(root, "functions", "api", "admin", "purge.ts"));
 const { onRequest: dashHandler } = await import(join(root, "functions", "dashboard.ts"));
 
 let failures = 0;
@@ -231,6 +232,56 @@ console.log("[stats]");
     const r = await statsHandler(ctx(BASE + "/api/stats?" + q, { cookie: "dash_auth=" + TOKEN }));
     check("筛选 " + q + " → 200", r.status === 200, r.status);
   }
+}
+
+// ── purge(假新用户清理)──
+// 种一批明确的假设备:0.1.0-beta 版本(开发期构建) + 存活1天零活动的未知版本设备。
+// 再种一批"看起来像但其实是真用户"的对照:存活1天但发过消息的设备(绝不可删)。
+console.log("[purge]");
+{
+  const pv = "0.1.0-beta";
+  // 假设备 A:版本命中(0.1.0-beta),存活1天,零活动
+  ins.run("fake-dev-a-0001-aaaaaaaaaaaa", utcToday, pv, "win", 0, "", 0, 0, 0, 0);
+  // 假设备 B:版本命中,存活1天,有点消息(版本口径照样删——版本即铁证)
+  ins.run("fake-dev-b-0002-aaaaaaaaaaaa", utcToday, pv, "win", 3, "", 0, 0, 0, 0);
+  // 假设备 C:未知版本但存活1天零活动(通用启发式命中)
+  ins.run("fake-dev-c-0003-aaaaaaaaaaaa", utcToday, "9.9.9", "win", 0, "", 0, 0, 0, 0);
+  // 对照 D:存活1天但发过消息的真用户——绝不可删
+  ins.run("real-dev-d-0004-aaaaaaaaaaaa", utcToday, "1.4.1", "win", 7, "", 2, 0, 1, 0);
+
+  const base = BASE + "/api/admin/purge?token=" + TOKEN;
+  let res = await purgeHandler(ctx(base, { method: "GET" }));
+  check("purge GET 被拒 405", res.status === 405);
+  res = await purgeHandler(ctx(BASE + "/api/admin/purge?token=wrong", { method: "POST" }));
+  check("purge 坏 token 401", res.status === 401);
+
+  // dry-run:不动库。注意:宁多错杀——seed 里 60 个"存活1天零活动"的 churned 设备
+  // (newdev-*-cccccccc 中 mc=0 的那批)同样命中通用启发式,属预期内误删,故 matched>3。
+  res = await purgeHandler(ctx(base + "&version=" + pv, { method: "POST" }));
+  const dry = await res.json();
+  check("purge dry-run 命中≥3 台假设备", dry.dryRun === true && dry.matchedDevices >= 3, dry.matchedDevices);
+  check("purge dry-run 后假设备仍在库",
+    db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get().c === 3);
+
+  // commit:真删 + 重建。3 台 fake-dev-* 必被删,churned 零活动设备也被清(预期误删)。
+  res = await purgeHandler(ctx(base + "&version=" + pv + "&commit=1", { method: "POST" }));
+  const done = await res.json();
+  check("purge commit 删除≥3 台", done.purgedDevices >= 3 && done.dryRun === false, done);
+  const gone = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get().c;
+  check("purge 后假设备已清", gone === 0, gone);
+  const dAlive = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'real-dev-d-0004-aaaaaaaaaaaa'").get().c;
+  check("purge 不误删发过消息的真用户", dAlive === 1, dAlive);
+
+  // 关掉启发式后只按版本删:dev-c(9.9.9,无版本命中)不该被命中——再种回验证
+  ins.run("fake-dev-e-0005-aaaaaaaaaaaa", utcToday, pv, "win", 0, "", 0, 0, 0, 0);
+  ins.run("fake-dev-f-0006-aaaaaaaaaaaa", utcToday, "9.9.9", "win", 0, "", 0, 0, 0, 0);
+  res = await purgeHandler(ctx(base + "&version=" + pv + "&heuristic=0&commit=1", { method: "POST" }));
+  const done2 = await res.json();
+  check("purge heuristic=0 只按版本删", done2.purgedDevices === 1, done2);
+  const fAlive = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'fake-dev-f-0006-aaaaaaaaaaaa'").get().c;
+  check("heuristic=0 时未知版本零活动设备保留", fAlive === 1, fAlive);
+  // 清理残留,避免影响后续 stats 章节
+  db.query("DELETE FROM pings WHERE device_id LIKE 'fake-dev-%'").run();
 }
 
 // ── dashboard ──
