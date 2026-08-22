@@ -14,6 +14,7 @@ import type { Conversation, Message, MessageNode, ToolOutputEntry, ToolPart } fr
 import type { GenerationEvent } from "../inference-engine/events";
 import { createGenerationEventApplier } from "../conversations/generation-apply";
 import { message } from "../foundation/utils";
+import { clearAppErrors, recentAppErrors } from "../observability/app-errors";
 import { createPiEventBridge, mapPiToolContent, mapPiUsage } from "./event-bridge";
 
 // ----- pi 事件样本工厂(形状由 vendored pi 类型编译期锁定)-----
@@ -318,6 +319,22 @@ describe("pi 事件桥:纯映射", () => {
     expect(bridge.handle({ type: "summarization_retry_finished" })).toEqual([
       { kind: "engine_status", status: { busy: false } },
     ]);
+  });
+
+  test("压缩失败(pi 0.84.2 compaction_end.errorMessage)→ 全局上报 + 状态清除;成功/中止不上报", () => {
+    clearAppErrors();
+    const bridge = createPiEventBridge();
+    // 失败:状态条照常清除,同时把 errorMessage 上报进错误中心(severity error,用户必须知道)。
+    expect(
+      bridge.handle({ type: "compaction_end", reason: "threshold", result: undefined, aborted: false, willRetry: false, errorMessage: "Compaction failed: boom" }),
+    ).toEqual([{ kind: "engine_status", status: { busy: false } }]);
+    const errs = recentAppErrors();
+    expect(errs.some((e) => e.domain === "pi-engine" && e.severity === "error" && e.message.includes("压缩失败"))).toBe(true);
+    // 成功(有 result)与中止(aborted,errorMessage 为 undefined)均不上报。
+    clearAppErrors();
+    bridge.handle({ type: "compaction_end", reason: "manual", result: { summary: "s", firstKeptEntryId: "e", tokensBefore: 1, estimatedTokensAfter: 1, usage: undefined, details: undefined } as never, aborted: false, willRetry: false });
+    bridge.handle({ type: "compaction_end", reason: "manual", result: undefined, aborted: true, willRetry: false });
+    expect(recentAppErrors().filter((e) => e.domain === "pi-engine")).toHaveLength(0);
   });
 
   test("mapPiUsage/mapPiToolContent 口径", () => {

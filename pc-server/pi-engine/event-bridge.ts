@@ -40,6 +40,7 @@ import type {
 } from "../../pi/packages/ai/src/types.ts";
 import type { EngineFidelityBlock, GenerationEvent } from "../inference-engine/events";
 import type { JsonValue, ToolOutputEntry } from "../foundation/types";
+import { reportError } from "../observability/app-errors";
 
 /** pi Usage → 我们的 TokenUsage(conversations/helpers ensureUsage 同形)。
  *  口径:promptTokens 含缓存读写(对齐 OpenAI prompt_tokens 语义);cachedTokens=cacheRead。
@@ -338,8 +339,17 @@ export function createPiEventBridge() {
       // 状态条,不落库不产 part。end/finished 一律回 busy:false(状态条即清)。
       case "compaction_start":
         return [{ kind: "engine_status", status: { busy: true, phase: "compacting", reason: event.reason } }];
-      case "compaction_end":
+      case "compaction_end": {
+        // pi 0.84.2 起 compaction_end 失败分支携带 errorMessage(同 session_compact_failed
+        // 扩展事件的信息,但走我们已订阅的 AgentSessionEvent 主通道——接扩展事件是冗余副本)。
+        // 手动压缩失败 willRetry:false(真失败);摘要生成失败走 summarization_retry_* 自动重试
+        // (上面已映射成状态条,非终败)。aborted 时 errorMessage 为 undefined,天然排除。
+        // 故 errorMessage 存在即真失败:压缩没发生=后续可能上下文溢出,用户必须知道。
+        if (event.errorMessage) {
+          reportError("pi-engine", "error", "会话上下文压缩失败,继续对话可能超出模型上下文窗口", event.errorMessage);
+        }
         return [{ kind: "engine_status", status: { busy: false } }];
+      }
       case "auto_retry_start":
         return [
           {
