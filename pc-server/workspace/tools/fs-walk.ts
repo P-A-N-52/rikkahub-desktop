@@ -2,7 +2,12 @@
 // pi 的 grep/find 默认 shell 出 ripgrep/fd 二进制(ensureTool 会联网下载);PC 的兜底
 // 场景恰恰是"这台 Windows 连 bash 都没有",不再引入外部二进制,用纯 TS 遍历 + Bun.Glob。
 // 语义:
-// - 恒跳过 .git 与 node_modules(与 pi find 自定义 ops 路径的 ignore 清单一致);
+// - 恒跳过 .git 与 node_modules(与 pi find 自定义 ops 路径的 ignore 清单一致),不可被
+//   .gitignore 取回(安全边界,同 pi);
+// - 额外跳过一份"公认构建产物目录"(SKIPPED_ARTIFACT_DIRS,见下):pi 自身有 fd/.gitignore
+//   兜底故不内置,而本工具恰为无 fd 的 Windows 兜底,无 .gitignore 覆盖的项目会白遍历万级
+//   产物(实测 src-tauri/target 14591 条目)。与 .gitignore 同层判定,可被 !dir/ 取回;
+//   回退到纯 pi 语义只需清空该数组,遍历逻辑不变;
 // - 支持 .gitignore 常用子集:空行/注释、取反 !、目录尾 /、含 / 的锚定模式、*/**/? 通配;
 //   逐目录叠加,同 git 语义"后规则覆盖先规则";
 // - 不跟随符号链接(边界安全:区内软链指向区外时遍历不越界);
@@ -13,6 +18,29 @@ import { join } from "node:path";
 import { Glob } from "bun";
 
 const ALWAYS_SKIPPED_DIRS = new Set([".git", "node_modules"]);
+
+/**
+ * 公认构建产物/缓存目录名,遍历整树跳过(可被 .gitignore 的 !name/ 取回)。
+ * 只收"几乎不可能作为源码目录"者,降低误伤;源码恰叫这些名的项目可用 !name/ 显式要回。
+ * 留空即回退到 pi 原生语义(只跳 .git/node_modules + .gitignore)。
+ */
+const SKIPPED_ARTIFACT_DIRS: readonly string[] = [
+  "target", // Rust / Maven
+  "build",
+  "dist",
+  "out",
+  "coverage", // 测试覆盖率报告
+  "__pycache__", // Python 字节码缓存
+  ".next", // Next.js
+  ".nuxt", // Nuxt
+  ".svelte-kit", // SvelteKit
+  ".turbo", // Turborepo 缓存
+  ".cache",
+  ".parcel-cache",
+  ".react-router", // React Router 7 构建产物
+];
+const SKIPPED_ARTIFACT_SET: ReadonlySet<string> = new Set(SKIPPED_ARTIFACT_DIRS);
+
 const DEFAULT_MAX_VISITED = 100_000;
 
 interface IgnoreRule {
@@ -58,7 +86,9 @@ function compileGitignore(content: string, prefix: string): IgnoreRule[] {
 
 /** 后规则覆盖先规则:遍历全部规则取最后一次命中的取反位。 */
 function isIgnored(rules: IgnoreRule[], relativePath: string, baseName: string, isDirectory: boolean): boolean {
-  let ignored = false;
+  // 产物目录跳过作为"第 0 条规则",可被 .gitignore 的 !name/ 取反覆盖(后规则覆盖先规则)。
+  // SKIPPED_ARTIFACT_DIRS 留空时此分支恒 false,自然回退到纯 .gitignore 语义。
+  let ignored = isDirectory && SKIPPED_ARTIFACT_SET.has(baseName);
   for (const rule of rules) {
     if (rule.dirOnly && !isDirectory) continue;
     const hit = rule.basenameOnly ? rule.glob.match(baseName) : rule.glob.match(relativePath);
