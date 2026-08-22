@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { sse } from "./api";
+import { sse } from "~/services/api";
 
 /** sse() 内建重连（N-8）行为测试：打桩 globalThis.fetch 模拟服务端流。
  *  Bun 环境下 new Request("/api/…") 相对 URL 会抛错（无 document base），

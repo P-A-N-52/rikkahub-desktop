@@ -1,7 +1,7 @@
 // use-autosave-draft.test.ts — R8-2 三件套语义回归(核心:保存窗口内键击不丢)。
 import { describe, expect, test } from "bun:test";
 
-import { createAutosaveController } from "./use-autosave-draft";
+import { createAutosaveController } from "~/hooks/use-autosave-draft";
 
 /** 假定时器:手动触发到期回调,断言重排/清理行为。 */
 function fakeScheduler() {

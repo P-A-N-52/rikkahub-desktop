@@ -244,7 +244,9 @@ export function loadConversationNodesFromDb(db: InstanceType<typeof Database>, c
   }));
 }
 
-/** 读取全部会话(会话行 + 各自节点),组装成内存 Conversation[]。迁移校验/回退路径用。 */
+/** 读取全部会话(会话行 + 各自节点),组装成内存 Conversation[]。
+ *  备份合并基底用:Android zip 合并路径(无 PC zip 暂存)从活库全量读出现有会话做合并
+ *  基底(backup/import.ts),导入是低频重操作,全量读的峰值内存可接受。 */
 export function loadAllConversationsFromDb(db: InstanceType<typeof Database>): Conversation[] {
   const conversations = loadConversationMetasFromDb(db);
   for (const conv of conversations) conv.messages = loadConversationNodesFromDb(db, conv.id);

@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import Markdown from "./markdown";
+import Markdown from "~/components/markdown/markdown";
 import { TooltipProvider } from "~/components/ui/tooltip";
 
 // G7 后 Button 的 title 渲染 Radix Tooltip(如代码块复制按钮),脱离应用根的

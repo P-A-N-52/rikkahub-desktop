@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ConversationListDto } from "~/types";
-import { mergeConversationList, refreshConversationList, sortConversationList } from "./conversation-list-ops";
+import { mergeConversationList, refreshConversationList, sortConversationList } from "~/lib/conversation-list-ops";
 
 function item(id: string, updateAt: number, isPinned = false): ConversationListDto {
   return { id, assistantId: "a1", title: id, isPinned, createAt: 0, updateAt, isGenerating: false };

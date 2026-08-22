@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ConversationDto, ConversationNodesPageDto, ConversationNodeUpdateEventDto, ConversationTextDeltaEventDto, MessageNodeDto } from "~/types";
-import { applyNodeUpdate, applyTextDelta, mergeConversationSnapshot, prependOlderNodes, replaceNodesRange } from "./conversation-sync";
+import { applyNodeUpdate, applyTextDelta, mergeConversationSnapshot, prependOlderNodes, replaceNodesRange } from "~/lib/conversation-sync";
 
 function node(id: string, text: string): MessageNodeDto {
   return {

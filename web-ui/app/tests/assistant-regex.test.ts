@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyAssistantRegexes } from "./assistant-regex";
+import { applyAssistantRegexes } from "~/lib/assistant-regex";
 
 const assistant = {
   id: "assistant-regex-smoke",

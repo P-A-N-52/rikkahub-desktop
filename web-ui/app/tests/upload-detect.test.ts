@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { deflateRawSync } from "node:zlib";
 
-import { detectUploadFile } from "./upload-detect";
+import { detectUploadFile } from "~/lib/upload-detect";
 
 // 手工构造最小 zip(local headers + central directory + EOCD),用来复刻
 // "大条目排在包首,[Content_Types].xml 被挤出 file-type 4100 字节嗅探窗"的 docx。

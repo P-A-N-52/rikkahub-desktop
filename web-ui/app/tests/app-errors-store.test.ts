@@ -1,7 +1,7 @@
 // app-errors-store.test.ts — R6-4 本地错误 30s 风暴合并语义回归。
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { useAppErrorsStore } from "./app-errors-store";
+import { useAppErrorsStore } from "~/stores/app-errors-store";
 import type { AppErrorDto } from "~/types";
 
 function entry(overrides: Partial<AppErrorDto> = {}): AppErrorDto {

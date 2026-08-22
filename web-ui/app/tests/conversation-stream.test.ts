@@ -7,7 +7,7 @@ import type { ConversationDto, MessageNodeDto } from "~/types";
 import {
   resetConversationStoreForTest,
   useConversationStore,
-} from "./conversation-store";
+} from "~/stores/conversation-store";
 import {
   acquireConversationStream,
   ensureFullConversationDetail,
@@ -19,7 +19,7 @@ import {
   shouldBroadcastConversationSummary,
   type ConversationStreamEvent,
   type ConversationSummaryUpdate,
-} from "./conversation-stream";
+} from "~/stores/conversation-stream";
 
 function node(id: string, text: string): MessageNodeDto {
   return {

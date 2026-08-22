@@ -1,14 +1,14 @@
 // Adapted from pi (https://github.com/badlogic/pi-mono), MIT © Mario Zechner
 // 来源:packages/coding-agent/src/core/tools/edit-diff.ts(v0.83.0)。除本头注与 import
 // 路径外逐字保留:BOM 剥离/换行归一/精确→fuzzy 匹配链/重叠检测/unified patch/展示 diff。
+// 已删 computeEditsDiff(及 EditDiffResult/EditDiffError):pi 用它做 TUI 审批预览,PC 由
+// M2 渲染器从 details.diff 取,该函数在 PC 生产零调用(C1-③,死代码)。真实编辑的边界断言
+// 在 edit.ts 的 EditOperations(createBoundedEditOperations)层,不受影响。
 /**
  * Shared diff computation utilities for the edit and similar tools.
  */
 
 import * as Diff from "diff";
-import { constants } from "node:fs";
-import { access, readFile } from "node:fs/promises";
-import { resolveToCwd } from "./path-utils";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
   const crlfIdx = content.indexOf("\r\n");
@@ -505,46 +505,3 @@ export function generateDiffString(
   return { diff: output.join("\n"), firstChangedLine };
 }
 
-export interface EditDiffResult {
-  diff: string;
-  firstChangedLine: number | undefined;
-}
-
-export interface EditDiffError {
-  error: string;
-}
-
-/**
- * Compute the diff for one or more edit operations without applying them.
- * Used for preview rendering before the tool executes.
- */
-export async function computeEditsDiff(
-  path: string,
-  edits: Edit[],
-  cwd: string,
-): Promise<EditDiffResult | EditDiffError> {
-  const absolutePath = resolveToCwd(path, cwd);
-
-  try {
-    // Check if file exists and is readable
-    try {
-      await access(absolutePath, constants.R_OK);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
-      return { error: `Could not edit file: ${path}. ${errorMessage}.` };
-    }
-
-    // Read the file
-    const rawContent = await readFile(absolutePath, "utf-8");
-
-    // Strip BOM before matching (LLM won't include invisible BOM in oldText)
-    const { text: content } = stripBom(rawContent);
-    const normalizedContent = normalizeToLF(content);
-    const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
-
-    // Generate the diff
-    return generateDiffString(baseContent, newContent);
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
-  }
-}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { fileExtensionFromMime } from "./image-download";
+import { fileExtensionFromMime } from "~/lib/image-download";
 
 describe("fileExtensionFromMime", () => {
   test("keeps common preview export formats", () => {

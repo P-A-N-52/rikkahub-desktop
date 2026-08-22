@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { calculateImageSampleSize } from "./image-normalize";
+import { calculateImageSampleSize } from "~/lib/image-normalize";
 
 describe("calculateImageSampleSize", () => {
   test("keeps long screenshots at original resolution when under pixel budget", () => {

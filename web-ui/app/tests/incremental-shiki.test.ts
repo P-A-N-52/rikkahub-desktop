@@ -3,7 +3,7 @@
 // "对当前全文做一次全量 codeToTokens"完全一致。
 import { describe, expect, test, beforeAll } from "bun:test";
 import { createHighlighter, type BundledLanguage, type BundledTheme, type HighlighterGeneric, type ThemedToken } from "shiki";
-import { createStreamingTokenizer } from "./incremental-shiki";
+import { createStreamingTokenizer } from "~/components/markdown/incremental-shiki";
 
 const THEMES = { light: "catppuccin-latte", dark: "catppuccin-mocha" } as const;
 

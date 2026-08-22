@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { getCodePreviewLanguage } from "./code-preview-language";
+import { getCodePreviewLanguage } from "~/components/workbench/code-preview-language";
 
 describe("getCodePreviewLanguage", () => {
   test("html/htm → html;svg/md/mermaid 各归其类", () => {

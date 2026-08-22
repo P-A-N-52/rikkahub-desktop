@@ -2,7 +2,7 @@
 // generateDiffString——`+12 内容`/`-12 内容`/` 12 上下文`/`    ...` 跳行标记。
 import { describe, expect, test } from "bun:test";
 
-import { parseDiffLines, parseDiffStats } from "./diff-view";
+import { parseDiffLines, parseDiffStats } from "~/components/workspace/diff-view";
 
 const SAMPLE = ["  1 const a = 1;", "-  2 const b = 2;", "+  2 const b = 3;", "+  3 const c = 4;", "      ...", " 10 export {};"].join(
   "\n",

@@ -9,7 +9,7 @@ import {
   STREAM_PROMOTE_RETRY_GROWTH,
   STREAM_TAIL_PROMOTE_THRESHOLD,
   tailRenderIntervalMs,
-} from "./frozen-prefix";
+} from "~/components/markdown/frozen-prefix";
 
 const identity = (s: string) => s;
 const paragraphs = (n: number, size = 400) =>

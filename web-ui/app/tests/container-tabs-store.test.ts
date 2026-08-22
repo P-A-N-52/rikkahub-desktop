@@ -3,7 +3,7 @@
 // 关闭=收起(二层状态保留);工作区删除后标签自愈回落。
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { CHAT_CONTAINER, MAX_PANES, useContainerTabsStore } from "./container-tabs-store";
+import { CHAT_CONTAINER, MAX_PANES, useContainerTabsStore } from "~/stores/container-tabs-store";
 
 function reset() {
   useContainerTabsStore.setState({

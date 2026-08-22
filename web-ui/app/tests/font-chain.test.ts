@@ -6,7 +6,7 @@ import {
   CJK_UNICODE_RANGE,
   composeFontChain,
   entryMatches,
-} from "./font-chain";
+} from "~/lib/font-chain";
 
 describe("composeFontChain", () => {
   test("未设中文字体时原链返回", () => {

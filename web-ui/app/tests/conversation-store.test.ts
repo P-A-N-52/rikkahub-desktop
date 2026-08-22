@@ -16,7 +16,7 @@ import {
   setConversationError,
   setConversationSubscribing,
   useConversationStore,
-} from "./conversation-store";
+} from "~/stores/conversation-store";
 
 function node(id: string, text: string): MessageNodeDto {
   return {

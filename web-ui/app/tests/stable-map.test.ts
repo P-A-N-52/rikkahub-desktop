@@ -2,7 +2,7 @@
 // 复用旧引用,否则流式期间引用逐帧变化会沿 components useMemo 把代码块整棵重挂载。
 import { describe, expect, test } from "bun:test";
 
-import { mapsShallowEqual } from "./stable-map";
+import { mapsShallowEqual } from "~/lib/stable-map";
 
 describe("mapsShallowEqual", () => {
   test("同引用恒等", () => {
