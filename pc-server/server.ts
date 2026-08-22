@@ -18,6 +18,7 @@ import { checkpointConversationsDb, flushConvDirtyNow, getConversation, persistC
 
 import process from "node:process";
 import { installProcessSafetyNet, reportError } from "./observability/app-errors";
+import { bootCleanExit, bootMilestone, bootNote, bootTraceStartup, readPreviousCrashLog } from "./observability/boot-trace";
 import { killTrackedDetachedChildren } from "./workspace/tools/shell";
 import { maybeRunExtractionWorker } from "./files/extraction";
 
@@ -31,11 +32,21 @@ if (await maybeRunExtractionWorker()) {
   process.exit(process.exitCode ?? 0);
 }
 
+// R1 取证:启动/崩溃黑匣子。尽早开——worker 分支已拐走,此处是正常实例的真正起点。
+// 内部先把上次可能残留的崩溃 pending 转存成 server.log,再为本次会话开 pending 标记;
+// 任何 IO 失败都静默降级(取证绝不阻塞启动)。干净退出时由 bootCleanExit 删净,正常用下来
+// logs/ 里什么都不留。
+bootTraceStartup();
+bootMilestone("进程拉起");
+
 // R1-4:壳(lib.rs)在 stdout 解析的单行诊断标记。release 壳下 stderr 不可见,启动失败
 // 的真实原因全靠它带出去;消息压成单行,壳原样弹窗展示。code 对齐 process.exit 码,
 // 当前仅供壳侧日志/未来分诊。
 function emitStartupFatal(code: number, message: string): void {
   console.log(`RIKKAHUB_FATAL:${code}:${message.replace(/\s*\r?\n\s*/g, " ")}`);
+  // R1 取证:JS 启动失败点也往 pending 落一行——进程即便在退出前来不及走干净路径,
+  // 这句也已留在 pending 里,下次启动 capture 转存后能看到真实原因。
+  bootNote("startupFatal", `[code ${code}] ${message}`);
 }
 
 // 1-5/R1-1:dataDir 单实例互斥必须先于绑端口——若后到实例先绑了端口再发现锁被占,
@@ -43,6 +54,7 @@ function emitStartupFatal(code: number, message: string): void {
 // bootstrap(状态装载+迁移链)则移到 Bun.serve 之后异步执行,见文件尾。
 try {
   acquireDataDirLock();
+  bootMilestone("已拿数据目录锁");
 } catch (err) {
   if (err instanceof DataDirLockedError) {
     emitStartupFatal(3, err.message);
@@ -298,6 +310,7 @@ const { server, port } = (() => {
 // the sidecar actually bound to — the shell navigates the webview here when 8080 was taken.
 // Keep it a single line with the exact `RIKKAHUB_PORT:<port>` prefix.
 setActualServingPort(port);
+bootMilestone("端口已绑定", `port=${port}`);
 console.log(`RIKKAHUB_PORT:${port}`);
 
 console.log(`RikkaHub PC server running at http://localhost:${port}`);
@@ -321,6 +334,20 @@ void (async () => {
     return;
   }
   markStartupReady();
+  bootMilestone("bootstrap 完成");
+  // R1 取证:上次未干净退出(崩溃/关机/强退)会留下 server.log。启动成功后在错误中心浮出
+  // 一条 warn 让用户在应用内也能看到;它只是文件残留的倒影——server.log 随"下次正常退出"
+  // 被清掉后,下次启动这里读不到就不再显示,与"重启清零"天然一致,绝不弹窗打扰。
+  const previousCrash = readPreviousCrashLog();
+  if (previousCrash) {
+    reportError(
+      "internal",
+      "warn",
+      "上次应用未正常退出(可能是异常崩溃或直接关机/强制退出)。诊断信息见 数据目录/logs/server.log。",
+      undefined,
+      "previous_unclean_exit",
+    );
+  }
   warnIfExposedWithoutAuth(bindHostname);
   // R1-13:数据目录卫生(超龄 corrupt 隔离、过时安装包、化石快照、孤儿附件统计)。
   // 就绪后台执行,内部自捕获,绝不影响运行。
@@ -349,6 +376,7 @@ async function flushAllStateBeforeExit(): Promise<void> {
   // 放行退出,只释放实例锁。
   if (!isStartupReady()) {
     releaseDataDirLock();
+    bootCleanExit(); // R1 取证:未就绪干净退出(启动即被关)也算正常,删 pending 不留假报警。
     return;
   }
   try {
@@ -372,6 +400,9 @@ async function flushAllStateBeforeExit(): Promise<void> {
   }
   // 1-5:全部刷盘完成后释放 dataDir 锁(只删自己的;崩溃残留的陈旧锁由下次启动接管)。
   releaseDataDirLock();
+  // R1 取证:干净退出收尾——删本次 pending + 上次可能残留的 server.log("下次正常退出则
+  // 日志清除",关机/强退的假报警就此归零)。此后进程才 exit,文件生灭即"是否干净退出"的判据。
+  bootCleanExit();
 }
 
 async function shutdown() {

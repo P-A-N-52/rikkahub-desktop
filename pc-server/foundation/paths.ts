@@ -47,6 +47,14 @@ export const pendingMemoryPath = join(memoryDir, "pending_memory.json");
 
 export const deviceIdPath = join(dataDir, "device-id.txt");
 
+// 启动/崩溃取证黑匣子(issue 后端无声退出)。boot-trace.ts 用"启动标记→干净退出删除→
+// 崩溃残留"机制:正常用下来 logs/ 里什么都不留,只有"上次没干净退出"才残留一份遗言。
+//   pending:本次启动的里程碑标记,Bun.serve 监听成功即删;留到下次启动 = 上次崩了。
+//   server.log:capturePreviousBootTrace 把残留 pending 转存成这份供查看(含崩溃区间判读)。
+export const logsDir = join(dataDir, "logs");
+export const bootPendingPath = join(logsDir, "server.boot.pending.log");
+export const bootLogPath = join(logsDir, "server.log");
+
 // 内嵌 bash 运行时的落地目录(仅 Windows)。固定路径(非系统 tmp)——杀软对固定路径的
 // 已签名/已知文件更友好,且随应用生命周期(卸载 dataDir 即一并清)。仅版本戳变更时整目录
 // 重落地,不频繁删写。落地保持 MSYS2 的 usr/bin/ 平铺(exe 与 msys-*.dll 同目录,见

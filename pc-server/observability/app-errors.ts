@@ -7,6 +7,7 @@
 
 import type { AppErrorDomain, AppErrorDto, AppErrorSeverity } from "../foundation/types/dto";
 import { id } from "../foundation/utils";
+import { bootNote } from "./boot-trace";
 
 const RING_LIMIT = 200;
 /** 风暴合并窗口:同 domain+message 在窗口内只累加计数,不新增条目、不重复广播。 */
@@ -95,8 +96,11 @@ export function installProcessSafetyNet(): void {
   safetyNetInstalled = true;
   process.on("uncaughtException", (err) => {
     reportError("internal", "error", "未捕获异常，进程已兜底继续运行", err, "uncaught_exception");
+    // R1 取证:JS 兜底也往 pending 落一行(含 stack)——若此异常随后把进程带走,遗言里能看到它。
+    bootNote("uncaughtException", err instanceof Error ? (err.stack ?? err.message) : String(err));
   });
   process.on("unhandledRejection", (reason) => {
     reportError("internal", "error", "未处理的 Promise 拒绝，进程已兜底继续运行", reason, "unhandled_rejection");
+    bootNote("unhandledRejection", reason instanceof Error ? (reason.stack ?? reason.message) : String(reason));
   });
 }

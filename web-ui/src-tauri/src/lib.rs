@@ -290,7 +290,8 @@ fn startup_failure_message(fatal_message: &Mutex<Option<String>>) -> String {
     }
     "Rikkahub 启动失败：后端进程意外退出，且未留下诊断信息。\n\n\
      可能原因：程序文件损坏、数据目录不可写、或被安全软件拦截。\n\
-     请重新启动试试；若反复出现，请重新安装 Rikkahub。"
+     请重新启动试试；若反复出现，请重新安装 Rikkahub。\n\n\
+     诊断信息见 数据目录下的 logs/server.log。"
         .to_string()
 }
 
