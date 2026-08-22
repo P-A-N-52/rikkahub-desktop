@@ -28,15 +28,8 @@ RUN bun install
 # Build web-ui SPA
 COPY web-ui/ ./
 
-# Bun's react-dom/server.bun.js lacks renderToPipeableStream needed by React Router's
-# SSR build step. Symlink the Node.js server bundle in its place.
-RUN rm -f node_modules/react-dom/server.bun.js \
-    && ln -sf server.node.js node_modules/react-dom/server.bun.js \
-    && rm -f node_modules/react-dom/cjs/react-dom-server.bun.development.js \
-    && ln -sf react-dom-server.node.development.js node_modules/react-dom/cjs/react-dom-server.bun.development.js \
-    && rm -f node_modules/react-dom/cjs/react-dom-server.bun.production.js \
-    && ln -sf react-dom-server.node.production.js node_modules/react-dom/cjs/react-dom-server.bun.production.js
-
+# Bun 1.4.0 起 react-dom 的 bun 条件导出不再阻断 React Router 的 SSR build
+# 步骤(缺 renderToPipeableStream 的旧软链 workaround 已删,实测两种形态全绿)。
 RUN bun run build
 
 # Compile server — cross-compile to match the runtime platform.

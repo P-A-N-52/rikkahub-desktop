@@ -47,19 +47,12 @@ jobs:
           fi
 
       # ── 构建前端 SPA ──────────────────────────────────────────────────────
-      # react-router build 在 SPA 模式下仍会引用 react-dom/server,而 Bun 自带的
-      # react-dom/server.bun.js 缺少 renderToPipeableStream,会导致 build 报错。
-      # 用 Node 版的 server bundle 替换它(Dockerfile 里也是同样处理)。
+      # Bun 1.4.0 起 react-dom 的 bun 条件导出不再阻断 React Router 的 SSR build
+      # 步骤(缺 renderToPipeableStream 的旧软链 workaround 已删,实测两种形态全绿)。
       - name: Build web-ui
         working-directory: web-ui
         run: |
           bun install --frozen-lockfile
-          rm -f node_modules/react-dom/server.bun.js
-          ln -sf server.node.js node_modules/react-dom/server.bun.js
-          rm -f node_modules/react-dom/cjs/react-dom-server.bun.development.js
-          ln -sf react-dom-server.node.development.js node_modules/react-dom/cjs/react-dom-server.bun.development.js
-          rm -f node_modules/react-dom/cjs/react-dom-server.bun.production.js
-          ln -sf react-dom-server.node.production.js node_modules/react-dom/cjs/react-dom-server.bun.production.js
           bun run build
 
       # ── 编译后端二进制 ────────────────────────────────────────────────────
