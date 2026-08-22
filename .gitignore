@@ -51,5 +51,11 @@ pi/
 pc-server/pc-data/
 pc-server/tsconfig.unused.json
 
+# 内嵌 bash 运行时的二进制产物与 staging(~8.5MB/24MB,由 scripts/build-bash-bundle.ts
+# 从本机 Git for Windows 抽取生成,源码进 git、产物不入库,与 dist/ 同纪律)。
+# bash-bundle.version.json(版本戳)是例外——进 git,runtime 据此判定落地覆盖。
+/pc-server/assets/bash/
+/pc-server/assets/bash-bundle.tar.gz
+
 # 参考项目（本地逆向研究用，613MB asar 等大文件，永不入库）
 /Reference-project/
