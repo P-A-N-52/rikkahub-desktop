@@ -56,12 +56,12 @@ import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
 import { createEngineRegistry, resolveEngine, type EngineAdapter, type EngineRunContext } from "../engines";
-import { runPiCompaction, runPiGeneration, type CapturedPiCompaction } from "../pi-engine/runner";
+import { runPiCompaction, runPiGeneration, type CapturedEngineCompaction } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
 import { piPromptInputFromParts } from "../pi-engine/attachments";
-import { effectivePiCompaction, type PiCompactionRecord } from "../pi-engine/context-encoder";
+import { effectiveEngineCompaction, type EngineCompactionRecord } from "../pi-engine/context-encoder";
 import { encodableMessages, enrichMessages, applyTemplateToMessage } from "../inference-engine/message-enrichment";
 import { applyOutputTransforms } from "../assistants";
 import { TITLE_CHARACTER_LIMIT } from "../app-config/prompts";
@@ -470,14 +470,14 @@ function piModelLimitsFor(provider: Provider, model: Model, assistant: Assistant
   };
 }
 
-/** P7:conversation.piCompactions(DB 任意 JSON)→ 编码器契约。宽容校验:
+/** P7:conversation.engineCompactions(DB 任意 JSON)→ 编码器契约。宽容校验:
  *  坏条目丢弃而不是整列作废(与列解析"损坏回 null"同哲学)。 */
-function parsePiCompactions(raw: JsonValue[] | null | undefined): PiCompactionRecord[] {
-  const records: PiCompactionRecord[] = [];
+function parseEngineCompactions(raw: JsonValue[] | null | undefined): EngineCompactionRecord[] {
+  const records: EngineCompactionRecord[] = [];
   for (const item of raw ?? []) {
     if (!isRecord(item)) continue;
     if (typeof item.cutMessageId !== "string" || typeof item.summary !== "string") continue;
-    const record: PiCompactionRecord = {
+    const record: EngineCompactionRecord = {
       cutMessageId: item.cutMessageId,
       summary: item.summary,
       tokensBefore: typeof item.tokensBefore === "number" ? item.tokensBefore : 0,
@@ -488,13 +488,13 @@ function parsePiCompactions(raw: JsonValue[] | null | undefined): PiCompactionRe
   return records;
 }
 
-/** P7:本轮压缩产物落 conversation.piCompactions。cutMessageId 为 null(pi 自动压缩
+/** P7:本轮压缩产物落 conversation.engineCompactions。cutMessageId 为 null(pi 自动压缩
  *  的切点可能落在本轮 prompt 之后,而本轮消息尚未入库)按"外收拢"落当前尾消息
  *  id——只多保不少保,下一轮编码器按"切点在场"自校验生效。 */
-function applyCapturedPiCompactions(conversation: Conversation, captured: CapturedPiCompaction[]): void {
+function applyCapturedEngineCompactions(conversation: Conversation, captured: CapturedEngineCompaction[]): void {
   if (!captured.length) return;
   const tail = selectedConversationMessages(conversation).at(-1);
-  const records = parsePiCompactions(conversation.piCompactions);
+  const records = parseEngineCompactions(conversation.engineCompactions);
   for (const item of captured) {
     const cutMessageId = item.cutMessageId ?? tail?.id;
     if (!cutMessageId) continue; // 无任何消息可挂靠(理论不可达):丢记录好过写错切点
@@ -505,7 +505,7 @@ function applyCapturedPiCompactions(conversation: Conversation, captured: Captur
       createdAt: new Date().toISOString(),
     });
   }
-  conversation.piCompactions = records as unknown as JsonValue[];
+  conversation.engineCompactions = records as unknown as JsonValue[];
   markConversationRowDirty(conversation.id);
   scheduleThrottledConvFlush();
 }
@@ -516,7 +516,7 @@ function applyCapturedPiCompactions(conversation: Conversation, captured: Captur
  *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
  *    图片走 pi 原生 images 通道);prompt 文本经消息模板渲染(四件套之一);
  *  - 引擎上下文 = 编码器从富化后的选中路径历史(不含本轮 prompt 消息)确定性重建,
- *    压缩记录从 conversation.piCompactions 进同一灌注——重新生成/编辑重发/分支切换
+ *    压缩记录从 conversation.engineCompactions 进同一灌注——重新生成/编辑重发/分支切换
  *    天然生效(UI 选中路径就是引擎记忆,所见即所记);
  *  - 消息富化 = enrichMessages(四件套共享层):模板/时间提醒/lorebook+模式注入/
  *    窗口化(滞回截断 ∨ 压缩切点锚,P9)——聊天位注入/时间提醒随富化全序列(含
@@ -556,12 +556,12 @@ async function runPiWorkspaceGeneration(
   }
 
   // 四件套富化(P9 灌注统一):历史消息(不含本轮 prompt)经共享层裁决;压缩切点
-  // (effectivePiCompaction 单源判定)作为富化窗口锚——注入行/提醒恒在窗口内、恒在
+  // (effectiveEngineCompaction 单源判定)作为富化窗口锚——注入行/提醒恒在窗口内、恒在
   // 切点之后:既进模型视野,又永不落进被摘要吸收的旧历史。富化全序列(含合成行)
   // 进引擎,每轮从 DB 原文重新裁决,DB 零沉淀。
   const historySource = selectedConversationMessages(conversation).filter((msg) => msg.id !== promptMessage?.id);
-  const compactionRecords = parsePiCompactions(conversation.piCompactions);
-  const cut = effectivePiCompaction(compactionRecords, historySource, deps.selectedModel);
+  const compactionRecords = parseEngineCompactions(conversation.engineCompactions);
+  const cut = effectiveEngineCompaction(compactionRecords, historySource, deps.selectedModel);
   const enriched = enrichMessages(historySource, {
     conversation,
     assistant: deps.assistant,
@@ -600,7 +600,7 @@ async function runPiWorkspaceGeneration(
     sink,
     signal,
   });
-  applyCapturedPiCompactions(conversation, result.capturedCompactions);
+  applyCapturedEngineCompactions(conversation, result.capturedCompactions);
   return result.text;
 }
 
@@ -633,13 +633,13 @@ async function runGeneration(
   return deps.adapter.run(deps, sink, signal);
 }
 
-/** P5:工作区会话手动压缩改走 pi 原生 compaction;P7:压缩产物落
- *  conversation.piCompactions(下一轮生成由编码器把它重放进引擎上下文),UI 历史
+/** P5:工作区会话手动压缩走引擎原生 compaction;P7:压缩产物落
+ *  conversation.engineCompactions(下一轮生成由编码器把它重放进引擎上下文),UI 历史
  *  一字不动。返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落
  *  UI 历史压缩(与生成路由的降级一致:聊天引擎从 UI 历史构建请求,压 UI 历史即
  *  压上下文)。压缩期间经 engine_status 直通状态条,finally 兜底清除(取消/失败
- *  不挂"压缩中")。 */
-export async function compactPiWorkspaceConversation(
+ *  不挂"压缩中")。T3:压缩是引擎无关能力,函数去 pi 名(引擎选择仍由路由判定)。 */
+export async function compactWorkspaceConversation(
   conversation: Conversation,
   customInstructions: string,
   signal?: AbortSignal,
@@ -652,8 +652,8 @@ export async function compactPiWorkspaceConversation(
   // 但合成消息经 encodableMessages 剥回纯真实行(P9)——手动压缩是用户策展行为,
   // 摘要只覆盖真实对话;注入是配置不是对话,时间提醒只描述节奏,均不进摘要。
   // 窗口锚照常生效:切点前的历史已被上一轮摘要吸收,压缩对象从切点起即可。
-  const compactionRecords = parsePiCompactions(conversation.piCompactions);
-  const cut = effectivePiCompaction(compactionRecords, selectedConversationMessages(conversation), picked.model);
+  const compactionRecords = parseEngineCompactions(conversation.engineCompactions);
+  const cut = effectiveEngineCompaction(compactionRecords, selectedConversationMessages(conversation), picked.model);
   const enriched = enrichMessages(selectedConversationMessages(conversation), {
     conversation,
     assistant,
@@ -686,7 +686,7 @@ export async function compactPiWorkspaceConversation(
         if (event.kind === "engine_status") broadcastEngineStatus(conversation.id, event.status);
       },
     });
-    applyCapturedPiCompactions(conversation, [result.compaction]);
+    applyCapturedEngineCompactions(conversation, [result.compaction]);
     return result;
   } finally {
     broadcastEngineStatus(conversation.id, { busy: false });

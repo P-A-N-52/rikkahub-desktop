@@ -161,10 +161,9 @@ describe("generateAnswer P3 路由", () => {
       (item) => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "pi-fidelity",
     ) as { messages?: unknown } | undefined;
     expect(Array.isArray(fidelity?.messages)).toBe(true);
-    // P7:压缩记录字段就位(未触发自动压缩时保持 null——语义即"无压缩记录";
-    // 无 jsonl 文件概念,无额外持久化动作)。
-    expect(conversation.piCompactions ?? null).toBeNull();
-    expect(getConversationMeta(db, conversation.id)?.piCompactions ?? null).toBeNull();
+    // P7/T3:压缩记录字段就位(未触发自动压缩时保持 null——语义即"无压缩记录")。
+    expect(conversation.engineCompactions ?? null).toBeNull();
+    expect(getConversationMeta(db, conversation.id)?.engineCompactions ?? null).toBeNull();
     expect(generating.has(conversation.id)).toBe(false);
 
     // P7 灌注回放硬证据:追加第二轮用户消息再生成,上游第二请求必须携带
@@ -185,8 +184,8 @@ describe("generateAnswer P3 路由", () => {
     await generateAnswer(conversation);
 
     expect(partsText(conversation)).toContain("聊天回答");
-    // P7:聊天引擎会话没有 piCompactions 字段(pi 专属),保真注解也不会出现。
-    expect(conversation.piCompactions).toBeUndefined();
+    // P7/T3:聊天引擎会话没有 engineCompactions 字段(工作区引擎专属),保真注解也不会出现。
+    expect(conversation.engineCompactions).toBeUndefined();
     const answer = lastAssistantMessage(conversation);
     expect((answer.annotations ?? []).some(
       (item) => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "pi-fidelity",

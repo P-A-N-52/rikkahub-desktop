@@ -113,7 +113,7 @@ function conversationTransformedMessages(conversation: Conversation, assistant: 
     conversation,
     assistant,
     model: picked.model,
-    // 聊天引擎无持久摘要,无压缩切点锚;pi 路径传 effectivePiCompaction 切点(P9)。
+    // 聊天引擎无持久摘要,无压缩切点锚;工作区引擎路径传 effectiveEngineCompaction 切点(P9)。
     timeReminderAnchor: systemMessage ?? undefined,
   });
 

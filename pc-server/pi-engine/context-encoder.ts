@@ -15,7 +15,7 @@
 // (USER→encodeUser,ASSISTANT 无注解→legacy),零特判;但 synthetic 行不进
 // entryIdsByMessageId(压缩切点反查按 DB 消息 id 说话)也不进 degradedMessageIds
 // (legacy 是合成行唯一可走的路径,非"用户编辑过")。合成行恒在压缩切点之后——
-// 富化层的 windowStartMessageId 窗口锚保证(orchestrator 以 effectivePiCompaction
+// 富化层的 windowStartMessageId 窗口锚保证(orchestrator 以 effectiveEngineCompaction
 // 的切点为锚),永不进被 appendCompaction 摘要吸收的旧历史。
 //
 // 确定性=缓存稳定性(§4.8 硬约束):同一历史两次编码逐字节一致(单测锁定)。所有输入
@@ -378,7 +378,7 @@ function encodeUser(message: Message, model: Model): UserMessage | null {
 
 // ----- 行级可编码性判定(窗口锚与压缩重放共用的单源谓词) -----
 
-/** 该行能否编出 ≥1 个条目(与编码循环同源判定)。effectivePiCompaction 用它把
+/** 该行能否编出 ≥1 个条目(与编码循环同源判定)。effectiveEngineCompaction 用它把
  *  "切点落在零条目行"的压缩记录判为不适用,与编码器内部重放过滤行为一致。 */
 function encodesToEntries(message: Message, model: Model): boolean {
   if (message.role === "USER") {
@@ -395,8 +395,10 @@ function encodesToEntries(message: Message, model: Model): boolean {
 
 // ----- 主入口 -----
 
-/** DB 压缩记录(P7:conversation 级 piCompactions 元素,替代 jsonl CompactionEntry)。 */
-export interface PiCompactionRecord {
+/** DB 压缩记录(conversation 级 engineCompactions 元素)。压缩记录是引擎中性的会话级
+ *  状态(T3 泛化:压缩是引擎无关能力,任何 run-and-suspend 引擎都可压缩,结构不再绑死
+ *  pi)。 */
+export interface EngineCompactionRecord {
   /** 切点:从这条消息(含)起保留原文,之前的历史被 summary 取代。 */
   cutMessageId: string;
   summary: string;
@@ -422,7 +424,7 @@ export function seedPiSessionFromHistory(options: {
   model: Model;
   /** 富化层 EnrichResult.syntheticIds(P9):标记合成行,挡在切点映射与退化诊断外。 */
   syntheticIds?: Set<string>;
-  compactions?: PiCompactionRecord[];
+  compactions?: EngineCompactionRecord[];
 }): PiHistoryEncodeResult {
   const { manager, history, model } = options;
   const syntheticIds = options.syntheticIds ?? new Set<string>();
@@ -480,11 +482,11 @@ export function seedPiSessionFromHistory(options: {
 /** 有效压缩切点判定(P9 单源):富化层取窗口锚(windowStartMessageId)前调用。
  *  与编码器内部重放过滤同一谓词(该行能否编出 ≥1 条目),切点落在空行/被删消息/
  *  零条目行上的记录一律视为不生效——取最新一条切点在场的记录,无则 null。 */
-export function effectivePiCompaction(
-  compactions: PiCompactionRecord[],
+export function effectiveEngineCompaction(
+  compactions: EngineCompactionRecord[],
   history: Message[],
   model: Model,
-): PiCompactionRecord | null {
+): EngineCompactionRecord | null {
   return (
     compactions
       .filter((record) => {

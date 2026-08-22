@@ -84,7 +84,7 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     lorebookIds: [],
     workspaceId: null,
     workspaceCwd: null,
-    piCompactions: null,
+    engineCompactions: null,
     ...overrides,
   };
 }

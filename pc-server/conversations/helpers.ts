@@ -35,7 +35,7 @@ export function deleteConversationsById(ids: Set<string>) {
     // R2-4+R2-6:close 详情流 + 清待发节点广播(见 dropConversationSse 注释)
     dropConversationSse(conversationId);
   }
-  // P7:引擎会话状态(压缩记录)在会话行内(pi_compactions 列),随行删除天然级联,
+  // P7:引擎会话状态(压缩记录)在会话行内(engine_compactions 列),随行删除天然级联,
   // 无文件生命周期可管——P2 的 jsonl 收集/删除逻辑随层退役。
   // 先删 working set,再删活库——避免删活库后残余脏标记 flush 又把节点 upsert 回来
   // (flushConvDirty 经 peekConversation 查注册表,条目没了就跳过)。
@@ -78,7 +78,7 @@ export function ensureConversation(idValue: string, init?: { workspaceId?: strin
       updateAt: now,
       workspaceId: init?.workspaceId ?? null,
       workspaceCwd: null,
-      piCompactions: null,
+      engineCompactions: null,
     };
     seedConversationInjectionBinding(conversation, assistant);
     registerConversation(conversation); // 新建:内存即权威,防 checkout 从活库读空树反向覆盖

@@ -241,12 +241,13 @@ export interface Conversation {
   workspaceId?: string | null;
   /** 会话级工作目录(绝对路径,必须在 workspace root 边界内)。null = workspace root。 */
   workspaceCwd?: string | null;
-  /** P7 会话数据统一:pi 引擎压缩记录数组(元素 {cutMessageId,summary,tokensBefore,
-   *  createdAt}),SQLite 单一事实源下压缩状态的唯一载体(jsonl 层已退役)。切点为消息
-   *  id,从切点(含)起保留原文、之前历史被 summary 取代;只有"切点仍在选中路径"的最新
-   *  一条生效(编码器自校验,编辑/fork 后失效记录自动跳过)。仅存 PC 自有库;跨端导出
+  /** P7 会话数据统一:引擎压缩记录数组(元素 {cutMessageId,summary,tokensBefore,
+   *  createdAt}),SQLite 单一事实源下压缩状态的唯一载体。压缩记录是引擎中性的
+   *  会话级状态(T3 泛化:压缩是引擎无关能力,不再绑死 pi)。切点为消息 id,从切点(含)
+   *  起保留原文、之前历史被 summary 取代;只有"切点仍在选中路径"的最新一条生效
+   *  (编码器自校验,编辑/fork 后失效记录自动跳过)。仅存 PC 自有库;跨端导出
    *  白名单不含此列。 */
-  piCompactions?: JsonValue[] | null;
+  engineCompactions?: JsonValue[] | null;
 }
 
 // ----- 工作区(agent 模式)领域模型 -----
@@ -483,7 +484,7 @@ export interface PcConversationRow {
   lorebook_ids?: string;
   workspace_id?: string | null;
   workspace_cwd?: string | null;
-  pi_compactions?: string | null;
+  engine_compactions?: string | null;
 }
 export interface PcMessageNodeRow {
   id: string;

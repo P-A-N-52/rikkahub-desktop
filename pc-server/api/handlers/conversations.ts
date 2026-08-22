@@ -31,7 +31,7 @@ import {
 import { bumpAnalyticsMsgCount } from "../../app-config/analytics";
 import { DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
 import { attachOcrToImageParts, compressConversation, englishLanguageName, fetchAuxiliaryText, generateTitleForConversation, isQwenMtModel, markOcrPendingParts } from "../../conversations/auxiliary";
-import { compactPiWorkspaceConversation, generateAnswer } from "../../conversations/orchestrator";
+import { compactWorkspaceConversation, generateAnswer } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
 import { generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
@@ -528,13 +528,14 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       generating.delete(conversation.id);
       finishInterruptedPendingToolsInConversation(conversation);
       try {
-        // P5:工作区会话(工作区可用)手动压缩改走 pi 原生 compaction——压引擎记忆
-        // jsonl(它才决定发给上游的上下文),UI 历史不动。targetTokens/keepRecentMessages
+        // P5:工作区会话(工作区可用)手动压缩走引擎原生 compaction——压引擎记忆
+        // (它才决定发给上游的上下文),UI 历史不动。targetTokens/keepRecentMessages
         // 是 UI 历史压缩的参数,对引擎压缩无意义,只透传 additionalPrompt 作自定义指示。
         // 工作区不可用(缺根/未信任)返回 null → 回落 UI 历史压缩,与生成路由降级一致。
-        const piResult = await compactPiWorkspaceConversation(conversation, String(body.additionalPrompt ?? ""), request.signal);
-        if (piResult) {
-          return json({ status: "compressed", engine: "pi", summaries: [piResult.summary] });
+        // T3:压缩是引擎无关能力——函数/字段名去 pi 化;返回体 engine 仍报当前引擎(pi)。
+        const engineResult = await compactWorkspaceConversation(conversation, String(body.additionalPrompt ?? ""), request.signal);
+        if (engineResult) {
+          return json({ status: "compressed", engine: "pi", summaries: [engineResult.summary] });
         }
         // R7-4:透传 request.signal——客户端取消(压缩框取消键)后,compressConversation
         // 在分块间与落库前检查,保证取消后不改写会话。

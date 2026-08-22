@@ -175,7 +175,7 @@ export interface EnrichOptions {
   assistant: Assistant;
   model: Model;
   /** 窗口锚(P9):从这条消息(含)起保留,与滞回截断起点取 max。生产侧唯一传法是
-   *  pi 压缩切点(effectivePiCompaction 的 cutMessageId)——压缩重放会隐藏切点之前
+   *  引擎压缩切点(effectiveEngineCompaction 的 cutMessageId)——压缩重放会隐藏切点之前
    *  的条目,把切点接入窗口边界后,注入行/提醒恒在切点之后:既进模型视野,又永不
    *  落进被摘要吸收的旧历史。id 不在序列中(陈旧压缩记录/消息被删)时视为无锚。 */
   windowStartMessageId?: string;

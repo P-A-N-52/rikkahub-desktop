@@ -9,11 +9,11 @@ import { describe, expect, test } from "bun:test";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { JsonValue, Message, Model, ToolPart } from "../foundation/types";
 import { message } from "../foundation/utils";
-import { effectivePiCompaction, seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
+import { effectiveEngineCompaction, seedPiSessionFromHistory, type EngineCompactionRecord } from "./context-encoder";
 
 const model = { modelId: "test-model", inputModalities: ["TEXT", "IMAGE"] } as unknown as Model;
 
-function seed(history: Message[], compactions?: PiCompactionRecord[], syntheticIds?: Set<string>) {
+function seed(history: Message[], compactions?: EngineCompactionRecord[], syntheticIds?: Set<string>) {
   const manager = SessionManager.inMemory(process.cwd());
   const result = seedPiSessionFromHistory({ manager, history, model, compactions, syntheticIds });
   return { manager, result, messages: manager.buildSessionContext().messages };
@@ -283,7 +283,7 @@ describe("DB→pi 编码器:压缩与确定性", () => {
 
   test("缓存不变量:同一历史两次灌注,上下文逐字节一致", () => {
     const { history, user2 } = compactionFixture();
-    const records: PiCompactionRecord[] = [{ cutMessageId: user2.id, summary: "摘要", tokensBefore: 42 }];
+    const records: EngineCompactionRecord[] = [{ cutMessageId: user2.id, summary: "摘要", tokensBefore: 42 }];
     const first = seed(history, records).messages;
     const second = seed(history, records).messages;
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
@@ -302,7 +302,7 @@ describe("DB→pi 编码器:P9 合成行灌注", () => {
     const bottomInjection = message("USER", [{ type: "text", text: "BOTTOM_INJECTION" }]);
     const history = [topInjection, user2, assistantInjection, asst2, bottomInjection];
     const syntheticIds = new Set([topInjection.id, assistantInjection.id, bottomInjection.id]);
-    const compactions: PiCompactionRecord[] = [{ cutMessageId: user2.id, summary: "旧史摘要", tokensBefore: 100 }];
+    const compactions: EngineCompactionRecord[] = [{ cutMessageId: user2.id, summary: "旧史摘要", tokensBefore: 100 }];
     return { user1, asst1, user2, asst2, history, syntheticIds, compactions };
   }
 
@@ -331,27 +331,27 @@ describe("DB→pi 编码器:P9 合成行灌注", () => {
     expect(flat).toContain("新问");
   });
 
-  test("effectivePiCompaction:切点在场且可编 → 生效;零条目行/被删消息 → 不生效;取最新一条", () => {
+  test("effectiveEngineCompaction:切点在场且可编 → 生效;零条目行/被删消息 → 不生效;取最新一条", () => {
     const { user1, asst1, user2 } = syntheticFixture();
     const emptyRow = message("USER", []); // 编码后零条目(拒发条件)
     const history = [user1, asst1, emptyRow, user2];
     const valid = { cutMessageId: user2.id, summary: "s1", tokensBefore: 1 };
-    expect(effectivePiCompaction([valid], history, model)).toBe(valid);
+    expect(effectiveEngineCompaction([valid], history, model)).toBe(valid);
     // 切点指向零条目行 → 不生效(与编码器内部重放过滤同一谓词)。
-    expect(effectivePiCompaction([{ cutMessageId: emptyRow.id, summary: "s2", tokensBefore: 1 }], history, model)).toBeNull();
+    expect(effectiveEngineCompaction([{ cutMessageId: emptyRow.id, summary: "s2", tokensBefore: 1 }], history, model)).toBeNull();
     // 切点不在序列(被删/编辑分支)→ 不生效。
-    expect(effectivePiCompaction([{ cutMessageId: "gone", summary: "s3", tokensBefore: 1 }], history, model)).toBeNull();
+    expect(effectiveEngineCompaction([{ cutMessageId: "gone", summary: "s3", tokensBefore: 1 }], history, model)).toBeNull();
     // 多条记录取最新一条生效。
     const older = { cutMessageId: user1.id, summary: "older", tokensBefore: 1 };
-    expect(effectivePiCompaction([older, valid], history, model)).toBe(valid);
+    expect(effectiveEngineCompaction([older, valid], history, model)).toBe(valid);
   });
 
-  test("effectivePiCompaction 与编码器重放口径一致:判定生效的记录,编码器必重放", () => {
+  test("effectiveEngineCompaction 与编码器重放口径一致:判定生效的记录,编码器必重放", () => {
     const { user1, asst1, user2, asst2, history, syntheticIds, compactions } = syntheticFixture();
-    const effective = effectivePiCompaction(compactions, [user1, asst1, user2, asst2], model);
+    const effective = effectiveEngineCompaction(compactions, [user1, asst1, user2, asst2], model);
     expect(effective?.cutMessageId).toBe(user2.id);
     const { messages } = seed(history, compactions, syntheticIds);
-    // 编码器内部过滤没有把 effectivePiCompaction 判生效的记录再丢掉。
+    // 编码器内部过滤没有把 effectiveEngineCompaction 判生效的记录再丢掉。
     expect(JSON.stringify(messages)).toContain("旧史摘要");
   });
 });

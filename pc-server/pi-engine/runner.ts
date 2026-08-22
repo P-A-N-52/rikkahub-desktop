@@ -14,7 +14,7 @@
 // 确定性重建(context-encoder 保真注解解码,失配行自校验退 legacy),不再有
 // 会话↔jsonl 文件关联。pi 自动压缩发生在 prompt 内部,结果捕获为
 // capturedCompactions(firstKeptEntryId 反查灌注映射回到 DB 消息 id),由调用方落
-// conversation.piCompactions——下一轮经编码器 appendCompaction 重放,语义逐字等价。
+// conversation.engineCompactions——下一轮经编码器 appendCompaction 重放,语义逐字等价。
 // P9 灌注统一:history 是富化全序列(含合成行,orchestrator 以压缩切点为富化窗口
 // 锚),聊天位注入/时间提醒在工作区会话与聊天引擎逐字同生效。
 //
@@ -33,7 +33,7 @@ import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "../inference-engine/approval-gate";
 import type { PiSessionResources } from "./resources";
-import { seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
+import { seedPiSessionFromHistory, type EngineCompactionRecord } from "./context-encoder";
 
 export interface PiGenerationContext {
   /** 生效 provider/model(调用方经 findModel 解析,providerOverwrite 已展开)。 */
@@ -52,9 +52,9 @@ export interface PiGenerationContext {
   /** P9:富化层 EnrichResult.syntheticIds,透传编码器(合成行照常编码,挡在切点
    *  映射与退化诊断外)。生产侧生成路径必传;手动压缩路径传 real-only 序列,不传。 */
   syntheticIds?: Set<string>;
-  /** P7:既有压缩记录(conversation.piCompactions 解析产物;编码器只取切点仍在
+  /** P7:既有压缩记录(conversation.engineCompactions 解析产物;编码器只取切点仍在
    *  历史中的最新一条生效)。 */
-  compactions?: PiCompactionRecord[];
+  compactions?: EngineCompactionRecord[];
   /** 本轮用户输入(文本;文档/OCR 已由 pi-engine/attachments 文本化)。 */
   promptText: string;
   /** 图片附件(pi 原生 prompt images 通道,P4 附件面)。 */
@@ -70,8 +70,9 @@ export interface PiGenerationContext {
   signal?: AbortSignal;
 }
 
-/** pi 压缩产物的 DB 侧映射(runner 返回;orchestrator 负责落 conversation.piCompactions)。 */
-export interface CapturedPiCompaction {
+/** 压缩产物的 DB 侧映射(runner 返回;orchestrator 负责落 conversation.engineCompactions)。
+ *  引擎中性(T3):结构与引擎无关,任何 run-and-suspend 引擎的压缩捕获都用它。 */
+export interface CapturedEngineCompaction {
   /** 切点(首个保留原文的 DB 消息 id)。null = 切点落在本轮(prompt 之后)——
    *  本轮消息尚未入库,调用方按"外收拢"落为当前尾消息 id(只多保不少保,
    *  下一轮编码器按"切点在场"自校验生效)。 */
@@ -86,7 +87,7 @@ export interface PiGenerationResult {
   /** 灌注后走了 legacy 退化的 assistant 行 id(诊断;注解失配=用户编辑过历史)。 */
   degradedMessageIds: string[];
   stopReason: string | null;
-  capturedCompactions: CapturedPiCompaction[];
+  capturedCompactions: CapturedEngineCompaction[];
 }
 
 /** 本轮新增的压缩条目 → DB 压缩记录。切点反查灌注映射(assistant 行一条消息产
@@ -95,8 +96,8 @@ function captureRoundCompactions(
   manager: SessionManager,
   seededEntryIds: Set<string>,
   entryIdsByMessageId: Map<string, string[]>,
-): CapturedPiCompaction[] {
-  const captured: CapturedPiCompaction[] = [];
+): CapturedEngineCompaction[] {
+  const captured: CapturedEngineCompaction[] = [];
   for (const entry of manager.getEntries()) {
     if (entry.type !== "compaction" || seededEntryIds.has(entry.id)) continue;
     let cutMessageId: string | null = null;
@@ -197,7 +198,7 @@ export interface PiCompactionContext {
   cwd: string;
   /** P7:同 runPiGeneration——压缩前的引擎上下文同样从 DB 历史+既有压缩记录重建。 */
   history: Message[];
-  compactions?: PiCompactionRecord[];
+  compactions?: EngineCompactionRecord[];
   /** 受控资源装配(生产必传:压缩会话也不许打开 .pi/settings.json 注入面)。 */
   resources?: PiSessionResources;
   /** 用户附加指示(compress 框的 additionalPrompt → pi compact customInstructions)。 */
@@ -214,7 +215,7 @@ export interface PiCompactionResult {
   estimatedTokensAfter: number | null;
   /** 本次压缩的切点(pi compact 在既有灌注条目里选 firstKeptEntryId,反查必命中;
    *  理论上查不到时为 null,调用方按外收拢语义落尾消息)。 */
-  compaction: CapturedPiCompaction;
+  compaction: CapturedEngineCompaction;
 }
 
 /** pi 已知压缩失败信息 → 人话(其余原样上抛,handler 统一转 400)。 */
@@ -227,7 +228,7 @@ const PI_COMPACT_ERROR_TEXT: Record<string, string> = {
  * 手动压缩工作区会话(方案 P5:手动压缩按钮改调 pi 原生 compaction;P7 落点)。
  * 装配面与 runPiGeneration 同款(模型运行时/受控资源/事件桥),差别只在驱动动作:
  * prompt → session.compact。压缩产物(摘要/切点/tokensBefore)返回给调用方落
- * conversation.piCompactions,UI 历史不动——下一轮生成由编码器重放压缩语义。
+ * conversation.engineCompactions,UI 历史不动——下一轮生成由编码器重放压缩语义。
  */
 export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompactionResult> {
   if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
