@@ -293,6 +293,29 @@ export function installProxyFetchInterceptor(getProxyConfig: () => ProxyConfig):
     if (explicitProxy !== undefined) {
       return originalFetch(input, init);
     }
+
+    // ── 统一禁用 Bun 300s socket 空闲定时器(所有引擎的 LLM fetch 自动继承)─────────
+    // Bun fetch 每个 socket 默认带 BUN_CONFIG_HTTP_IDLE_TIMEOUT=300s 空闲定时器,触发即
+    // TimeoutError。思考型模型闷头想 >300s 且零字节(等响应头、无 keepalive)会被它抢先
+    // 杀掉,我们应用层看门狗(600s headerTimeoutMs / 120s STREAM_IDLE / AbortSignal.timeout)
+    // 来不及救——经 scripts/fetch-idle-timeout-smoke.ts 本地决定性实验实锤(裸 fetch 在
+    // 300032ms 被杀、timeout:0 撑过 305s)。
+    //
+    // 为什么敢在拦截器一刀切而非逐引擎加:我们应用层对每条 fetch 都有自己的计时(signal /
+    // AbortSignal.timeout / fetchWithTimeout),Bun 的空闲定时器对我们永远多余,禁掉它只是
+    // 把计时权完全收归我们的看门狗(单一计时源)。这正是「新引擎零负担」的收口——第三/第四
+    // 引擎的 LLM fetch 只要走 globalThis.fetch(都过本拦截器),就自动免疫,无需各自记得加。
+    //
+    // 两条护栏(有意为之的调用方不动):
+    //   1. 调用方显式传了 init.timeout(有限数或 false)= 自己定了空闲策略,尊重不覆盖。
+    //   2. input 是 Request 对象(常见于 Bun.serve 入站请求被转发):其 signal 是 Bun.serve
+    //      内部的,叠加 timeout:0 可能相互影响,跳过不注入。
+    const explicitTimeout = (init as (RequestInit & { timeout?: number | boolean }) | undefined)?.timeout;
+    const shouldDisableIdle = !(input instanceof Request) && explicitTimeout === undefined;
+    const effectiveInit = shouldDisableIdle
+      ? ({ ...(init as RequestInit), timeout: 0 } as RequestInit & { timeout: number })
+      : init;
+
     let target = "";
     if (typeof input === "string") target = input;
     else if (input instanceof URL) target = input.href;
@@ -309,9 +332,9 @@ export function installProxyFetchInterceptor(getProxyConfig: () => ProxyConfig):
       }
     }
     if (proxy) {
-      return originalFetch(input, { ...(init as RequestInit), proxy } as RequestInit & { proxy: string });
+      return originalFetch(input, { ...(effectiveInit as RequestInit), proxy } as RequestInit & { proxy: string });
     }
-    return originalFetch(input, init);
+    return originalFetch(input, effectiveInit);
   } as typeof fetch;
 }
 
@@ -421,10 +444,9 @@ export function fetchWithTimeout(url: string | URL, init: FetchWithTimeoutInit =
   const { timeoutMs = DEFAULT_OUTBOUND_TIMEOUT_MS, signal, ...rest } = init;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  // timeout: 0 禁用 Bun 默认 300s socket 空闲定时器——本包装的总时长看门狗(combined)才是
-  // 唯一计时源。否则辅助流(压缩/长翻译,timeoutMs 给到 600s)等长任务会在 300s 被 Bun 抢先
-  // 杀掉,JS 层看门狗来不及救(理由同 providers.ts 主链路 fetchRound 处注释)。
-  return fetch(url, { ...rest, signal: combined, timeout: 0 } as RequestInit);
+  // 无需传 Bun timeout 键:net.ts 的 fetch 拦截器已对所有走 globalThis.fetch 的调用统一注入
+  // timeout:0(禁用 Bun 300s socket 空闲定时器),本包装的 combined 看门狗是唯一计时源。
+  return fetch(url, { ...rest, signal: combined });
 }
 
 /** 用空闲超时包裹一次异步读取(通常是 reader.read()):超 timeoutMs 未 settle 即 reject,

@@ -112,6 +112,24 @@ check("C1 fetch 死端口抛错且 code/message 形态符合预期", typeof errS
 check("C2 classifyProxyError 正则命中,产出友好提示", typeof classified === "string" && classified.includes("代理连接失败"), { classified });
 console.log(`  ..  错误形态: ${JSON.stringify(errShape)}`);
 
+// ── D. 统一注入 timeout:0(禁用 Bun 300s socket 空闲定时器)────────────────────
+// 拦截器对所有走 globalThis.fetch 的调用注入 timeout:0(net.ts),让应用层看门狗当唯一
+// 计时源——新引擎(第三/四个 agent 引擎)的 LLM fetch 自动继承,无需各自记得加。
+// timeout 不在 fetch 上暴露可观测值,故用两条间接断言锁定注入行为:
+cfg = directCfg;
+// D1 注入后正常请求仍成功(timeout:0 形态被 Bun 接受、未破坏请求本身)。
+const injectedStatus = await statusOf(originUrl);
+check("D1 注入 timeout:0 后正常请求仍达真靶(注入形态合法、无副作用)", injectedStatus === 204, { injectedStatus });
+// D2 护栏:调用方显式传 timeout:false 时不被拦截器覆盖,且不报错(显式值被尊重)。
+let explicitOk = false;
+try {
+  const r = await fetch(originUrl, { timeout: false } as RequestInit);
+  explicitOk = r.status === 204;
+} catch (err) {
+  explicitOk = false;
+}
+check("D2 显式 timeout:false 被尊重(拦截器不覆盖、不报错)", explicitOk);
+
 proxy.stop(true);
 origin.stop(true);
 console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILURES`);

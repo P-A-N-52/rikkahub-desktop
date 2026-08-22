@@ -517,10 +517,8 @@ export async function streamClaudeChatWithTools(
       headers: nonStream ? headers : { ...headers, Accept: "text/event-stream" },
       body: JSON.stringify(requestBody),
       signal: sig,
-      // 禁用 Bun 默认 300s socket 空闲定时器(BUN_CONFIG_HTTP_IDLE_TIMEOUT):零字节长思考
-      // (>300s 不回响应头/keepalive)会被它抢先杀掉,我们的 600s 看门狗来不及救。计时权
-      // 完全交回 headerTimeoutMs/STREAM_IDLE_TIMEOUT_MS(fetch-idle-timeout-smoke 实测实锤)。
-      timeout: 0,
+      // 注意:无需在此传 Bun timeout 键。net.ts 的 fetch 拦截器已对所有走 globalThis.fetch
+      // 的调用统一注入 timeout:0(禁用 Bun 300s socket 空闲定时器),计时权归 headerTimeoutMs。
     }),
     // R3-1:头超时统一 600s(流式/非流式同值,用户需求 2026-08-01:非流式对齐流式——
     // 非流式响应头要等全文生成完,长思考模型 5 分钟以上很常见,300s 会误杀)。
@@ -906,8 +904,7 @@ export async function streamGoogleChatWithTools(
       headers: nonStream ? headers : { ...headers, Accept: "text/event-stream" },
       body: JSON.stringify(requestBody),
       signal: sig,
-      // timeout: 0 禁用 Bun 300s socket 空闲定时器(理由见 Claude 适配器处注释)。
-      timeout: 0,
+      // Bun timeout 由 net.ts fetch 拦截器统一注入 timeout:0(见 Claude 适配器处注释)。
     }),
     // R3-1:头超时统一 600s(流式/非流式同值,用户需求 2026-08-01:非流式对齐流式,
     // 理由同 Claude/OpenAI 适配器处注释)。
@@ -1767,8 +1764,7 @@ export async function fetchOpenAiTextStreaming(
       headers: requestBody.stream === false ? headers : { ...headers, Accept: "text/event-stream" },
       body: JSON.stringify(requestBody),
       signal: sig,
-      // timeout: 0 禁用 Bun 300s socket 空闲定时器(理由见 Claude 适配器处注释)。
-      timeout: 0,
+      // Bun timeout 由 net.ts fetch 拦截器统一注入 timeout:0(见 Claude 适配器处注释)。
     }),
     // R3-1:头超时统一 600s(原 OpenAI 自建包装,现下沉为骨架能力;用户需求 2026-08-01:
     // 非流式从 300s 对齐流式 600s——非流式响应头要等全文生成完,长思考模型误杀风险更高)。
