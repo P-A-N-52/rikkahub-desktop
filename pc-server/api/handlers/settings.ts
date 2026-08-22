@@ -2,10 +2,13 @@
 // mode-injection/*、lorebook/*、quick-message/*、search/*、模型与 provider/*、proxy/port）
 // 纪律：纯搬迁自 server.ts routeApi()；settings 数据契约冻结。
 
+import { existsSync } from "node:fs";
 import type { Assistant, JsonValue, Provider, ProxyConfig, SearchService } from "../../foundation/types";
 import type { Settings } from "../../foundation/types/settings";
 import { getStringArray, id, isRecord } from "../../foundation/utils";
 import { RUNNING_IN_CONTAINER } from "../../foundation/platform";
+import { refreshShellAvailability } from "../../workspace/runtime";
+import { shellStatusPayload } from "./workspaces";
 import {
   applyEffectiveProxy,
   friendlyRequestError,
@@ -982,6 +985,29 @@ ${outcome.serverName ? `<p>${esc(outcome.serverName)}</p>` : ""}
     // The running server keeps its current port; we return requiresRestart so the UI can tell
     // the user to restart.
     return json({ status: "ok", preferredPort, requiresRestart: true });
+  }
+  if (path === "settings/shell-path" && request.method === "POST") {
+    // shellPath 是 Windows 机器级 bash 路径;容器部署是 Linux,无此概念,直接拒写(同 port)。
+    if (RUNNING_IN_CONTAINER) {
+      return error("容器部署使用系统自带 shell,应用内 bash 路径设置不生效。", 400);
+    }
+    const body = await readJson<{ shellPath?: string | null }>(request).catch(
+      () => ({}) as { shellPath?: string | null },
+    );
+    const shellPath = String(body?.shellPath ?? "").trim();
+    // 非空则需指向真实存在的 .exe;空串 = 清除,回到自动探测。校验挡掉脏数据锁死 bash 的坑。
+    if (shellPath) {
+      if (!/\.exe$/i.test(shellPath)) {
+        return error("请指向 bash 可执行文件(.exe)", 400);
+      }
+      if (!existsSync(shellPath)) {
+        return error(`路径不存在: ${shellPath}`, 400);
+      }
+    }
+    updateSettings({ ...state.settings, shellPath });
+    // shellPath 变了必须重探(清 shellAvailability 与 shell.ts 两级缓存),返回最新状态。
+    refreshShellAvailability();
+    return json({ status: "ok", shellPath, shell: shellStatusPayload() });
   }
   if (path === "settings/proxy/detect" && request.method === "POST") {
     // R1-7:探测函数已异步化;detectSystemProxy 按平台分发(Windows 注册表 / GNOME

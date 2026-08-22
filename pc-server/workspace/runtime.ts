@@ -14,6 +14,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { Conversation, JsonValue, TextPart, ToolOutputEntry, Workspace } from "../foundation/types";
 import { getConversation } from "../conversations";
 import { addLog } from "../api/logs";
+import { state } from "../persistence/json-store";
 import { getWorkspace, touchWorkspaceAccess, workspaceStatus, workspaceTmpDir } from "./index";
 import {
   assertInsideWorkspace,
@@ -44,7 +45,9 @@ let shellProbe: { available: boolean; error?: string } | null = null;
 export function shellAvailability(): { available: boolean; error?: string } {
   if (!shellProbe) {
     try {
-      getShellConfig();
+      // 空串 → undefined 走自动探测;非空 = 用户显式指定的 bash 路径(最高优先级)。
+      // state?. 可选链对齐 workspace/index.ts 范式:测试/未初始化时 state 为空,取 undefined。
+      getShellConfig(state?.settings?.shellPath || undefined);
       shellProbe = { available: true };
     } catch (err) {
       shellProbe = { available: false, error: err instanceof Error ? err.message : String(err) };
@@ -146,7 +149,12 @@ function buildWorkspaceTool(
       // tmp/ 放超长输出落盘;声明装配也走本函数(每轮热路径),existsSync 先挡一层
       const tmpDir = workspaceTmpDir(runtime.workspace.id);
       if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
-      return createBashTool(runtime.cwd, { tempFileDir: tmpDir }) as WorkspaceToolDefinition<unknown, unknown>;
+      // 透传用户自定义 shellPath(空串→undefined=自动探测);与 shellAvailability 同源。
+      // state?. 可选链:测试/未初始化时取 undefined 走自动探测。
+      return createBashTool(runtime.cwd, {
+        tempFileDir: tmpDir,
+        shellPath: state?.settings?.shellPath || undefined,
+      }) as WorkspaceToolDefinition<unknown, unknown>;
     }
     case "grep":
       return createGrepTool(runtime.cwd, { operations: createBoundedGrepOperations(runtime.root) }) as WorkspaceToolDefinition<unknown, unknown>;

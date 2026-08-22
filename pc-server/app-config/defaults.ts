@@ -172,6 +172,7 @@ export function defaultSettings(): Settings {
     webServerJwtEnabled: false,
     preferredPort: null,
     workspaceLastPermissionPreset: null,
+    shellPath: "",
     keybindings: {
       newConversation: { keys: ["Ctrl", "N"], enabled: true },
       prevConversation: { keys: ["Alt", "Up"], enabled: true },

@@ -17,6 +17,8 @@ import { Switch } from "~/components/ui/switch";
 import api from "~/services/api";
 import type { AssistantAvatar, Settings } from "~/types";
 import { SectionHeader, textValue } from "~/components/settings/shared";
+import { isWindowsPlatform, getSystemInfo } from "~/lib/system-info";
+import { extractErrorMessage } from "~/lib/error";
 
 export function GeneralSection({
   settings,
@@ -67,6 +69,42 @@ export function GeneralSection({
       cancelled = true;
     };
   }, []);
+
+  // --- 终端(bash)路径:仅 Windows 渲染(Linux/Mac 用系统 shell,无此设置) ---
+  // shellPath 是机器级绝对路径,存后端 settings(走 SSE 同步);输入框本地受控,
+  // 提交(失焦/回车)才 POST。后端校验 .exe + existsSync,失败 toast 并回滚到上次值。
+  const [isWindows, setIsWindows] = React.useState(isWindowsPlatform());
+  const [shellPath, setShellPath] = React.useState(settings.shellPath ?? "");
+  const [shellBusy, setShellBusy] = React.useState(false);
+  React.useEffect(() => {
+    let cancelled = false;
+    void getSystemInfo().then(() => {
+      if (!cancelled) setIsWindows(isWindowsPlatform());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // SSE 推送/外部改动时同步回输入框(用户没在编辑时)。
+  React.useEffect(() => {
+    setShellPath(settings.shellPath ?? "");
+  }, [settings.shellPath]);
+
+  const submitShellPath = async () => {
+    const trimmed = shellPath.trim();
+    if (trimmed === (settings.shellPath ?? "")) return; // 无变化不打扰
+    setShellBusy(true);
+    try {
+      await api.post("settings/shell-path", { shellPath: trimmed });
+      onSettings({ ...settings, shellPath: trimmed });
+      toast.success(t("settings:general.shell_recheck_ok"));
+    } catch (err) {
+      setShellPath(settings.shellPath ?? ""); // 回滚
+      toast.error(extractErrorMessage(err, t("settings:general.shell_path_invalid")));
+    } finally {
+      setShellBusy(false);
+    }
+  };
 
   // 界面字号滑块的本地镜像值。受控 Slider 的 value 若等 POST→SSE 往返才更新,松手时 thumb 会
   // 被旧 value 弹回(用户体验为"拖过去又弹回来")。改用:onValueChange 只动本地(立即跟随),
@@ -232,8 +270,7 @@ export function GeneralSection({
             <div>
               <h2 className="text-base font-medium">{t("settings:general.tray_title")}</h2>
               <p className="mt-1 text-sm text-muted-foreground">{t("settings:general.tray_desc")}</p>
-            </div>
-            <label className="flex items-start justify-between gap-4 rounded-md border px-3 py-3">
+            </div><label className="flex items-start justify-between gap-4 rounded-md border px-3 py-3">
               <div className="min-w-0">
                 <div className="text-sm">{t("settings:general.minimize_to_tray")}</div>
                 <div className="mt-1 text-xs text-muted-foreground">
@@ -280,6 +317,40 @@ export function GeneralSection({
                 {t("settings:general.quit_app_button")}
               </Button>
             </div>
+          </div>
+        )}
+        {isWindows && (
+          <div className="space-y-4 rounded-lg border bg-card p-5">
+            <div>
+              <h2 className="text-base font-medium">{t("settings:general.shell_title")}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{t("settings:general.shell_path_hint")}</p>
+            </div>
+            <label className="block space-y-2">
+              <span className="text-sm">{t("settings:general.shell_path")}</span>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={shellPath}
+                  disabled={shellBusy}
+                  placeholder={t("settings:general.shell_path_placeholder")}
+                  className="flex-1 font-mono text-xs"
+                  onChange={(event) => setShellPath(event.target.value)}
+                  onBlur={() => void submitShellPath()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submitShellPath();
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={shellBusy}
+                  onClick={() => void submitShellPath()}
+                >
+                  {t("settings:general.shell_recheck")}
+                </Button>
+              </div>
+            </label>
           </div>
         )}
       </div>

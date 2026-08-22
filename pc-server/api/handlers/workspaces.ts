@@ -8,7 +8,7 @@ import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, readWorks
 import { mountedWorkspaceToolNames, refreshShellAvailability, shellAvailability } from "../../workspace/runtime";
 import { error, json, readJson } from "../request";
 
-function shellStatusPayload(): { available: boolean; error: string | null; mountedTools: string[] } {
+export function shellStatusPayload(): { available: boolean; error: string | null; mountedTools: string[] } {
   const shell = shellAvailability();
   return { available: shell.available, error: shell.error ?? null, mountedTools: [...mountedWorkspaceToolNames()] };
 }

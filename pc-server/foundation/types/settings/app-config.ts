@@ -11,4 +11,8 @@ export interface AppConfig {
   workspaceLastPermissionPreset: string | null;
   keybindings: Record<string, JsonValue>;
   webServerJwtEnabled: boolean;
+  /** PC-only:自定义 bash 可执行文件路径(如 C:\cygwin64\bin\bash.exe)。
+   *  空串 = 未指定,getShellConfig 走自动探测(系统 Git Bash → 内嵌兜底)。
+   *  机器级绝对路径,导出备份时剥离(PC→APP/跨机无意义,见 backup/export.ts stripPcOnly)。 */
+  shellPath?: string;
 }
