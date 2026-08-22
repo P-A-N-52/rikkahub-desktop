@@ -421,7 +421,10 @@ export function fetchWithTimeout(url: string | URL, init: FetchWithTimeoutInit =
   const { timeoutMs = DEFAULT_OUTBOUND_TIMEOUT_MS, signal, ...rest } = init;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  return fetch(url, { ...rest, signal: combined });
+  // timeout: 0 禁用 Bun 默认 300s socket 空闲定时器——本包装的总时长看门狗(combined)才是
+  // 唯一计时源。否则辅助流(压缩/长翻译,timeoutMs 给到 600s)等长任务会在 300s 被 Bun 抢先
+  // 杀掉,JS 层看门狗来不及救(理由同 providers.ts 主链路 fetchRound 处注释)。
+  return fetch(url, { ...rest, signal: combined, timeout: 0 } as RequestInit);
 }
 
 /** 用空闲超时包裹一次异步读取(通常是 reader.read()):超 timeoutMs 未 settle 即 reject,
