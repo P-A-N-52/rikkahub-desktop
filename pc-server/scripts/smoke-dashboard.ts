@@ -261,15 +261,15 @@ console.log("[purge]");
   const dry = await res.json();
   check("purge dry-run 命中≥3 台假设备", dry.dryRun === true && dry.matchedDevices >= 3, dry.matchedDevices);
   check("purge dry-run 后假设备仍在库",
-    db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get().c === 3);
+    (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get() as { c: number }).c === 3);
 
   // commit:真删 + 重建。3 台 fake-dev-* 必被删,churned 零活动设备也被清(预期误删)。
   res = await purgeHandler(ctx(base + "&version=" + pv + "&commit=1", { method: "POST" }));
   const done = await res.json();
   check("purge commit 删除≥3 台", done.purgedDevices >= 3 && done.dryRun === false, done);
-  const gone = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get().c;
+  const gone = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get() as { c: number }).c;
   check("purge 后假设备已清", gone === 0, gone);
-  const dAlive = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'real-dev-d-0004-aaaaaaaaaaaa'").get().c;
+  const dAlive = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'real-dev-d-0004-aaaaaaaaaaaa'").get() as { c: number }).c;
   check("purge 不误删发过消息的真用户", dAlive === 1, dAlive);
 
   // 关掉启发式后只按版本删:dev-c(9.9.9,无版本命中)不该被命中——再种回验证
@@ -278,7 +278,7 @@ console.log("[purge]");
   res = await purgeHandler(ctx(base + "&version=" + pv + "&heuristic=0&commit=1", { method: "POST" }));
   const done2 = await res.json();
   check("purge heuristic=0 只按版本删", done2.purgedDevices === 1, done2);
-  const fAlive = db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'fake-dev-f-0006-aaaaaaaaaaaa'").get().c;
+  const fAlive = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'fake-dev-f-0006-aaaaaaaaaaaa'").get() as { c: number }).c;
   check("heuristic=0 时未知版本零活动设备保留", fAlive === 1, fAlive);
   // 清理残留,避免影响后续 stats 章节
   db.query("DELETE FROM pings WHERE device_id LIKE 'fake-dev-%'").run();
