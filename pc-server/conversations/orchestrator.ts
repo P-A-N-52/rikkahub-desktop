@@ -55,6 +55,7 @@ import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } fr
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
+import { createEngineRegistry, resolveEngine, type EngineAdapter, type EngineRunContext } from "../engines";
 import { runPiCompaction, runPiGeneration, type CapturedPiCompaction } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
@@ -509,7 +510,9 @@ function applyCapturedPiCompactions(conversation: Conversation, captured: Captur
   scheduleThrottledConvFlush();
 }
 
-/** pi 引擎生成装配(P3 路由 + P4 资源统一 + P7 会话数据统一 + P8/P9 注入面统一):
+/** pi 引擎生成装配(P3 路由 + P4 资源统一 + P7 会话数据统一 + P8/P9 注入面统一)。
+ *  T1 起收敛为 pi adapter 的 run 实现:输入是引擎无关 EngineRunContext + pi 专属
+ *  piRuntime(由 adapter 在 matches() 判定后透传)。
  *  - prompt 输入取末 USER 节点选中消息(P4 附件面:文档/OCR 文本化与聊天引擎同母本,
  *    图片走 pi 原生 images 通道);prompt 文本经消息模板渲染(四件套之一);
  *  - 引擎上下文 = 编码器从富化后的选中路径历史(不含本轮 prompt 消息)确定性重建,
@@ -523,13 +526,18 @@ function applyCapturedPiCompactions(conversation: Conversation, captured: Captur
  *  - 资源面 = createPiSessionResources(技能白名单/AGENTS.md 边界过滤/人设+记忆冻结
  *    appendSystemPrompt/受控 settings)。 */
 async function runPiWorkspaceGeneration(
-  conversation: Conversation,
-  assistantNode: MessageNode,
-  runtime: WorkspaceRuntime,
-  deps: { assistant: Assistant; providerItem: Provider; selectedModel: Model },
+  ctx: EngineRunContext & { piRuntime: WorkspaceRuntime | null },
   sink: GenerationEventSink,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { conversation, assistantNode } = ctx;
+  const runtime = ctx.piRuntime;
+  if (!runtime) {
+    // 路由不变式:resolveEngine 选中 pi 时 matches() 已确认工作区可用。此处为防御兜底
+    // (adapter WeakMap 透传被回收的极端情况)——不可达于正常路径,报错好过静默走错引擎。
+    throw new Error("pi 引擎被选中但工作区运行时不可用(路由判定与执行不一致)。");
+  }
+  const deps = { assistant: ctx.assistant, providerItem: ctx.provider, selectedModel: ctx.model };
   const lastUserNode = [...conversation.messages]
     .reverse()
     .find((node) => (node.messages[node.selectIndex] ?? node.messages[0])?.role === "USER");
@@ -596,6 +604,35 @@ async function runPiWorkspaceGeneration(
   return result.text;
 }
 
+/** 引擎注册表(T1):编排器把两个引擎的生成函数注入 adapter 工厂。pi 在前(工作区
+ *  可用即接管),chat 兜底。新增引擎在此注册一行,runGeneration/续跑语义无需再改。 */
+const ENGINE_REGISTRY = createEngineRegistry({
+  chatRun: (ctx, sink, signal) =>
+    callProviderStreaming(ctx.conversation, ctx.assistantMessage, ctx.assistantNode, {
+      signal,
+      sink,
+      executeTool: ctx.executeTool,
+      // P1-4:generateAnswer 入口解析的 assistant/provider/model 贯穿本次生成,
+      // callProviderStreaming 不再从可能已被替换的 state.settings 重新解析。
+      snapshot: { assistant: ctx.assistant, provider: ctx.provider, model: ctx.model },
+    }),
+  piRun: (ctx, sink, signal) => runPiWorkspaceGeneration(ctx, sink, signal),
+});
+
+/** 纯生成逻辑：经引擎注册表分发到命中 adapter,由 sink 发出生成事件。
+ *  本函数不直接写 state.json、不直接广播 SSE、不直接落盘 SQLite——这些副作用由
+ *  协调器 generateAnswer 统一处理。 */
+async function runGeneration(
+  deps: EngineRunContext & { adapter: EngineAdapter },
+  sink: GenerationEventSink,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
+  // T1:布尔路由退役——引擎选择已收敛为 resolveEngine 选出的 adapter.run。pi 专属
+  // 决策(piRuntime)由 pi adapter 在 matches()/run() 内部携带,不再污染本层。
+  return deps.adapter.run(deps, sink, signal);
+}
+
 /** P5:工作区会话手动压缩改走 pi 原生 compaction;P7:压缩产物落
  *  conversation.piCompactions(下一轮生成由编码器把它重放进引擎上下文),UI 历史
  *  一字不动。返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落
@@ -656,41 +693,6 @@ export async function compactPiWorkspaceConversation(
   }
 }
 
-/** 纯生成逻辑：驱动 Provider 流式/非流式调用，并通过 sink 发出生成事件。
- *  本函数不直接写 state.json、不直接广播 SSE、不直接落盘 SQLite——这些副作用由
- *  协调器 generateAnswer 统一处理。 */
-async function runGeneration(
-  conversation: Conversation,
-  assistantMessage: Message,
-  assistantNode: MessageNode,
-  deps: {
-    assistant: Assistant;
-    providerItem: Provider;
-    selectedModel: Model;
-    executeTool: ToolExecutor;
-    /** P3 路由:工作区可用(三道闸通过)即 pi 引擎;null 走聊天引擎。 */
-    piRuntime: WorkspaceRuntime | null;
-  },
-  sink: GenerationEventSink,
-  signal?: AbortSignal,
-): Promise<string> {
-  if (signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
-  // P3 路由切换(方案 §六):工作区会话由 pi 引擎跑循环,事件桥回灌同一 sink;
-  // 工作区不可用(缺根/未信任)回落聊天引擎纯对话——openAiWorkspaceTools 同一判定
-  // 返回空工具面,与 M4 降级语义一致。
-  if (deps.piRuntime) {
-    return runPiWorkspaceGeneration(conversation, assistantNode, deps.piRuntime, deps, sink, signal);
-  }
-  return callProviderStreaming(conversation, assistantMessage, assistantNode, {
-    signal,
-    sink,
-    executeTool: deps.executeTool,
-    // P1-4：generateAnswer 入口解析的 assistant/provider/model 贯穿本次生成，
-    // callProviderStreaming 不再从可能已被替换的 state.settings 重新解析。
-    snapshot: { assistant: deps.assistant, provider: deps.providerItem, model: deps.selectedModel },
-  });
-}
-
 export async function generateAnswer(conversation: Conversation, regenerateAtNodeId?: string) {
   // R2-3:入口自带"先中止旧流"不变式。端点级守卫(send/edit/regenerate 的先 abort)挡不住
   // OCR 续体窗口:两条消息的续体先后异步触发本函数时,后者若直接 generating.set 会顶掉
@@ -706,9 +708,11 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
   checkoutConversation(conversation.id);
   const assistant = findAssistant(conversation.assistantId);
   const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
-  // P3:路由在入口一次判定并贯穿本次生成(与 P1-4 配置快照同理)——pi 引擎无
-  // "暂停→续跑"模型,续跑/暂停分支只属于聊天引擎。
-  const piRuntime = workspaceRuntimeForConversation(conversation);
+  // T1:路由在入口一次判定并贯穿本次生成(与 P1-4 配置快照同理)——引擎选择收敛为
+  // 注册表 resolveEngine(pi 命中工作区三道闸即接管,否则 chat 兜底)。续跑/暂停语义
+  // 不再写死 "!piRuntime",改读 adapter.resumeSemantics。
+  const adapter = resolveEngine(ENGINE_REGISTRY, conversation, assistant);
+  const isRunAndSuspend = adapter.resumeSemantics === "run-and-suspend";
   // 重新生成 ASSISTANT:调用方已在该 node 追加空占位 message 并把 selectIndex 指向它,
   // 直接复用,绕开 ensureAssistantGenerationNode(它会复用末尾 assistant 或新建 node,
   // 都不是"在指定 node 上新增分支")。find 不到时安全回退到默认逻辑。
@@ -739,7 +743,9 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     broadcastNodeUpdate(conversation, assistantNode);
     broadcastConversation(conversation);
   };
-  const resumingApprovedTools = !piRuntime && hasResumableToolParts(currentMessage);
+  // T1:续跑语义读 adapter 声明——仅 pause-resume 引擎(聊天)有"整批暂停→逐卡批准→
+  // 重触发续跑";run-and-suspend 引擎(pi)的工具审批由 approval-gate 挂起汇合,不重触发。
+  const resumingApprovedTools = adapter.resumeSemantics === "pause-resume" && hasResumableToolParts(currentMessage);
   currentMessage.finishedAt = null;
   // R7-2:重入生成(续写/重试复用同一消息对象)时清掉上一轮的失败标记,
   // 本轮成功后前端错误横幅不再残留;本轮再失败会在 catch 里重新落标记。
@@ -799,15 +805,21 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
       applyEvent(event);
     };
     const content = await runGeneration(
-      conversation,
-      currentMessage,
-      assistantNode,
-      { assistant, providerItem: picked.provider, selectedModel: picked.model, executeTool, piRuntime },
+      {
+        conversation,
+        assistantMessage: currentMessage,
+        assistantNode,
+        assistant,
+        provider: picked.provider,
+        model: picked.model,
+        executeTool,
+        adapter,
+      },
       sink,
       controller.signal,
     );
     if (controller.signal.aborted) throw new DOMException("Generation stopped", "AbortError");
-    if (!piRuntime && hasPendingToolApproval(currentMessage)) {
+    if (adapter.resumeSemantics === "pause-resume" && hasPendingToolApproval(currentMessage)) {
       // 注:hasPendingToolApproval 判定在 applyOutputTransforms 之前与旧实现一致——
       // 旧实现先 transform 再判定,但 transform 只改 text/reasoning parts,不触碰 tool
       // parts 的 approvalState,判定结果不受影响;两分支的 transform 都由 finalize 统一做。
@@ -870,8 +882,9 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     releaseConversation(conversation.id);
     completeConversationGeneration(conversation.id, controller);
     // P5:生成终局兜底清引擎状态条——压缩/重试进行中 abort/失败时,end 事件可能永远
-    // 不来,不清会挂死"压缩中"。幂等,聊天引擎路径广播空集合无副作用。
-    if (piRuntime) broadcastEngineStatus(conversation.id, { busy: false });
+    // 不来,不清会挂死"压缩中"。幂等,聊天引擎路径广播空集合无副作用。T1:判定改读
+    // resumeSemantics——只有 run-and-suspend 引擎(pi)会发瞬态状态条,聊天引擎不发。
+    if (isRunAndSuspend) broadcastEngineStatus(conversation.id, { busy: false });
     if (!conversationStillExists(conversation.id)) return;
     broadcastNodeUpdate(conversation, assistantNode);
     broadcastConversation(conversation);

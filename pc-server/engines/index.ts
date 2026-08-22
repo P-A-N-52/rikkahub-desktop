@@ -1,0 +1,82 @@
+// engines/index.ts — 引擎抽象契约 + 注册表(T1 路由枚举化)
+//
+// 定位:把「引擎」从布尔(piRuntime 有/无)提升为一等的、可枚举、可注册的概念。
+// 这是多引擎拓展的唯一接入面——第三引擎(dsh)、第四/五候选(codex/claude-code)
+// 落地时各新增一个 adapter 并注册进 ENGINE_REGISTRY,不改动共享面、不改动已有引擎。
+//
+// 最小抽象纪律(防「把 pi 形状烙进公共契约」):EngineRunContext 只含引擎无关输入包
+// (会话 + 消息 + 助手/Provider/模型快照 + 工具执行闭包);引擎专属决策(pi 的工作区
+// runtime、子进程引擎的 spawn 句柄)由各 adapter 在 matches()/run() 内部自行解析,
+// 不进公共契约。进程内引擎(chat/pi)与子进程引擎(dsh/codex,见 T4 骨架)共享同一
+// 输出契约 GenerationEvent,前端永远无感知。
+//
+// 防循环导入:本模块不 import orchestrator;两个引擎的生成函数(callProviderStreaming /
+// runPiWorkspaceGeneration)由编排器在组装注册表时经参数注入。matches() 只做路由判定,
+// 不产副作用。
+
+import type { Assistant, Conversation, Message, MessageNode, Model, Provider } from "../foundation/types";
+import type { GenerationEventSink, ToolExecutor } from "../inference-engine/events";
+import type { WorkspaceRuntime } from "../workspace/runtime";
+import { createChatAdapter } from "./chat-adapter";
+import { createPiAdapter } from "./pi-adapter";
+
+/** 引擎种类(开放枚举)。新增引擎 = 追加一个字面量 + 一个 adapter + 注册一行。 */
+export type EngineKind = "chat" | "pi" | "dsh" | "codex" | "claude-code" | (string & {});
+
+/** 审批续跑语义(替代 orchestrator.ts 写死的 `!piRuntime` 二选一):
+ *  - "pause-resume":聊天引擎——待审批工具整批暂停生成,用户逐卡批准后重触发续跑
+ *    (resumeApprovedToolParts + hasPendingToolApproval 收尾)。
+ *  - "run-and-suspend":pi 引擎——生成保持在跑,单个工具调用挂起等待审批门放行
+ *    (approval-gate 汇合),不重触发整轮。
+ *  子进程引擎届时按其审批模型声明。 */
+export type EngineResumeSemantics = "pause-resume" | "run-and-suspend";
+
+/** 引擎无关的生成输入包(编排器入口一次性装配,贯穿本次生成)。 */
+export interface EngineRunContext {
+  conversation: Conversation;
+  assistantMessage: Message;
+  assistantNode: MessageNode;
+  assistant: Assistant;
+  provider: Provider;
+  model: Model;
+  /** 工具执行闭包(协调器注入,内部已挂生成级 signal 与部分输出回写)。 */
+  executeTool: ToolExecutor;
+}
+
+export interface EngineAdapter {
+  readonly kind: EngineKind;
+  /** 路由判定:该会话是否由本引擎接管。注册表按序取首个命中;chat 恒 true 兜底。 */
+  matches(conversation: Conversation, assistant: Assistant): boolean;
+  readonly resumeSemantics: EngineResumeSemantics;
+  /** 驱动一次生成,经 sink 发出 GenerationEvent,返回最终文本。 */
+  run(ctx: EngineRunContext, sink: GenerationEventSink, signal?: AbortSignal): Promise<string>;
+}
+
+/** 生成函数注入形状:编排器把真实实现注入 adapter 工厂,engines/ 与 orchestrator 解耦。 */
+export type ChatRunFn = (
+  ctx: EngineRunContext,
+  sink: GenerationEventSink,
+  signal?: AbortSignal,
+) => Promise<string>;
+/** pi 生成实现签名:除引擎无关输入包外,还需 pi adapter 在 run() 内注入的工作区
+ *  runtime(matches() 判定产物,经 WeakMap 透传)。 */
+export type PiRunFn = (
+  ctx: EngineRunContext & { piRuntime: WorkspaceRuntime | null },
+  sink: GenerationEventSink,
+  signal?: AbortSignal,
+) => Promise<string>;
+
+/** 组装引擎注册表(编排器在模块加载时调用一次)。顺序即优先级:pi 在前(能力命中
+ *  才接管),chat 恒兜底。新增引擎往数组前部插(chat 必须保持最后兜底)。 */
+export function createEngineRegistry(deps: { chatRun: ChatRunFn; piRun: PiRunFn }): EngineAdapter[] {
+  return [createPiAdapter(deps.piRun), createChatAdapter(deps.chatRun)];
+}
+
+/** 路由:遍历注册表取首个 matches() 命中的 adapter;数组恒含 chat 兜底,不会空。 */
+export function resolveEngine(
+  registry: EngineAdapter[],
+  conversation: Conversation,
+  assistant: Assistant,
+): EngineAdapter {
+  return registry.find((adapter) => adapter.matches(conversation, assistant)) ?? registry[registry.length - 1]!;
+}
