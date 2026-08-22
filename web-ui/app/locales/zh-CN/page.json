@@ -184,11 +184,12 @@
     },
     "shell": {
       "title": "未找到可用的 bash 终端",
-      "desc": "AI 暂时无法执行终端命令，已自动改挂内置的 grep / find / ls 只读检索工具。安装 Git for Windows 后重新检测，即可解锁完整的命令执行能力。",
+      "desc": "内置终端正在后台准备，稍候重新检测即可；也可以在设置里指定自己的 bash 路径。在此之前，AI 已自动改挂内置的 grep / find / ls 只读检索工具。",
+      "set_path": "指定 bash 路径",
       "install": "下载 Git for Windows",
-      "recheck": "已安装，重新检测",
+      "recheck": "重新检测",
       "recheck_ok": "检测成功，bash 已可用，会话将挂载完整工具",
-      "recheck_fail": "仍未找到可用的 bash，请确认 Git for Windows 已安装"
+      "recheck_fail": "仍未找到可用的 bash——请稍候再试（内置终端仍在准备），或在设置里指定 bash 路径"
     }
   },
   "window_controls": {

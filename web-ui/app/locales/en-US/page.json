@@ -184,11 +184,12 @@
     },
     "shell": {
       "title": "No usable bash shell found",
-      "desc": "The AI can't run terminal commands on this machine, so built-in read-only grep / find / ls tools are mounted instead. Install Git for Windows and re-check to unlock full command execution.",
+      "desc": "The built-in terminal is being prepared in the background — re-check in a moment, or point to your own bash in Settings. Until then, the AI falls back to built-in read-only grep / find / ls tools.",
+      "set_path": "Set bash path",
       "install": "Download Git for Windows",
-      "recheck": "Installed, re-check",
+      "recheck": "Re-check",
       "recheck_ok": "Bash detected — conversations now get the full toolset",
-      "recheck_fail": "Still no usable bash found. Make sure Git for Windows is installed"
+      "recheck_fail": "Still no usable bash — retry in a moment (the built-in terminal is still being prepared), or set a bash path in Settings"
     }
   },
   "window_controls": {

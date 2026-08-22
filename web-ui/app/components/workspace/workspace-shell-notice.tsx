@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 import { RefreshCw, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,8 +10,12 @@ import { openExternal } from "~/lib/external-link";
 import api from "~/services/api";
 
 // 工作区 shell 状态提醒(K3):bash 探测失败(典型:Windows 未装 Git Bash 或只有
-// 未装发行版的 WSL 启动器)时,在工作区空态页给出安装引导 + 重探入口。
+// 未装发行版的 WSL 启动器)时,在工作区空态页给出修复引导 + 重探入口。
 // bash 可用时组件不渲染任何内容——绝大多数用户永远不会见到它。
+//
+// 2026-08 内嵌兜底上线后,此通知只在"系统无 bash 且内嵌 bash 正在后台首次落地"的
+// 短暂窗口出现(内嵌就绪后 getShellConfig 即命中,通知消失)。故引导重心从"下载 Git"
+// 改为进阶逃生门——指定自有 bash 路径;Git 下载降为次级,重探保留。
 
 const GIT_FOR_WINDOWS_URL = "https://git-scm.com/download/win";
 
@@ -79,6 +84,15 @@ export function WorkspaceShellNotice() {
           size="sm"
           variant="outline"
           className="h-7 rounded-full px-3 text-xs"
+          asChild
+        >
+          <Link to="/settings?section=general">{t("workspace.shell.set_path")}</Link>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 rounded-full px-3 text-muted-foreground text-xs"
           onClick={() => void openExternal(GIT_FOR_WINDOWS_URL)}
         >
           {t("workspace.shell.install")}
