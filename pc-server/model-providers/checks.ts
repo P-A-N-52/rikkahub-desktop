@@ -3,6 +3,7 @@
 
 import { updateSettings } from "../app-config";
 import { fetchWithTimeout, readWithIdleTimeout } from "../foundation/net";
+import { evaluateJsonExpr, ParseError } from "../foundation/json-expression";
 import type { Assistant, Model, Provider } from "../foundation/types";
 import { state } from "../persistence/json-store";
 import { addLog } from "../api/logs";
@@ -10,27 +11,6 @@ import { findAssistant } from "../assistants";
 import { applyCustomBody, jsonBody, modelsEndpointFor, normalizeFetchedModels, applyRequestHeaders, providerHeaders, providerTestCorePassed, providerTestModel, textBody } from "./index";
 import { hostOfProvider } from "../inference-engine/message-builder";
 import { deltaReasoningContent, deltaTextContent, parseSseChunks, responseEventToDelta } from "../inference-engine/providers";
-
-function getByPath(value: unknown, path: string): unknown {
-  const expression = path.trim();
-  if (!expression) return value;
-  const tokens = expression.match(/[^.[\]]+|\[(\d+)\]/g) ?? [];
-  let current: any = value;
-  for (const token of tokens) {
-    if (current == null) return undefined;
-    const indexMatch = /^\[(\d+)\]$/.exec(token);
-    current = indexMatch ? current[Number(indexMatch[1])] : current[token];
-  }
-  return current;
-}
-
-function formatBalanceValue(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value.toFixed(2);
-  const text = String(value ?? "").trim();
-  const num = Number(text);
-  return text && Number.isFinite(num) ? num.toFixed(2) : text;
-}
-
 
 export function endpointFor(providerItem: Provider) {
   const base = providerItem.baseUrl.replace(/\/+$/, "");
@@ -146,9 +126,20 @@ export async function fetchProviderBalance(providerItem: Provider) {
     error: response.ok ? undefined : textBody(text),
   });
   if (!response.ok) throw new Error(`余额查询失败：${response.status} ${text.slice(0, 500) || response.statusText}`);
-  const value = getByPath(raw, String(option.resultPath ?? ""));
-  const formatted = formatBalanceValue(value);
-  if (!formatted) throw new Error(`余额结果路径没有取到值：${option.resultPath || "(root)"}`);
+  // 余额取值走表达式 DSL(对齐 Android JsonExpression):支持路径 a.b / a[0] 与
+  // + - * / ++ 运算,故 OpenRouter 预设 `data.total_credits - data.total_usage` 能算出净余额。
+  const resultPath = String(option.resultPath ?? "").trim();
+  let value: string;
+  try {
+    value = evaluateJsonExpr(resultPath, raw);
+  } catch (err) {
+    if (err instanceof ParseError) throw new Error(`余额结果路径表达式无效：${resultPath || "(空)"}（${err.message}）`);
+    throw err;
+  }
+  // 数值一律两位小数展示;取不到值(空串)视为路径没命中,报错引导用户检查。
+  const numeric = Number(value);
+  const formatted = value.trim() !== "" && Number.isFinite(numeric) ? numeric.toFixed(2) : value.trim();
+  if (!formatted) throw new Error(`余额结果路径没有取到值：${resultPath || "(root)"}`);
   return { status: "ok", endpoint, value: formatted, preview: textBody(text) };
 }
 

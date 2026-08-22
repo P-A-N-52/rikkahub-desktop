@@ -25,6 +25,7 @@ import { Switch } from "~/components/ui/switch";
 import { ModelEditDialog } from "~/components/model-edit-dialog";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
 import { cn } from "~/lib/utils";
+import { isBalanceResultPathValid } from "~/lib/json-expression";
 import { openExternal } from "~/lib/external-link";
 import api, { appendWebAuthQuery } from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
@@ -1283,7 +1284,15 @@ export function ProvidersSection({
                       balanceOption: { ...balanceOptionOf(draft), resultPath: event.target.value },
                     })
                   }
+                  aria-invalid={!isBalanceResultPathValid(textValue(balanceOption.resultPath))}
+                  className={cn(
+                    !isBalanceResultPathValid(textValue(balanceOption.resultPath)) &&
+                      "border-destructive focus-visible:ring-destructive/30",
+                  )}
                 />
+                {!isBalanceResultPathValid(textValue(balanceOption.resultPath)) ? (
+                  <p className="text-xs text-destructive">{t("settings:providers.balance_result_path_invalid")}</p>
+                ) : null}
               </label>
             </div>
           </div>

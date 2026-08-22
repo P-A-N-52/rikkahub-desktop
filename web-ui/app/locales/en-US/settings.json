@@ -173,6 +173,7 @@
     "query": "Query",
     "balance_api_path": "Balance API Path",
     "balance_result_path": "Balance result path",
+    "balance_result_path_invalid": "Invalid expression. Supports paths (e.g. data.total_credits, list[0]) and + - * / ++ operators.",
     "test_summary": "Test summary",
     "test_summary_model": "Model: {{model}}",
     "testing": "Testing...",

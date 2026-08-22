@@ -173,6 +173,7 @@
     "query": "查询",
     "balance_api_path": "余额 API Path",
     "balance_result_path": "余额结果路径",
+    "balance_result_path_invalid": "表达式无效。支持路径（如 data.total_credits、list[0]）与 + - * / ++ 运算。",
     "test_summary": "测试摘要",
     "test_summary_model": "模型：{{model}}",
     "testing": "正在测试...",
