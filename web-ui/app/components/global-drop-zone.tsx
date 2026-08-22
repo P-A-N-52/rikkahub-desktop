@@ -98,7 +98,7 @@ export function GlobalDropZone({ draftKey, disabled }: GlobalDropZoneProps) {
   if (!active) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/70">
       <div className="flex flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-primary/50 bg-card/95 px-12 py-10 text-center shadow-2xl">
         <UploadCloud className="size-12 text-primary" />
         <p className="text-base font-medium text-primary">

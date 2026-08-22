@@ -1199,7 +1199,7 @@ const ConversationTimeline = React.memo(
         {!detailLoading && !detailError && activeId && selectedNodeMessages.length > 0 ? (
           <>
             {shareSelecting ? (
-              <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border bg-background/95 p-1 shadow-lg backdrop-blur">
+              <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border bg-background/95 p-1 shadow-lg">
                 <Button
                   variant="ghost"
                   size="icon"

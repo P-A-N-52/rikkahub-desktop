@@ -1283,7 +1283,7 @@ export const ConversationSidebar = React.memo(
                         >
                           <span className="flex-1 truncate">{ut.name}</span>
                           <Check className={selected ? "size-4" : "size-4 opacity-0"} />
-                          <span className="absolute right-1 flex items-center gap-0.5 rounded-sm bg-popover/80 px-1 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+                          <span className="absolute right-1 flex items-center gap-0.5 rounded-sm bg-popover/80 px-1 opacity-0 transition-opacity group-hover:opacity-100">
                             <button
                               type="button"
                               className="rounded p-1 text-muted-foreground hover:text-foreground"

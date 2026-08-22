@@ -42,7 +42,7 @@ export function StartupGate() {
   const hasProgress = (status?.total ?? 0) > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>{failed ? t("startup_gate.failed_title") : t("startup_gate.title")}</CardTitle>
