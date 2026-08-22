@@ -47,4 +47,13 @@ export const pendingMemoryPath = join(memoryDir, "pending_memory.json");
 
 export const deviceIdPath = join(dataDir, "device-id.txt");
 
+// 内嵌 bash 运行时的落地目录(仅 Windows)。固定路径(非系统 tmp)——杀软对固定路径的
+// 已签名/已知文件更友好,且随应用生命周期(卸载 dataDir 即一并清)。仅版本戳变更时整目录
+// 重落地,不频繁删写。落地保持 MSYS2 的 usr/bin/ 平铺(exe 与 msys-*.dll 同目录,见
+// scripts/build-bash-bundle.ts 头注)。
+export const runtimeBinDir = join(dataDir, "runtime-bin");
+export const embeddedBashDir = join(runtimeBinDir, "bash");
+export const embeddedBashExe = join(embeddedBashDir, "usr", "bin", "bash.exe");
+export const embeddedBashStampPath = join(embeddedBashDir, ".rikkahub-stamp.json");
+
 export const MODELS_DEV_CACHE_PATH = join(dataDir, "models-dev-cache.json");

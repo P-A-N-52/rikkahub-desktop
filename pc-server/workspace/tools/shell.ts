@@ -33,7 +33,7 @@ function isLegacyWslBashPath(path: string): boolean {
   return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
 }
 
-function getBashShellConfig(shell: string): ShellConfig {
+export function getBashShellConfig(shell: string): ShellConfig {
   return isLegacyWslBashPath(shell) ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] };
 }
 
@@ -58,8 +58,9 @@ function findExecutablesOnPath(executable: string): string[] {
   }
 }
 
-/** 运行验证:候选 shell 真能执行一条 echo 才算可用(挡住未装发行版的 WSL 启动器)。 */
-function shellRunsBash(config: ShellConfig): boolean {
+/** 运行验证:候选 shell 真能执行一条 echo 才算可用(挡住未装发行版的 WSL 启动器)。
+ *  导出供 embedded-bash 复用:内嵌 bash 落地后同样需过一次真实 echo 才算就绪。 */
+export function shellRunsBash(config: ShellConfig): boolean {
   const marker = "__rikkahub_shell_ok__";
   try {
     const result =
