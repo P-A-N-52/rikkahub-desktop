@@ -1,5 +1,5 @@
 // scripts/bump-version.ts — 版本号单一修改入口（N-6）
-// 用法：bun run version:bump 1.5.0（在 pc-server/ 下）
+// 用法：bun run version:bump 2.0.0-preview（在 pc-server/ 下）
 //
 // 版本号需要出现在四处（各有硬性理由，无法在构建/运行时互相派生）：
 //   - pc-server/updates/index.ts APP_VERSION：更新检查接口，编译进单 exe；
@@ -13,8 +13,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const newVersion = process.argv[2];
-if (!newVersion || !/^\d+\.\d+\.\d+$/.test(newVersion)) {
-  console.error("用法: bun run version:bump <x.y.z>（例如 1.5.0）");
+// 接受 x.y.z 与带 prerelease 后缀的 x.y.z-preview/.beta.N 等(semver);Tauri nsis 文件名、
+// Cargo semver、check-version-sync 均兼容该形态。
+if (!newVersion || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(newVersion)) {
+  console.error("用法: bun run version:bump <x.y.z[-prerelease]>（例如 2.0.0-preview）");
   process.exit(1);
 }
 
