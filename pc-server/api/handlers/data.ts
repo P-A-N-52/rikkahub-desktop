@@ -299,7 +299,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
     mkdirSync(tmpRoot, { recursive: true });
     const zipPath = join(tmpRoot, exportFileName);
     try {
-      const size = createSettingsBackupZipToPath(zipPath);
+      const { size, warnings } = createSettingsBackupZipToPath(zipPath);
       // Stream the file as the response body — Bun handles the file-to-stream conversion
       // without buffering. We can't auto-delete the temp dir mid-stream, so register a
       // delayed cleanup; if the user cancels mid-download Bun closes the stream and the
@@ -315,6 +315,9 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
           "Content-Disposition": `attachment; filename="${exportFileName}"`,
           // Expose to client so the UI can show "saved as X" in its success toast.
           "X-Export-Filename": exportFileName,
+          // B4-①:关键降级项(安卓库失败/附件缺失)以 JSON 透出,前端据此显式警告——
+          // 备份"成功但缺件"必须让用户知情,而不是静默产出一个恢复后缺会话/附件的包。
+          ...(warnings.length > 0 ? { "X-Export-Warnings": JSON.stringify(warnings) } : {}),
         },
       });
     } catch (err) {

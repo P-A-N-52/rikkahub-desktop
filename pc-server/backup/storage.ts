@@ -122,7 +122,7 @@ export async function webDavBackup(config: WebDavConfig, onProgress?: (message: 
   mkdirSync(tmpRoot, { recursive: true });
   const zipPath = join(tmpRoot, fileName);
   try {
-    const size = createSettingsBackupZipToPath(zipPath, (msg) => onProgress?.(msg));
+    const { size } = createSettingsBackupZipToPath(zipPath, (msg) => onProgress?.(msg));
     onProgress?.("正在上传...", 0);
     const file = Bun.file(zipPath);
     let uploaded = 0;
@@ -395,7 +395,7 @@ export async function s3Backup(config: S3Config, onProgress?: (message: string, 
   mkdirSync(tmpRoot, { recursive: true });
   const zipPath = join(tmpRoot, fileName);
   try {
-    const size = createSettingsBackupZipToPath(zipPath, (msg) => onProgress?.(msg));
+    const { size } = createSettingsBackupZipToPath(zipPath, (msg) => onProgress?.(msg));
     onProgress?.("正在上传...", 0);
     const file = Bun.file(zipPath);
     let uploaded = 0;

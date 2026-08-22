@@ -722,7 +722,15 @@ function buildUploadStagingPlan(): UploadStagingPlan {
   return { copies, backupNameById, totalFiles: state.files.length, missingSkipped, orphanSkipped, dedupedCount };
 }
 
-export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?: (message: string) => void): number {
+/** B4-①:导出返回值。size=zip 字节数;warnings=关键降级项(安卓库失败/附件暂存失败),
+ *  经 X-Export-Warnings header 透出给前端显式 toast——用户必须知道"备份成功了但缺会话库"。 */
+export interface BackupExportResult {
+  size: number;
+  warnings: string[];
+}
+
+export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?: (message: string) => void): BackupExportResult {
+  const warnings: string[] = [];
   const tmpRoot = join(tempDir(), `rikkahub-backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const stageDir = join(tmpRoot, "stage");
   mkdirSync(stageDir, { recursive: true });
@@ -779,10 +787,14 @@ export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?
           writeFileSync(join(stageDir, "rikka_hub-shm"), Buffer.alloc(0));
         } else {
           if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+          // B4-①:rikka_hub.db 是 PC→APP 会话的唯一载体,失败=该备份恢复后无会话。分级降级:
+          // zip 仍产出(PC→PC 走 pc_conversations.db 不受影响),但记 warning 让前端显式告知。
+          warnings.push("对话数据库(rikka_hub.db)生成失败，本备份恢复到移动端将不含会话");
         }
       } catch (dbErr) {
         console.error("[backup] generateRikkaHubDb failed:", dbErr);
         if (existsSync(dbPath)) try { rmSync(dbPath); } catch { /* */ }
+        warnings.push("对话数据库(rikka_hub.db)生成失败，本备份恢复到移动端将不含会话");
       }
     }
     if (uploadPlan.copies.length > 0) {
@@ -791,6 +803,8 @@ export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?
       const stageResult = stageUploadFilesInto(uploadStage, uploadPlan.copies, onProgress);
       if (stageResult.failed > 0) {
         reportError("backup", "error", `${stageResult.failed}/${uploadPlan.copies.length} 个附件暂存失败，备份不完整；首个错误：${stageResult.firstError}`, undefined, "staging_failed", { failed: stageResult.failed, total: uploadPlan.copies.length, firstError: stageResult.firstError ?? "" });
+        // B4-①:附件缺失属"备份不完整"的关键降级,同样透出给前端。
+        warnings.push(`${stageResult.failed}/${uploadPlan.copies.length} 个附件未能打进备份`);
       }
     }
     if (uploadPlan.missingSkipped > 0) {
@@ -825,7 +839,7 @@ export function createSettingsBackupZipToPath(targetZipPath: string, onProgress?
     if (!existsSync(targetZipPath)) {
       throw new Error("Zip file was not created (file missing after archiver exited 0)");
     }
-    return statSync(targetZipPath).size;
+    return { size: statSync(targetZipPath).size, warnings };
   } finally {
     try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
   }

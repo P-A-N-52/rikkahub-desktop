@@ -487,7 +487,7 @@ export function DataSection({
       // progress bar — Bun's response carries a Content-Length so the browser knows the
       // total up front. ky/fetch don't expose download progress without a custom
       // ReadableStream consumer; XHR is simpler and well-supported by Tauri's webview.
-      const result: { blob: Blob; fileName: string } = await new Promise((resolve, reject) => {
+      const result: { blob: Blob; fileName: string; warnings: string[] } = await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("GET", appendWebAuthQuery("/api/data/export"));
         xhr.responseType = "blob";
@@ -509,8 +509,19 @@ export function DataSection({
             // X-Export-Filename is set by the server with the canonical zip filename, so we
             // don't have to recompute the timestamp on the client (and risk it drifting).
             const headerName = xhr.getResponseHeader("X-Export-Filename") || "";
+            // B4-①:关键降级项(安卓库失败/附件缺失)随 header 透出,逐条解析成可读文案。
+            let warnings: string[] = [];
+            const warningsHeader = xhr.getResponseHeader("X-Export-Warnings");
+            if (warningsHeader) {
+              try {
+                const parsed = JSON.parse(warningsHeader);
+                if (Array.isArray(parsed)) warnings = parsed.map((w) => String(w));
+              } catch {
+                warnings = [];
+              }
+            }
             const fallback = `rikkahub-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
-            resolve({ blob: xhr.response as Blob, fileName: headerName || fallback });
+            resolve({ blob: xhr.response as Blob, fileName: headerName || fallback, warnings });
           } else {
             reject(new Error(t("settings:data.export_http_error", { status: xhr.status })));
           }
@@ -534,6 +545,10 @@ export function DataSection({
       // Long-lived success toast so the user has time to read the filename before it dismisses.
       // 8s is enough to copy the name into a file manager search box if they want.
       toast.success(t("settings:data.export_done", { name: result.fileName }), { duration: 8000 });
+      // B4-①:备份"成功但缺件"(安卓库失败/附件缺失)必须显式警告,不能只在成功 toast 里带过。
+      for (const warning of result.warnings) {
+        toast.warning(warning, { duration: 12000 });
+      }
     } catch (error) {
       toast.dismiss(prepToast);
       toast.error(error instanceof Error ? error.message : t("settings:data.export_failed"));
