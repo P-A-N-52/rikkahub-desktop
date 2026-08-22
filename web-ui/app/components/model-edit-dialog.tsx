@@ -795,7 +795,10 @@ function CustomBodyRow({
 }
 
 function stringifyBodyValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  // 字符串要 JSON.stringify 回显成带引号的形式("max"),与占位符 "hello" 的语法提示自洽——
+  // 否则用户输入带引号的字符串后被解析存成裸串,这里原样回显会把引号"吞掉",让人误以为没输进去。
+  // 后端 decodeCustomBodyValue 对带/不带引号都解析成同一字符串,功能不变;回显带引号也仍能被 JSON.parse 回来。
+  if (typeof value === "string") return JSON.stringify(value);
   if (value === undefined || value === null) return "";
   try {
     return JSON.stringify(value);
