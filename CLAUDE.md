@@ -106,6 +106,18 @@ the runtime will.
   carry a comment explaining why swallowing is safe (parse fallback / best-effort cleanup).
   Severity guide: `error` = user must know (global toast), `warn` = perceivable degradation,
   `info` = error-center record only.
+- **All outbound LLM fetch goes through one interceptor** (`installProxyFetchInterceptor` in
+  `foundation/net.ts`, installed over `globalThis.fetch`). It does two things per-request:
+  (1) injects the `proxy` option from the current proxy config, and (2) injects `timeout: 0`
+  to disable Bun's 300s socket idle timer — which would otherwise kill thinking-model
+  requests that stay silent >300s awaiting response headers. Timing authority lives solely
+  in our app-layer watchdogs (`headerTimeoutMs` 600s / `STREAM_IDLE_TIMEOUT_MS` 120s /
+  `AbortSignal.timeout`). **New inference/agent engines must call plain `fetch` with their own
+  AbortSignal + watchdog and never pass a numeric Bun `timeout` themselves** — the interceptor
+  already disabled the idle kill, and a caller-supplied numeric timeout would fight the
+  watchdog for the clock. Callers that pass an explicit `init.timeout` are respected (guard),
+  and `Request`-object inputs (Bun.serve inbound forwards) are skipped. Locked by
+  `scripts/proxy-behavior-smoke.ts` §D. Runtime pins Bun 1.4.0 (ci / build-linux / Dockerfile / @types/bun).
 
 ## Common tasks
 
