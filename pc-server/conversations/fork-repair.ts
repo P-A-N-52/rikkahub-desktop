@@ -21,6 +21,7 @@
 import type { Database } from "bun:sqlite";
 import type { MessageNode } from "../foundation/types";
 import { id } from "../foundation/utils";
+import { reportError } from "../observability/app-errors";
 import { replaceNodeFts } from "./fts";
 
 interface ConvMeta {
@@ -152,5 +153,15 @@ export function repairForkNodeTheft(db: Database): RepairOutcome {
       return { repaired, skipped: outcome.skipped };
     }
   }
+  // 32 轮跑满仍在修复 = 链式 fork 深度超过上限,定点未收敛。此前静默 return {...,skipped:0}
+  // 吞掉超限,受损会话永远缺前缀且无任何信号。上报 warn 让运维知情(不中断启动)。
+  reportError(
+    "persistence",
+    "warn",
+    `fork 节点修复迭代超过 32 轮仍未收敛(已修复 ${repaired} 个),可能存在超深链式 fork 残留`,
+    undefined,
+    "fork_repair_pass_limit",
+    { repaired, passLimit: 32 },
+  );
   return { repaired, skipped: 0 };
 }

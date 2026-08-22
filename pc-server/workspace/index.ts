@@ -238,6 +238,11 @@ export function touchWorkspaceAccess(workspaceId: string): void {
  * 解绑必须走 working set 权威实例(getConversation→改字段→persistConversation),
  * 不能只 UPDATE 库行——活跃实例内存里还留着旧 workspaceId,后续任何 flush 会把
  * 库行覆盖回去(安卓 moveConversationToFolder 同款教训)。
+ *
+ * B5-① 原子性:无法包成一个 DB 事务(persistConversation 自带事务,SQLite 不支持
+ * 嵌套;且必须走内存实例)。改为"逐个解绑 + 任一失败即时中止"——某个会话解绑失败
+ * 立即停手、如实上报已解绑计数、不删工作区记录。残留绑定幂等,用户重试即可续解,
+ * 优于"工作区已删但部分会话仍绑着已删 id"的孤儿态。
  */
 export function deleteWorkspace(workspaceId: string): boolean {
   const existing = getWorkspace(workspaceId);
@@ -245,13 +250,31 @@ export function deleteWorkspace(workspaceId: string): boolean {
 
   const boundIds = (db().prepare("SELECT id FROM pc_conversation WHERE workspace_id = ?").all(workspaceId) as { id: string }[])
     .map((row) => row.id);
+  let unbound = 0;
   for (const convId of boundIds) {
     const conversation = getConversation(convId);
-    if (!conversation) continue;
+    if (!conversation) {
+      // 会话行在 SELECT 与解绑之间被并发删除:无需解绑,跳过计入已处理。
+      unbound += 1;
+      continue;
+    }
     conversation.workspaceId = null;
     conversation.workspaceCwd = null;
     conversation.updateAt = Date.now();
-    persistConversation(conversation);
+    try {
+      persistConversation(conversation);
+    } catch (err) {
+      reportError(
+        "workspace",
+        "warn",
+        `删除工作区失败:解绑会话 ${convId} 时出错(已解绑 ${unbound}/${boundIds.length} 个,工作区未删除,可重试)`,
+        err,
+        "workspace_delete_unbind_failed",
+        { workspaceId, failedConversationId: convId, unbound, total: boundIds.length },
+      );
+      return false;
+    }
+    unbound += 1;
   }
 
   db().prepare("DELETE FROM pc_workspace WHERE id = ?").run(workspaceId);
