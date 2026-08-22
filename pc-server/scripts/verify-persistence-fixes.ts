@@ -29,7 +29,16 @@ async function boot(tempDir: string, port: number) {
   });
   const dec = new TextDecoder();
   const err: string[] = [];
-  (async () => { for await (const c of proc.stderr) err.push(dec.decode(c)); })();
+  // 显式 reader 而非 `for await...of proc.stderr`:pi 0.84.2 带入的 undici-types 全局
+  // ReadableStream 遮蔽了 lib.dom.iterable 的可迭代声明,类型层丢失 Symbol.asyncIterator。
+  (async () => {
+    const reader = proc.stderr.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) err.push(dec.decode(value));
+    }
+  })();
   let healthy = false;
   for (let i = 0; i < 40; i++) {
     try { const r = await fetch(`${baseUrl}/api/health`); if (r.ok) { healthy = true; break; } } catch {}

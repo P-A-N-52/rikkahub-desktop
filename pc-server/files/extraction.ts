@@ -33,6 +33,22 @@ export interface ExtractionStatus {
   total: number | null;
 }
 
+// 逐 chunk 读子进程流。不用 `for await...of stream`:pi 0.84.2 升级把 @types/node 的
+// undici-types 拉进编译图,其全局 ReadableStream(stream/web)遮蔽了 lib.dom.iterable 的
+// 可迭代声明,Symbol.asyncIterator 在类型层丢失;显式 getReader() 与该全局声明之争无关。
+async function* streamChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // ── 父侧:任务登记簿 + 并发泵 ────────────────────────────────────────────────
 //
 // registry 语义(接替原 in-flight 去重 + R4-4 空结果负缓存,均为进程内、不落盘):
@@ -119,14 +135,14 @@ async function runExtractionChild(entry: StoredFile): Promise<void> {
     let stderrText = "";
     const stderrDone = (async () => {
       const decoder = new TextDecoder();
-      for await (const chunk of child.stderr) {
+      for await (const chunk of streamChunks(child.stderr)) {
         if (stderrText.length < 4096) stderrText += decoder.decode(chunk, { stream: true });
       }
     })();
 
     const decoder = new TextDecoder();
     let lineBuffer = "";
-    for await (const chunk of child.stdout) {
+    for await (const chunk of streamChunks(child.stdout)) {
       armStallTimer();
       lineBuffer += decoder.decode(chunk, { stream: true });
       let newlineIdx: number;
