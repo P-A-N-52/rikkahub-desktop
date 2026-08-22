@@ -71,7 +71,7 @@ describe("安卓独有字段透传(产品决策②)", () => {
   test("APP zip 导入 → /settings 可见 → PC 导出 zip 的 settings.json 原样携带", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "rkh-passthrough-e2e-"));
     const proc = Bun.spawn(["bun", serverEntry, "--port", "18260", "--no-open"], {
-      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir },
+      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir, RIKKAHUB_ANALYTICS: "0" },
       stdout: "pipe",
       stderr: "pipe",
     });

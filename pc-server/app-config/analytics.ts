@@ -8,6 +8,24 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { deviceIdPath } from "../foundation/paths";
 import { APP_VERSION } from "../updates/index";
 
+// 上报开关(假新用户/假日活专题)。开发态冒烟测试把 RIKKAHUB_PC_DATA_DIR 指到一次性
+// 临时目录,每次跑都生成全新 device-id + 无条件 startup ping → 一次 spawn 就记一个
+// "新用户",dashboard 日活被人为刷爆。门控让"是否上报"由"这是不是真实安装"决定:
+//   RIKKAHUB_ANALYTICS=1/0 显式指定,优先级最高(调试/紧急关停);
+//   否则编译出来的 exe(bun build --compile 产物,用户真实安装)默认上报;
+//   源码 `bun run server.ts`(开发/冒烟/CI)默认不上报。
+// 判据:编译 exe 的 argv 不含入口脚本路径(argv[0]=exe 自身,见 orchestrator 注释);
+// bun run 时 argv[1] 是脚本路径 server.ts。
+export function analyticsEnabled(): boolean {
+  const explicit = process.env.RIKKAHUB_ANALYTICS;
+  if (explicit === "1") return true;
+  if (explicit === "0") return false;
+  // argv[1] 存在且像脚本路径(非 --flag)→ bun run 源码态,不上报。
+  const scriptArg = process.argv[1];
+  const isSourceRun = typeof scriptArg === "string" && scriptArg !== "" && !scriptArg.startsWith("-");
+  return !isSourceRun;
+}
+
 const ANALYTICS_ENDPOINT = "https://rikkahub-desktop.pages.dev/ping";
 let analyticsDeviceId = "";
 let analyticsMsgCount = 0;
@@ -110,6 +128,9 @@ function sendAnalyticsPing(): void {
 }
 
 export function startAnalytics(): void {
+  // 门控在 try 之外判定也要兜进 try——analytics 永远不应该让 server 启动失败。
+  // 但门控本身是纯函数不抛错,放前面早退,禁用时不做读盘/设 interval 任何动作。
+  if (!analyticsEnabled()) return;
   // 同步部分(读 device-id、设置 interval)绝不可能抛错;唯一可能的失败点是
   // fetch,已在 sendAnalyticsPing 内部隔离。这里整体再加一层 try/catch 兜底,
   // 防御未来代码改动时引入意外异常 —— analytics 永远不应该让 server 启动失败。

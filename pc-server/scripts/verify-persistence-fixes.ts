@@ -24,7 +24,7 @@ async function boot(tempDir: string, port: number) {
   const baseUrl = `http://localhost:${port}`;
   const proc = Bun.spawn(["bun", "run", "server.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), RIKKAHUB_PC_DATA_DIR: tempDir, BROWSER: "none" },
+    env: { ...process.env, PORT: String(port), RIKKAHUB_PC_DATA_DIR: tempDir, BROWSER: "none", RIKKAHUB_ANALYTICS: "0" },
     stdout: "pipe", stderr: "pipe",
   });
   const dec = new TextDecoder();

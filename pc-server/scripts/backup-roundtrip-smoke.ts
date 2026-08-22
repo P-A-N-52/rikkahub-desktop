@@ -42,6 +42,8 @@ function spawnPcServer() {
       PORT: String(pcPort),
       RIKKAHUB_PC_DATA_DIR: tempDir,
       BROWSER: "none",
+      // 假新用户专题:冒烟 server 不上报(同 request-chain-smoke 注释)。
+      RIKKAHUB_ANALYTICS: "0",
     },
     stdout: "pipe",
     stderr: "pipe",

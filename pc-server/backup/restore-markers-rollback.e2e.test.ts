@@ -35,7 +35,7 @@ describe("恢复备份重建迁移标记(R4-1)+ 恢复失败整体回滚(R4-2)",
   test("恢复 settings-only 备份后,state.json 的 appliedMigrations 含全部恢复保障标记", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "rkh-markers-e2e-"));
     const proc = Bun.spawn(["bun", serverEntry, "--port", "18251", "--no-open"], {
-      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir },
+      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir, RIKKAHUB_ANALYTICS: "0" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -64,7 +64,7 @@ describe("恢复备份重建迁移标记(R4-1)+ 恢复失败整体回滚(R4-2)",
   test("恢复中途失败(会话灌库异常)→ 整体回滚,设置与会话回到导入前", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "rkh-rollback-e2e-"));
     const proc = Bun.spawn(["bun", serverEntry, "--port", "18252", "--no-open"], {
-      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir },
+      env: { ...process.env, RIKKAHUB_PC_DATA_DIR: dataDir, RIKKAHUB_ANALYTICS: "0" },
       stdout: "pipe",
       stderr: "pipe",
     });

@@ -569,6 +569,9 @@ function spawnPcServer() {
       PORT: String(pcPort),
       RIKKAHUB_PC_DATA_DIR: tempDir,
       BROWSER: "none",
+      // 假新用户专题:冒烟 spawn 的 server 不得上报(否则一次冒烟记一个假新用户)。
+      // 即便宿主机环境误设了 RIKKAHUB_ANALYTICS=1,这里也要显式压成 0。
+      RIKKAHUB_ANALYTICS: "0",
       // I-2(专题2):压小快照窗口,runWindowedSnapshotSmoke 用 4 轮(8 节点)会话
       // 触发窗口化路径;其余用例会话 ≤6 节点,行为与默认窗口(60)完全一致。
       RIKKA_SNAPSHOT_NODE_WINDOW: "6",
