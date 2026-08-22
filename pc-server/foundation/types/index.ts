@@ -358,6 +358,9 @@ export interface State {
   // 场景存在:①迁移失败时保留 state.json 原数据作重试源(performStateSave 按标记决定写盘
   // 保留,删了它 saveState 会把重试源抹掉);②备份导入流程的暂存中转(finalize 灌库后 delete)。
   conversations?: Conversation[];
+  // B6-①a:备份导入流程的工作区暂存中转(dump format 2 的 pc_workspace 行),与 conversations
+  // 同生命周期——finalize 随会话同事务灌库后 delete。仅暂存,运行时权威在活库。
+  pcWorkspaces?: PcWorkspaceRow[];
   files: StoredFile[];
   generatedImages: GeneratedImage[];
   logs: RequestLog[];

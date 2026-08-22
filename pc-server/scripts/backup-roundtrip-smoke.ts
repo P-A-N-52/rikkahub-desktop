@@ -203,8 +203,21 @@ async function seedState() {
   const attachmentId = uploadData.files?.[0]?.id;
   assert(Number.isFinite(attachmentId), "附件上传未返回 id");
 
-  // 发送一条带附件的用户消息触发对话创建与生成
+  // B6-①a:先发消息前建好 folder 型工作区——会话→工作区是"首发消息建会话时绑定"
+  // (ensureConversation 的 workspaceId),无独立改绑端点。folder 型 root 落库为真实绝对
+  // 路径,是"实体必须随 dump 往返"的硬场景(managed 型 root 为空串、恢复后按新 dataDir 重建)。
+  const folderRoot = join(workDir, "smoke-workspace-root");
+  mkdirSync(folderRoot, { recursive: true });
+  const wsResp: AnyRecord = await api("/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ type: "folder", name: "Smoke 工作区", root: folderRoot }),
+  });
+  const boundWorkspaceId = wsResp?.workspace?.id;
+  assert(typeof boundWorkspaceId === "string", `工作区创建失败: ${JSON.stringify(wsResp)}`);
+
+  // 发送一条带附件的用户消息触发对话创建与生成(首发即绑定工作区)
   await apiJson(`/api/conversations/${CONVERSATION_ID}/messages`, {
+    workspaceId: boundWorkspaceId,
     parts: [
       { type: "image", url: `/api/files/${attachmentId}/content` },
       { type: "text", text: "hello" },
@@ -233,7 +246,7 @@ async function seedState() {
   }
   assert(annotationSeen, "预期的 model_call_error 注解未出现,A-2 导出过滤断言将失去意义");
 
-  return { assistantId: assistant.id };
+  return { assistantId: assistant.id, workspaceId: boundWorkspaceId, folderRoot };
 }
 
 async function exportBackupZip(): Promise<string> {
@@ -397,7 +410,7 @@ async function main() {
     await waitForHealth();
     console.log("[backup-smoke] 服务已启动");
 
-    await seedState();
+    const seedInfo = await seedState();
     console.log("[backup-smoke] 已写入测试状态（含会话）");
 
     // 1. PC → zip 导出，保存到 workDir 避免后续清空 tempDir 时被删
@@ -413,6 +426,23 @@ async function main() {
     assert(existsSync(join(extractDir, "rikka_hub.db")), "备份 zip 缺少 rikka_hub.db（Android 兼容库）");
     assert(existsSync(join(extractDir, "pc-backup.json")), "备份 zip 缺少 pc-backup.json");
     assert(existsSync(join(extractDir, "pc_conversations.db")), "备份 zip 缺少 pc_conversations.db(PC 原生会话 dump,批4)");
+    {
+      // B6-①a:format 2 dump 必须带 pc_workspace 表且含本次种入的工作区行(权限档/信任态/类型)。
+      const { Database } = require("bun:sqlite");
+      const dump = new Database(join(extractDir, "pc_conversations.db"), { readonly: true });
+      const fmt = (dump.query("SELECT value FROM pc_dump_meta WHERE key='format'").get() as AnyRecord)?.value;
+      assert(fmt === "2", `pc_dump_meta.format 应为 2(B6-①a),实际 ${fmt}`);
+      const wsRows = dump.query("SELECT id, name, type, permission_preset FROM pc_workspace").all() as AnyRecord[];
+      dump.close();
+      const wsRow = wsRows.find((w) => w.id === seedInfo.workspaceId);
+      assert(wsRow, `pc dump 缺 pc_workspace 行(工作区 ${seedInfo.workspaceId} 未随备份带出)`);
+      assert(wsRow.type === "folder" && wsRow.name === "Smoke 工作区", `pc_workspace 行字段不符: ${JSON.stringify(wsRow)}`);
+      // 会话行的工作区绑定也必须在 dump 里(workspace_id 列)。
+      const dump2 = new Database(join(extractDir, "pc_conversations.db"), { readonly: true });
+      const convRow = dump2.query("SELECT workspace_id FROM pc_conversation WHERE id = ?").get(CONVERSATION_ID) as AnyRecord;
+      dump2.close();
+      assert(convRow?.workspace_id === seedInfo.workspaceId, `dump 会话行 workspace_id 不符(实际 ${convRow?.workspace_id})`);
+    }
     const uploadEntries = readdirSync(join(extractDir, "upload"));
     assert(uploadEntries.length === 2, `upload/ 应恰有 2 个文件(会话附件+头像),实际 ${uploadEntries.length}: ${uploadEntries.join(",")}`);
     {
@@ -487,6 +517,17 @@ async function main() {
     console.log(`[backup-smoke] PC→zip→PC 导入来源: ${pcImportResult.source}`);
     await verifyRestoredState({ expectCustomJs: true });
     await verifyAttachmentIntegrity(2, "PC→zip→PC");
+    {
+      // B6-①a:工作区实体随 dump 恢复(PC→PC 唯一通路)——实体在、字段对、会话绑定回来。
+      const wsList: AnyRecord = await api("/api/workspaces");
+      const restored = (wsList.workspaces as AnyRecord[])?.find((w) => w.id === seedInfo.workspaceId);
+      assert(restored, `PC→PC 恢复后工作区实体丢失(${seedInfo.workspaceId} 不在 /api/workspaces)`);
+      assert(restored.name === "Smoke 工作区" && restored.type === "folder", `恢复的工作区字段不符: ${JSON.stringify(restored)}`);
+      assert(restored.status === "ready", `folder root 仍在,工作区应为 ready,实际 ${restored.status}`);
+      const convAfter: AnyRecord = await api(`/api/conversations/${CONVERSATION_ID}`);
+      assert(convAfter?.workspaceId === seedInfo.workspaceId, `恢复后会话未绑回工作区(实际 ${convAfter?.workspaceId})`);
+      console.log("[backup-smoke] B6-①a 工作区随 dump 往返校验通过(实体+绑定均恢复)");
+    }
     console.log("[backup-smoke] PC→zip→PC 状态校验通过(含附件回链)");
 
     // 4. PC → Android DB → PC：用 settings.json + rikka_hub.db 重新打包成 Android zip 再导入

@@ -8,7 +8,7 @@ import { conversationsDbPath, dataDir } from "../foundation/paths";
 import { checkoutConversation, configureWorkingSet, peekConversation, releaseConversation, startWorkingSetSweep } from "./working-set";
 import { getConversationMeta } from "./read-queries";
 import { generating } from "./generation-state";
-import type { Conversation, ConversationListDto, JsonValue, Message, MessageNode, MessageNodeDto, PcConversationRow, PcMessageNodeRow } from "../foundation/types";
+import type { Conversation, ConversationListDto, JsonValue, Message, MessageNode, MessageNodeDto, PcConversationRow, PcMessageNodeRow, PcWorkspaceRow } from "../foundation/types";
 import { clearAllFts, deleteConversationFts, ensureMessageFtsTable, ftsRowCount, rebuildFtsFromNodeTable, replaceNodeFts } from "./fts";
 import { reportError } from "../observability/app-errors";
 
@@ -599,11 +599,18 @@ export async function migrateConversationsIntoDbBatched(
   }
 }
 
-/** 备份 2.0:把活库两张会话表 ATTACH 复制成独立 dump(pc_conversations.db)。
+/** 备份 2.0:把活库会话表 ATTACH 复制成独立 dump(pc_conversations.db)。
  *  PC→PC 会话备份的权威载体,与安卓 schema 模板彻底解耦(纯 PC 用户从此有完整会话备份)。
  *  不带 FTS(导入侧 resetConversationsDbTo 重建),纯 SQL 复制零 JS 内存开销;
  *  pc_dump_meta 携带格式版本与导出时间,为未来格式演进留判别依据。
- *  返回导出的会话行数;活库未打开返回 -1。 */
+ *  返回导出的会话行数;活库未打开返回 -1。
+ *
+ *  B6-①a(format 1→2):增 pcdump.pc_workspace。工作区实体(权限档/信任态/类型)是
+ *  PC→PC 恢复后必须回来的资产——此前 dump 只有会话两表,会话行的 workspace_id 恢复了
+ *  却指向不存在的工作区(绑定悬空)。pc_workspace 与 pc_conversation 同驻一个活库,故
+ *  此处一并 ATTACH 复制;导入侧在同库事务内重灌。硬约束:此表只进 pc dump,绝不进
+ *  安卓 rikka_hub.db(安卓 workspaces 表同名不同构),PC→APP 边界不受影响。
+ *  表按存在性探测(不读 format 号),老 dump(format 1,无该表)导入时跳过工作区重灌。 */
 export function exportPcConversationsDump(targetPath: string): number {
   if (!conversationsDb) return -1;
   const db = conversationsDb;
@@ -635,10 +642,30 @@ export function exportPcConversationsDump(targetPath: string): number {
         messages        TEXT NOT NULL DEFAULT '[]',
         select_index    INTEGER NOT NULL DEFAULT 0
       );
-      INSERT INTO pcdump.pc_dump_meta (key, value) VALUES ('format', '1'), ('exportedAt', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+      CREATE TABLE pcdump.pc_workspace (
+        id                TEXT PRIMARY KEY NOT NULL,
+        name              TEXT NOT NULL,
+        type              TEXT NOT NULL,
+        root              TEXT NOT NULL DEFAULT '',
+        permission_preset TEXT NOT NULL,
+        trusted_at        INTEGER,
+        create_at         INTEGER NOT NULL,
+        update_at         INTEGER NOT NULL,
+        last_access_at    INTEGER NOT NULL
+      );
+      INSERT INTO pcdump.pc_dump_meta (key, value) VALUES ('format', '2'), ('exportedAt', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
       INSERT INTO pcdump.pc_conversation SELECT id, assistant_id, title, system_prompt, suggestions, is_pinned, create_at, update_at, mode_injection_ids, lorebook_ids, workspace_id, workspace_cwd, engine_compactions FROM main.pc_conversation;
       INSERT INTO pcdump.pc_message_node SELECT id, conversation_id, node_index, messages, select_index FROM main.pc_message_node;
     `);
+    // 工作区表在活库懒建(workspace/index.ts 的 db()):用户从未建过工作区时 main 侧该表
+    // 不存在,SELECT 会让整个会话备份导出失败。按存在性探测——无则 dump 留空表(恢复侧
+    // 重灌 0 行,语义等价"无工作区")。
+    const hasWorkspaceTable = db.prepare(
+      "SELECT name FROM main.sqlite_master WHERE type='table' AND name='pc_workspace'",
+    ).get();
+    if (hasWorkspaceTable) {
+      db.exec("INSERT INTO pcdump.pc_workspace SELECT id, name, type, root, permission_preset, trusted_at, create_at, update_at, last_access_at FROM main.pc_workspace");
+    }
     return (db.prepare("SELECT COUNT(*) AS n FROM pcdump.pc_conversation").get() as { n: number }).n;
   } finally {
     db.exec("DETACH DATABASE pcdump");
@@ -663,14 +690,33 @@ export function snapshotConversationsDbBeforeImport(): void {
 }
 
 /** 重灌活库为给定会话集:删除所有会话行(CASCADE 带走节点)+ 单事务灌入。
- *  导入备份/bak 恢复用——导入流程把替换/合并结果统一灌回活库(权威)。 */
-export function resetConversationsDbTo(conversations: Conversation[]): void {
+ *  导入备份/bak 恢复用——导入流程把替换/合并结果统一灌回活库(权威)。
+ *
+ *  B6-①a:可选 workspaces 形参(dump format 2 携带的 pc_workspace 行)。pc_workspace 与
+ *  pc_conversation 同驻一个活库,工作区重灌必须与会话灌库同事务——否则会话灌失败回滚、
+ *  工作区却写进库的半成品态。传入时先全清再重灌(与会话替换语义一致,绑定悬空由会话侧
+ *  workspace_id 决定);未传(老 dump 无该表)不动现有工作区。表结构幂等懒建,与
+ *  workspace/index.ts 同型。 */
+export function resetConversationsDbTo(conversations: Conversation[], workspaces?: PcWorkspaceRow[]): void {
   if (!conversationsDb) throw new Error("conversationsDb not open");
   const db = conversationsDb;
   const txn = db.transaction(() => {
     db.exec("DELETE FROM pc_conversation");
     clearAllFts(db);
     migrateConversationsIntoDb(db, conversations);
+    if (workspaces) {
+      db.exec(`CREATE TABLE IF NOT EXISTS pc_workspace (
+        id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, root TEXT NOT NULL DEFAULT '',
+        permission_preset TEXT NOT NULL, trusted_at INTEGER, create_at INTEGER NOT NULL, update_at INTEGER NOT NULL, last_access_at INTEGER NOT NULL
+      )`);
+      db.exec("DELETE FROM pc_workspace");
+      const ins = db.prepare(
+        "INSERT INTO pc_workspace (id, name, type, root, permission_preset, trusted_at, create_at, update_at, last_access_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const w of workspaces) {
+        ins.run(w.id, w.name, w.type, w.root, w.permission_preset, w.trusted_at, w.create_at, w.update_at, w.last_access_at);
+      }
+    }
   });
   txn();
 }
