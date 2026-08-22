@@ -34,7 +34,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           # 与本地开发环境保持一致;升级 Bun 时记得同步,避免编译产物行为漂移。
-          bun-version: '1.3.13'
+          bun-version: '1.4.0'
 
       - name: Resolve version
         id: ver
