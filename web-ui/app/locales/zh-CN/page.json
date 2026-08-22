@@ -172,7 +172,12 @@
       "reveal_failed": "打开资源管理器失败",
       "edit_title": "编辑工作区",
       "name_label": "工作区名称",
-      "path_label": "路径"
+      "path_label": "路径",
+      "missing_badge": "文件夹缺失",
+      "missing_hint": "找不到该目录，可重新绑定到一个新文件夹（绑定后需重新授权信任）",
+      "rebind": "重新绑定",
+      "rebind_failed": "重新绑定失败",
+      "rebind_notice": "路径已变更，保存后将重新授权信任"
     },
     "shell": {
       "title": "未找到可用的 bash 终端",

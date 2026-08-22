@@ -172,7 +172,12 @@
       "reveal_failed": "Failed to open file explorer",
       "edit_title": "Edit Workspace",
       "name_label": "Workspace Name",
-      "path_label": "Path"
+      "path_label": "Path",
+      "missing_badge": "Folder missing",
+      "missing_hint": "This folder can't be found. Rebind to a new folder (trust authorization is required again after rebinding)",
+      "rebind": "Rebind",
+      "rebind_failed": "Failed to rebind workspace",
+      "rebind_notice": "Path changed — trust authorization is required again after saving"
     },
     "shell": {
       "title": "No usable bash shell found",

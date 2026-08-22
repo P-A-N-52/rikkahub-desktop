@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, MessageSquare, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Folder, FolderOpen, FolderSearch, MessageSquare, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
@@ -76,6 +76,8 @@ export function ContainerTabBar() {
   const [renameTarget, setRenameTarget] = React.useState<WorkspaceDto | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renameSaving, setRenameSaving] = React.useState(false);
+  // B6-①b:编辑对话里 folder 型路径可重绑。renameRoot 是编辑中的路径草稿(初始=当前 root)。
+  const [renameRoot, setRenameRoot] = React.useState("");
 
   React.useEffect(() => {
     void refresh();
@@ -167,21 +169,28 @@ export function ContainerTabBar() {
   const submitRename = React.useCallback(async () => {
     if (!renameTarget) return;
     const name = renameValue.trim();
-    if (!name || name === renameTarget.name) {
+    // B6-①b:folder 型且路径被改动 → 一并提交 root(后端重绑 + 信任门重置)。
+    const root = renameTarget.type === "folder" ? renameRoot.trim() : "";
+    const nameChanged = !!name && name !== renameTarget.name;
+    const rootChanged = renameTarget.type === "folder" && !!root && root !== renameTarget.root;
+    if (!nameChanged && !rootChanged) {
       setRenameTarget(null);
       return;
     }
     setRenameSaving(true);
     try {
-      await api.patch<{ workspace: WorkspaceDto }>(`workspaces/${renameTarget.id}`, { name });
+      await api.patch<{ workspace: WorkspaceDto }>(`workspaces/${renameTarget.id}`, {
+        ...(nameChanged ? { name } : {}),
+        ...(rootChanged ? { root } : {}),
+      });
       await refresh();
       setRenameTarget(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("workspace.menu.rename_failed"));
+      toast.error(err instanceof Error ? err.message : t(rootChanged ? "workspace.menu.rebind_failed" : "workspace.menu.rename_failed"));
     } finally {
       setRenameSaving(false);
     }
-  }, [refresh, renameTarget, renameValue, t]);
+  }, [refresh, renameTarget, renameValue, renameRoot, t]);
 
   // 删除仅移除工作区记录与会话索引,不碰磁盘文件(folder 型的真实目录保持原样)。
   const deleteWorkspace = React.useCallback(
@@ -206,6 +215,24 @@ export function ContainerTabBar() {
     useContainerTabsStore.getState().openContainer(CHAT_CONTAINER);
     navigateToContainer(CHAT_CONTAINER, navigate);
   }, [navigate]);
+
+  // B6-①b:打开编辑对话时同步名称与路径草稿(folder 型路径可重绑)。
+  const openEditDialog = React.useCallback((workspace: WorkspaceDto) => {
+    setRenameValue(workspace.name);
+    setRenameRoot(workspace.root);
+    setRenameTarget(workspace);
+  }, []);
+
+  // B6-①b:目录选择器(Tauri);失败仅提示,不阻断手输路径。
+  const browseRenameRoot = React.useCallback(async () => {
+    try {
+      const { open: openPicker } = await import("@tauri-apps/plugin-dialog");
+      const picked = await openPicker({ directory: true, multiple: false });
+      if (typeof picked === "string" && picked) setRenameRoot(picked);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("workspace.create.pick_failed"));
+    }
+  }, [t]);
 
   // 激活容器前的信任门(§3.3):folder 型未信任(含设置里撤销信任后)先过门,
   // 授权成功才真正进入;拒绝仅关门,不删已有工作区。
@@ -254,9 +281,7 @@ export function ContainerTabBar() {
                 ? undefined
                 : () => {
                     const workspace = workspaceById.get(key);
-                    if (!workspace) return;
-                    setRenameValue(workspace.name);
-                    setRenameTarget(workspace);
+                    if (workspace) openEditDialog(workspace);
                   }
             }
             onReveal={
@@ -304,7 +329,15 @@ export function ContainerTabBar() {
                   >
                     <WsIcon className="size-4" strokeWidth={1.75} />
                     <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate">{workspace.name}</span>
+                      <span className="flex items-center gap-1.5 truncate">
+                        <span className="truncate">{workspace.name}</span>
+                        {workspace.status === "missing" ? (
+                          <span className="flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                            <TriangleAlert className="size-2.5" strokeWidth={2} />
+                            {t("workspace.menu.missing_badge")}
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="truncate text-[11px] leading-4 text-[var(--ds-text-tertiary)]">
                         {workspace.root}
                       </span>
@@ -322,10 +355,7 @@ export function ContainerTabBar() {
                           <button
                             type="button"
                             className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-foreground"
-                            onClick={() => {
-                              setRenameValue(workspace.name);
-                              setRenameTarget(workspace);
-                            }}
+                            onClick={() => openEditDialog(workspace)}
                           >
                             <Pencil className="size-3.5" strokeWidth={1.75} />
                           </button>
@@ -412,15 +442,42 @@ export function ContainerTabBar() {
               <label className="text-[13px] font-medium text-[var(--ds-text-secondary)]">
                 {t("workspace.menu.path_label")}
               </label>
-              <button
-                type="button"
-                onClick={() => renameTarget && revealWorkspace(renameTarget)}
-                aria-label={t("workspace.menu.reveal")}
-                className="flex h-9 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
-              >
-                <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
-                <span className="min-w-0 flex-1 truncate">{renameTarget?.root}</span>
-              </button>
+              {renameTarget?.type === "folder" ? (
+                <>
+                  {/* B6-①b:folder 型路径可重绑。missing 态显示失效警告;改路径后提示需重新授权信任。 */}
+                  {renameTarget.status === "missing" ? (
+                    <div className="flex items-start gap-2 rounded-[var(--ds-radius-md)] bg-amber-500/10 px-3 py-2 text-[12px] text-amber-600 dark:text-amber-400">
+                      <TriangleAlert className="mt-0.5 size-3.5 shrink-0" strokeWidth={2} />
+                      <span>{t("workspace.menu.missing_hint")}</span>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={renameRoot}
+                      onChange={(event) => setRenameRoot(event.target.value)}
+                      placeholder={t("workspace.create.folder_path_placeholder")}
+                      className="flex-1 font-mono text-[13px]"
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={() => void browseRenameRoot()}>
+                      <FolderSearch className="mr-1 size-4" />
+                      {t("workspace.create.browse")}
+                    </Button>
+                  </div>
+                  {renameRoot.trim() && renameRoot.trim() !== renameTarget.root ? (
+                    <div className="text-[12px] text-muted-foreground">{t("workspace.menu.rebind_notice")}</div>
+                  ) : null}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => renameTarget && revealWorkspace(renameTarget)}
+                  aria-label={t("workspace.menu.reveal")}
+                  className="flex h-9 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[13px] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
+                >
+                  <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
+                  <span className="min-w-0 flex-1 truncate">{renameTarget?.root}</span>
+                </button>
+              )}
             </div>
           </div>
           <DialogFooter>

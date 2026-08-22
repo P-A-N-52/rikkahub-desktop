@@ -55,7 +55,8 @@ export async function handleWorkspaceRoutes(request: Request, _url: URL, path: s
   }
 
   if (!sub && request.method === "PATCH") {
-    const body = await readJson<{ name?: string; permissionPreset?: string }>(request);
+    // B6-①b:root 仅 folder 型可重绑(校验+信任门重置在领域层),managed 型传 root 会抛错。
+    const body = await readJson<{ name?: string; permissionPreset?: string; root?: string }>(request);
     try {
       const updated = updateWorkspace(workspaceId, body);
       if (!updated) return error("Workspace not found", 404);

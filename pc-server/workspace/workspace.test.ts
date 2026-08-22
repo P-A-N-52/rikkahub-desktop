@@ -153,6 +153,29 @@ describe("更新与删除", () => {
     expect(() => ws.updateWorkspace(workspace.id, { permissionPreset: "yolo" })).toThrow("档位");
   });
 
+  // B6-①b:folder 型重绑新目录 → root 更新且信任门重置(新边界需用户重确认);
+  // managed 型 root 由 dataDir 派生不可改绑。
+  test("重绑:folder 型改 root 重置信任门;managed 型拒改 root", () => {
+    const dirA = mkdtempSync(join(tmpdir(), "rkh-ws-rebind-a-"));
+    const folder = ws.createWorkspace({ type: "folder", root: dirA });
+    ws.trustWorkspace(folder.id);
+    expect(ws.getWorkspace(folder.id)?.trustedAt).not.toBeNull();
+
+    const dirB = mkdtempSync(join(tmpdir(), "rkh-ws-rebind-b-"));
+    const rebound = ws.updateWorkspace(folder.id, { root: dirB });
+    expect(rebound?.root).toBe(dirB);
+    expect(rebound?.trustedAt).toBeNull(); // 信任门重置,待重确认
+
+    // 未信任工作区重绑仍保持未信任(不得因重绑意外获得信任)
+    const dirC = mkdtempSync(join(tmpdir(), "rkh-ws-rebind-c-"));
+    const rebound2 = ws.updateWorkspace(folder.id, { root: dirC });
+    expect(rebound2?.root).toBe(dirC);
+    expect(rebound2?.trustedAt).toBeNull();
+
+    const managed = ws.createWorkspace({ type: "managed", name: "不可改绑" });
+    expect(() => ws.updateWorkspace(managed.id, { root: dirA })).toThrow("folder");
+  });
+
   test("删除 managed:宿主目录清除、归属会话解绑为对话模式(库行+权威实例)", () => {
     const workspace = ws.createWorkspace({ type: "managed", name: "待删" });
     const conv = makeConversation("conv-detach-1", workspace.id);

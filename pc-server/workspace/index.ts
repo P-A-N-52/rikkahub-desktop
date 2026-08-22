@@ -193,7 +193,11 @@ export function createWorkspace(input: { type: WorkspaceType; name?: unknown; ro
   return created;
 }
 
-export function updateWorkspace(workspaceId: string, patch: { name?: unknown; permissionPreset?: unknown }): Workspace | null {
+/** B6-①b:重绑支持。patch.root 仅对 folder 型生效(工作区与项目文件夹解耦:实体保留,
+ * 指向的目录可换)。managed 型 root 由 dataDir 派生、不落库,不可改绑。
+ * folder 型重绑新目录后重置信任门(trusted_at 置空,待用户重确认)——新目录是新边界,
+ * 沿用旧信任等于让模型静默获得一片未授权目录的读写权。 */
+export function updateWorkspace(workspaceId: string, patch: { name?: unknown; permissionPreset?: unknown; root?: unknown }): Workspace | null {
   const existing = getWorkspace(workspaceId);
   if (!existing) return null;
   const name = patch.name !== undefined ? sanitizeName(patch.name, existing.name) : existing.name;
@@ -210,8 +214,18 @@ export function updateWorkspace(workspaceId: string, patch: { name?: unknown; pe
       scheduleThrottledSaveState();
     }
   }
-  db().prepare("UPDATE pc_workspace SET name = ?, permission_preset = ?, update_at = ? WHERE id = ?")
-    .run(name, preset, Date.now(), workspaceId);
+  let root = existing.type === "folder" ? existing.root : "";
+  let trustedAt = existing.trustedAt;
+  if (patch.root !== undefined) {
+    if (existing.type !== "folder") throw new Error("仅 folder 型工作区可重新绑定目录");
+    const newRoot = validateFolderRoot(patch.root);
+    if (newRoot !== existing.root) {
+      root = newRoot;
+      trustedAt = null; // 重绑新目录 → 信任门重置,待用户重确认
+    }
+  }
+  db().prepare("UPDATE pc_workspace SET name = ?, permission_preset = ?, root = ?, trusted_at = ?, update_at = ? WHERE id = ?")
+    .run(name, preset, root, trustedAt, Date.now(), workspaceId);
   return getWorkspace(workspaceId);
 }
 
