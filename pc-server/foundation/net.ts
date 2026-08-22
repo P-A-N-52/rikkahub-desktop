@@ -272,7 +272,8 @@ export function ipInCidr(ip: string, cidr: string): boolean {
 }
 
 // Bun fetch 在进程首次网络请求时快照 HTTPS_PROXY/HTTP_PROXY/NO_PROXY env 并永久锁定
-// （实测 Bun 1.3.13）。本函数在 server 启动早期（首次 fetch 前）安装拦截：
+// （实测 Bun 1.3.13；1.4.0 经 scripts/proxy-behavior-smoke.ts 复核锁仍在、direct/manual 分流
+// 与错误分类正则均未漂移）。本函数在 server 启动早期（首次 fetch 前）安装拦截：
 //   - 非容器部署：清空 env 防 Bun 锁定旧代理
 //   - 容器部署（mode=env）：保留 docker 注入的 HTTPS_PROXY，让 Bun 快照它
 //   - 替换 globalThis.fetch，per-request 按当前代理状态显式传 proxy 选项

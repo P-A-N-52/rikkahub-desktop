@@ -9,6 +9,7 @@
     "smoke:request-chain": "bun run scripts/request-chain-smoke.ts",
     "smoke:backup-roundtrip": "bun run scripts/backup-roundtrip-smoke.ts",
     "smoke:embedded-bash": "bun run scripts/embedded-bash-smoke.ts",
+    "smoke:proxy-behavior": "bun run scripts/proxy-behavior-smoke.ts",
     "typecheck": "bun run scripts/typecheck.ts",
     "version:bump": "bun run scripts/bump-version.ts",
     "build:bash-bundle": "bun run scripts/build-bash-bundle.ts",
