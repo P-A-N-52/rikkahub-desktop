@@ -158,13 +158,36 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
       }
     }
 
+    // 内嵌兜底(最后一道网)。惰性 import 消除 shell.ts ↔ embedded-bash.ts 的循环依赖
+    // (embedded-bash 复用本文件的 shellRunsBash/getBashShellConfig)。
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { embeddedBashAvailableSync, ensureEmbeddedBash } = require("./embedded-bash") as typeof import("./embedded-bash");
+
+    // 同步快路径:已落地且戳匹配的内嵌 bash,验证可用即用并缓存。
+    const embedded = embeddedBashAvailableSync();
+    if (embedded) {
+      const config = getBashShellConfig(embedded);
+      if (shellRunsBash(config)) {
+        verifiedConfigCache = config;
+        return config;
+      }
+    }
+
+    // 内嵌未落地:后台触发懒落地(不阻塞本次同步返回),完成后清缓存,下次探测即命中。
+    // 本次仍走抛错(上层挂 grep/find/ls 兜底);落地约百毫秒,用户重进/前端 refresh 即得 bash。
+    // 失败已在 ensureEmbeddedBash 内 reportError,这里不再重复上报。
+    void ensureEmbeddedBash()
+      .then(() => resetShellConfigCache())
+      .catch(() => { /* 落地失败已上报;保持抛错兜底 */ });
+
     const searched = candidates.length
       ? `Found but not runnable (e.g. WSL launcher without an installed distribution):\n${candidates.map((p) => `  ${p}`).join("\n")}`
       : "No bash.exe candidates were found on this machine.";
     throw new Error(
-      `No working bash shell found. Options:\n` +
+      `No working bash shell found. A built-in terminal is being prepared in the background — re-check in a moment. Otherwise:\n` +
         `  1. Install Git for Windows: https://git-scm.com/download/win\n` +
-        `  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n\n` +
+        `  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
+        `  3. Set a custom bash path in Settings\n\n` +
         searched,
     );
   }

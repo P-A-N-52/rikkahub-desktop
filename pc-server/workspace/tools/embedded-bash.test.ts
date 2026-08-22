@@ -1,7 +1,7 @@
 // workspace/tools/embedded-bash.test.ts — 内嵌 bash 懒落地的单测。
 // 用真实嵌入的 bash-bundle.tar.gz(构建脚本已产出),在隔离的临时 dataDir 里走完整落地路径。
 // paths.ts 在 import 时刻固化 dataDir,故必须先设环境变量再动态加载被测模块。
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
