@@ -155,7 +155,10 @@
       "folder_intro": "The AI can read, write and run commands in this directory. Start with a single sentence",
       "example_1": "Look around this directory and give me a structural overview",
       "example_2": "Create a TODO.md and break my upcoming tasks into a checklist",
-      "example_3": "Organize what I paste next into a note and save it as a file"
+      "example_3": "Organize what I paste next into a note and save it as a file",
+      "missing_title": "Project folder not found",
+      "missing_desc": "The folder this workspace is bound to no longer exists or was moved. The AI can't read or write files until you rebind it to a folder (its conversations are kept as-is).",
+      "missing_rebind": "Rebind folder"
     },
     "menu": {
       "existing": "Workspaces",
