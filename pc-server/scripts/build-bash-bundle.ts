@@ -130,7 +130,7 @@ async function main() {
   const dlls = [...collectDllClosure(gitRoot, TOOLS)].sort();
   console.log(`[bash-bundle] 工具 ${TOOLS.length} 个,dll 闭包 ${dlls.length} 个: ${dlls.join(", ")}`);
 
-  // 2. 摆 staging:usr/bin/ 平铺(exe + dll + 脚本),根放 LICENSE/NOTICE
+  // 2. 摆 staging:usr/bin/ 平铺(exe + dll + 脚本),根放 LICENSE/NOTICE + etc/fstab
   rmSync(STAGING_DIR, { recursive: true, force: true });
   const stageBin = join(STAGING_DIR, "usr", "bin");
   mkdirSync(stageBin, { recursive: true });
@@ -148,6 +148,20 @@ async function main() {
   }
   // 合规:Git for Windows / MSYS2 GPL-2.0,嵌入第三方应用需附带许可证文本。
   copyFileSync(join(gitRoot, "LICENSE.txt"), join(STAGING_DIR, "LICENSE.txt"));
+  // MSYS2 启动自检需要 /tmp 是"有效目录"。它经 <root>/etc/fstab 的挂载表解析 /tmp
+  // (不是 usr/etc,也不扫磁盘 usr/tmp)。照系统 Git 的 etc/fstab 写 usertemp 行:
+  // /tmp → 当前用户 Temp 目录,告警消除且 mktemp / tar 落临时文件可用,行为与系统 Git 逐字节对齐。
+  const stageEtc = join(STAGING_DIR, "etc");
+  mkdirSync(stageEtc, { recursive: true });
+  writeFileSync(
+    join(stageEtc, "fstab"),
+    [
+      "# Minimal mount table for the embedded bash runtime (mirrors Git for Windows).",
+      "none / cygdrive binary,posix=0,noacl,user 0 0",
+      "none /tmp usertemp binary,posix=0,noacl 0 0",
+      "",
+    ].join("\n"),
+  );
   writeFileSync(
     join(STAGING_DIR, "NOTICE.txt"),
     [
@@ -167,7 +181,7 @@ async function main() {
   const listing = readdirSync(stageBin).sort();
   const systemTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
   const tarRes = spawnSync(
-    systemTar, ["-czf", OUT_BUNDLE, "-C", STAGING_DIR, "LICENSE.txt", "NOTICE.txt", "usr"],
+    systemTar, ["-czf", OUT_BUNDLE, "-C", STAGING_DIR, "LICENSE.txt", "NOTICE.txt", "etc", "usr"],
     { encoding: "utf-8", windowsHide: true },
   );
   if (tarRes.status !== 0) throw new Error(`tar 打包失败: ${tarRes.stderr}`);

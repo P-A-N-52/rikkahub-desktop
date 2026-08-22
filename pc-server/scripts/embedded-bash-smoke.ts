@@ -7,7 +7,7 @@
 //   3. 内嵌 bash 真能执行一条命令。
 // 注:系统候选探测依赖真实 PATH——本机若装了 Git Bash,第 1 步会命中系统而非抛错,
 //     此时跳过抛错断言(只验内嵌可用性),保证脚本在"有/无 Git"的机器上都能跑。
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -56,6 +56,13 @@ const run = spawnSync(cfg.shell, [...cfg.args, 'echo smoke_ok; printf "1 2 3" | 
   windowsHide: true,
 });
 check("命中 bash 可执行 echo+awk", run.status === 0 && String(run.stdout).includes("smoke_ok") && String(run.stdout).includes("2"), { status: run.status, out: run.stdout, err: run.stderr });
+
+// 守护:若这次命中的是内嵌 bash,确认 etc/fstab 已落地(MSYS2 经它把 /tmp 挂到用户 Temp;
+// 缺失会让 bash 经 node spawn 每次启动喷 "could not find /tmp" 到 stderr 且 mktemp 失败)。
+if (isEmbedded) {
+  const fstabOk = existsSync(join(testDataDir, "runtime-bin", "bash", "etc", "fstab"));
+  check("内嵌落地含 etc/fstab(/tmp 挂载表)", fstabOk);
+}
 
 rmSync(testDataDir, { recursive: true, force: true });
 console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILURES`);

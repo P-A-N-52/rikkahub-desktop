@@ -73,6 +73,8 @@ export function ensureEmbeddedBash(): Promise<string> {
       mkdirSync(embeddedBashDir, { recursive: true });
 
       // 读嵌入字节 → Bun.Archive 解压(原生拒绝绝对路径/危险 symlink;保留 +x 位)。
+      // bundle 内含 etc/fstab(usertemp 行)把 /tmp 挂到当前用户 Temp,消除 MSYS2 启动自检的
+      // "could not find /tmp" 告警,并让 mktemp / tar 落临时文件可用(行为对齐系统 Git)。
       const bytes = await Bun.file(bashBundlePath).bytes();
       await new Bun.Archive(bytes).extract(embeddedBashDir);
 
