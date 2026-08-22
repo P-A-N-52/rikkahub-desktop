@@ -36,7 +36,7 @@ import { deleteConversationsById, ensureConversation, findAssistant, finishInter
 import { generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
 import { workspaceRuntimeForConversation } from "../../workspace/runtime";
-import { resolveToolApproval } from "../../pi-engine/approval-gate";
+import { resolveToolApproval } from "../../inference-engine/approval-gate";
 
 export async function handleConversationRoutes(request: Request, url: URL, path: string): Promise<Response | null> {
   // 列表失效事件已并入 /api/events 通道(invalidate 事件);会话详情流保持独立端点

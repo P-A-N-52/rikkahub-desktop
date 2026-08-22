@@ -1,4 +1,4 @@
-// pi-engine/approval-gate.test.ts — 在途审批等待注册表(P3)单测
+// inference-engine/approval-gate.test.ts — 在途审批等待注册表(P3)单测
 // 纯内存模块,无环境依赖。语义:登记→决定/中止/接管/清扫,等待者绝不悬挂、绝不泄漏。
 import { describe, expect, test } from "bun:test";
 import {

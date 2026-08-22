@@ -15,7 +15,7 @@ import { join } from "node:path";
 process.env.RIKKAHUB_PC_DATA_DIR = mkdtempSync(join(tmpdir(), "rkh-generaltools-test-"));
 
 const { createPiGeneralTools } = await import("./general-tools");
-const { resolveToolApproval } = await import("./approval-gate");
+const { resolveToolApproval } = await import("../inference-engine/approval-gate");
 const { defaultAssistant } = await import("../assistants");
 const { defaultState } = await import("../app-config/defaults");
 // 注意:store.state 是 live binding,解构成局部 const 会拿到 import 时的旧值(undefined)。

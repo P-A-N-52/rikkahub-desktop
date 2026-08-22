@@ -25,7 +25,7 @@ import { openAiLocalTools, openAiMcpTools, openAiSearchTools } from "../tools/bo
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import { openAiToolOutput } from "../tools/format";
 import { initialApprovalState } from "../tools/approval";
-import { gateToolApproval } from "./approval-flow";
+import { gateToolApproval } from "../inference-engine/approval-flow";
 
 type PiToolParameters = ToolDefinition["parameters"];
 type PiToolResult = Awaited<ReturnType<ToolDefinition["execute"]>>;

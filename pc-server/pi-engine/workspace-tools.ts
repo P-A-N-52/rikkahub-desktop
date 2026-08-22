@@ -29,7 +29,7 @@ import type { WorkspaceToolName } from "../workspace/approval";
 import { executeWorkspaceToolCore, jsonSafeDetails, openAiWorkspaceTools } from "../workspace/runtime";
 import type { WorkspaceToolOutput } from "../workspace/tools/types";
 import { prepareEditArguments } from "../workspace/tools/edit";
-import { gateToolApproval } from "./approval-flow";
+import { gateToolApproval } from "../inference-engine/approval-flow";
 
 type PiToolParameters = ToolDefinition["parameters"];
 type PiToolResult = Awaited<ReturnType<ToolDefinition["execute"]>>;

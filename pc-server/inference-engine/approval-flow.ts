@@ -1,15 +1,19 @@
-// pi-engine/approval-flow.ts — 审批内化生命周期(P3 内联于 workspace-tools,P4 抽取共用)
+// inference-engine/approval-flow.ts — 审批内化生命周期(P3 内联于 workspace-tools,P4 抽取共用,T2 迁出 pi-engine)
 //
 // 单一事实源:pending 卡 → approval-gate 等待 → 放行/拒绝/中止收敛的完整状态机。
-// 消费者:workspace-tools(七个工作区工具)与 general-tools(MCP 桥/通用工具)。
+// 消费者:pi 引擎的 workspace-tools(七个工作区工具)与 general-tools(MCP 桥/通用工具)。
 // 两边的差异只在"审批判定"(工作区三档矩阵 vs MCP 档位规则),判定结果作为参数传入,
 // 生命周期本身零分叉——审批语义改版(如 §4.4 回退面)只动这一处。
 //
-// 纪律:与 approval-gate 同族,零 pi 导入(消费方各自持有 pi ToolDefinition 类型),
-// 也不碰 parts/SQLite/SSE——sink 事件由应用器统一落地。
+// 定位(T2):审批生命周期是引擎无关的公共能力——任何引擎(pi/聊天/未来子进程引擎)的
+// 工具走 pending 审批时都收敛到同一状态机。本模块与 approval-gate 同属引擎无关汇合层,
+// 不归属任何单一引擎,故迁出 pi-engine 与 events.ts 同层。
+//
+// 纪律:零 pi 导入(消费方各自持有引擎侧 ToolDefinition 类型),也不碰 parts/SQLite/SSE
+// ——sink 事件由应用器统一落地。
 
 import type { ToolApprovalState } from "../foundation/types";
-import type { GenerationEventSink } from "../inference-engine/events";
+import type { GenerationEventSink } from "./events";
 import { waitForToolApproval } from "./approval-gate";
 
 export interface ApprovalFlowContext {

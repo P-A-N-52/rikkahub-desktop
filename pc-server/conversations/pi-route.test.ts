@@ -23,7 +23,7 @@ const { defaultAssistant } = await import("../assistants");
 const { defaultState } = await import("../app-config/defaults");
 const { setState, state } = await import("../persistence/json-store");
 const { model, provider } = await import("../model-providers");
-const { pendingToolApprovalCount } = await import("../pi-engine/approval-gate");
+const { pendingToolApprovalCount } = await import("../inference-engine/approval-gate");
 const { handleConversationRoutes } = await import("../api/handlers/conversations");
 const { startFakeOpenAiSse } = await import("../test-utils/fake-openai-sse");
 

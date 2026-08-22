@@ -19,7 +19,7 @@ const { getConversationMeta } = await import("../conversations/read-queries");
 const ws = await import("../workspace");
 const runtime = await import("../workspace/runtime");
 const { createPiWorkspaceTools } = await import("./workspace-tools");
-const { resolveToolApproval, pendingToolApprovalCount } = await import("./approval-gate");
+const { resolveToolApproval, pendingToolApprovalCount } = await import("../inference-engine/approval-gate");
 const ourTools = {
   read: (await import("../workspace/tools/read")).createReadTool,
   bash: (await import("../workspace/tools/bash")).createBashTool,

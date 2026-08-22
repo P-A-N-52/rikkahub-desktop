@@ -31,7 +31,7 @@ import type { Message, Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
 import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "./model-bridge";
 import { createPiEventBridge } from "./event-bridge";
-import { clearToolApprovalWaiters } from "./approval-gate";
+import { clearToolApprovalWaiters } from "../inference-engine/approval-gate";
 import type { PiSessionResources } from "./resources";
 import { seedPiSessionFromHistory, type PiCompactionRecord } from "./context-encoder";
 
