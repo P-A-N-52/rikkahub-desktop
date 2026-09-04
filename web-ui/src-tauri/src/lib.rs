@@ -57,13 +57,11 @@ fn request_sidecar_shutdown(port: u16) -> bool {
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     // 服务端刷盘(state 尾随写追平 + 活库 reconcile + checkpoint)通常毫秒级,给足 2.5s。
     let _ = stream.set_read_timeout(Some(Duration::from_millis(2500)));
+    // HTTP/1.1 头部行结束符必须是 CRLF:Rust 多行字符串字面量的换行会被规范化成 bare LF,
+    // Bun 的解析器直接拒收(505 HTTP Version Not Supported)——曾导致优雅停机从未成功、
+    // 每次退出都走硬杀,pending 取证残留,下次启动误报"上次未正常退出"(日志问题 2 真根因)。
     let request = format!(
-        "POST /api/app/shutdown HTTP/1.1
-Host: 127.0.0.1:{port}
-Content-Length: 0
-Connection: close
-
-"
+        "POST /api/app/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;

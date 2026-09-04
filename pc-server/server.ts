@@ -13,6 +13,7 @@ import { generating } from "./conversations/generation-state";
 import { handleAuthTokenRequest, isWebAuthAuthorized, warnIfExposedWithoutAuth } from "./api/auth";
 import { routeStatic } from "./api/static";
 import { routeApi } from "./api/router";
+import { hasProxyForwardHeaders, isLoopbackAddress, markRequestNetworkContext } from "./api/net-context";
 import { loadModelsDev } from "./inference-engine/providers";
 import { checkpointConversationsDb, flushConvDirtyNow, getConversation, persistConversation } from "./conversations";
 
@@ -204,11 +205,8 @@ const { server, port } = (() => {
                 // 也是 127.0.0.1,裸回环判定会被穿透——任何互联网客户端 POST 本端点即可无鉴权
                 // 停服。Tauri 壳直连本端口、绝不经代理,故带任一代理转发头的请求一定不是壳
                 // 发的,直接拒绝;回环判定继续拦真正的远程直连。
-                const viaProxy = request.headers.has("x-forwarded-for")
-                  || request.headers.has("x-real-ip")
-                  || request.headers.has("forwarded");
                 const ip = server.requestIP(request)?.address ?? "";
-                if (viaProxy || (ip !== "127.0.0.1" && ip !== "::1" && ip !== "::ffff:127.0.0.1")) {
+                if (hasProxyForwardHeaders(request) || !isLoopbackAddress(ip)) {
                   return error("Forbidden: shutdown is loopback-only", 403);
                 }
                 await flushAllStateBeforeExit();
@@ -231,7 +229,12 @@ const { server, port } = (() => {
                 const upgraded = server.upgrade(request, { data: { kind: "asr" } as any });
                 return upgraded ? undefined : error("WebSocket upgrade failed", 400);
               }
-              if (url.pathname.startsWith("/api/")) return await routeApi(request, url);
+              if (url.pathname.startsWith("/api/")) {
+                // 回环上下文标记:"仅限本机"端点(如 data/export/to-path 向宿主路径写文件)
+                // 在 handler 层经 net-context 查询;判定语义与上方 shutdown 闸同源。
+                markRequestNetworkContext(request, server.requestIP(request)?.address ?? "");
+                return await routeApi(request, url);
+              }
               return await routeStatic(url);
             } catch (err) {
               console.error(err);
@@ -335,15 +338,17 @@ void (async () => {
   }
   markStartupReady();
   bootMilestone("bootstrap 完成");
-  // R1 取证:上次未干净退出(崩溃/关机/强退)会留下 server.log。启动成功后在错误中心浮出
-  // 一条 warn 让用户在应用内也能看到;它只是文件残留的倒影——server.log 随"下次正常退出"
-  // 被清掉后,下次启动这里读不到就不再显示,与"重启清零"天然一致,绝不弹窗打扰。
+  // R1 取证:上次未干净退出会留下 server.log。启动成功后按判读等级分流(日志问题 2):
+  //   abnormal(启动期夭折/运行期记录到异常)→ 错误中心浮 warn,用户应该知道;
+  //   external(里程碑全完成、无异常记录 → 外力终止:直接关机/强退/任务管理器)→ 静默留档,
+  //   这是托盘常驻用户的日常("点 X→托盘→关机"),报警只会制造"我明明正常关的"困惑。
+  // 两种等级的 server.log 都随"下次正常退出"被清,与"重启清零"天然一致,绝不弹窗打扰。
   const previousCrash = readPreviousCrashLog();
-  if (previousCrash) {
+  if (previousCrash?.level === "abnormal") {
     reportError(
       "internal",
       "warn",
-      "上次应用未正常退出(可能是异常崩溃或直接关机/强制退出)。诊断信息见 数据目录/logs/server.log。",
+      "上次应用未正常退出(可能是异常崩溃或强制终止)。诊断信息见 数据目录/logs/server.log。",
       undefined,
       "previous_unclean_exit",
     );
@@ -415,6 +420,9 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+// SIGHUP:Windows 关闭终端窗口(libuv 把 CTRL_CLOSE_EVENT 映射为 SIGHUP,~5s 宽限)、
+// Unix 终端断开。dev 形态下"直接关终端"是高频操作,不挂就走硬杀留假崩溃档(日志问题 2)。
+process.on("SIGHUP", shutdown);
 
 if (!args.has("--dev") && !args.has("--no-open")) {
   const opener = process.platform === "win32" ? "cmd" : "sh";

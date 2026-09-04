@@ -24,16 +24,26 @@
 // (与 P2 语义等价:无任何激活工具,系统提示词 Available tools 为 "(none)")。
 
 import { createAgentSession } from "../../pi/packages/coding-agent/src/core/sdk.ts";
+
+/** 工作区思考档位（全面审查 7：接通厂商思考开关）。工作区暂无档位 UI，取 agent 场景
+ *  的正确默认：思考模型开思考（编码 agent 推理即生产力，Claude Code/Codex 同为思考
+ *  常开），medium 对开关型厂商（智谱/DashScope/火山/SiliconFlow）只表达"开"、对
+ *  effort 型厂商是 OpenAI 官方默认档。非思考模型由 pi 的能力收拢自动落回 off
+ *  （sdk.ts clampThinkingLevel：model.reasoning=false → 仅支持 off），无需在此判定。
+ *  未来 UI 化时以用户所选档位替换本常量即可，翻译层（model-bridge/方言表）零改动。 */
+const WORKSPACE_THINKING_LEVEL = "medium" as const;
 import type { ToolDefinition } from "../../pi/packages/coding-agent/src/core/extensions/types.ts";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { GenerationEventSink } from "../inference-engine/events";
 import type { Message, Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
 import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "./model-bridge";
+import { llmLogContextFor, runWithLlmRequestLog } from "./llm-request-log";
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "../inference-engine/approval-gate";
 import type { PiSessionResources } from "./resources";
 import { seedPiSessionFromHistory, type EngineCompactionRecord } from "./context-encoder";
+import { sweepWorkspaceReservedNameArtifacts } from "../workspace/files";
 
 export interface PiGenerationContext {
   /** 生效 provider/model(调用方经 findModel 解析,providerOverwrite 已展开)。 */
@@ -118,6 +128,10 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
   if (!mapped.ok) throw new Error(`该模型无法在工作区引擎使用：${mapped.reason}`);
   const { runtime, model } = await createPiModelRuntime(mapped.mapping);
 
+  // 问题4(2.0.0 内测):每轮生成前清扫工作区根的 Windows 保留设备名残留(nul 等)——
+  // 兼作存量自愈:内测期已产生的残留在用户下次使用该工作区时自动消失。
+  sweepWorkspaceReservedNameArtifacts(ctx.cwd);
+
   // P7:引擎上下文从 SQLite 历史每轮重建,inMemory 会话零文件生命周期。
   const manager = SessionManager.inMemory(ctx.cwd);
   const seeded = seedPiSessionFromHistory({
@@ -135,6 +149,7 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     modelRuntime: runtime,
     model,
     sessionManager: manager,
+    thinkingLevel: WORKSPACE_THINKING_LEVEL,
     // "builtin" 只关内建工具;customTools 经 includeAllExtensionTools 全部激活
     // (sdk.ts:246-251 + agent-session._refreshToolRegistry,§七-3 实证)。
     noTools: "builtin",
@@ -159,10 +174,13 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     if (ctx.signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
     // expandPromptTemplates:false——用户消息逐字直达模型。pi 默认会把 "/" 开头的输入
     // 当模板/扩展命令拦截(agent-session.ts:1122),我们的会话 UX 不走 pi 命令面。
-    await session.prompt(ctx.promptText, {
-      expandPromptTemplates: false,
-      ...(ctx.images?.length ? { images: ctx.images } : {}),
-    });
+    // runWithLlmRequestLog:本轮生成的 LLM fetch(pi SDK 内部)记入统一日志管线(日志问题 1)。
+    await runWithLlmRequestLog(llmLogContextFor(ctx.provider), () =>
+      session.prompt(ctx.promptText, {
+        expandPromptTemplates: false,
+        ...(ctx.images?.length ? { images: ctx.images } : {}),
+      }),
+    );
   } finally {
     ctx.signal?.removeEventListener("abort", onAbort);
     unsubscribe();
@@ -251,6 +269,8 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
     modelRuntime: runtime,
     model,
     sessionManager: manager,
+    // 压缩会话同档位:摘要质量受益于推理,且与主会话口径一致(勿分叉)。
+    thinkingLevel: WORKSPACE_THINKING_LEVEL,
     noTools: "builtin",
     customTools: [],
     ...(ctx.resources
@@ -268,7 +288,9 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
   ctx.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     if (ctx.signal?.aborted) throw new DOMException("Compaction cancelled", "AbortError");
-    const result = await session.compact(ctx.customInstructions?.trim() || undefined);
+    const result = await runWithLlmRequestLog(llmLogContextFor(ctx.provider), () =>
+      session.compact(ctx.customInstructions?.trim() || undefined),
+    );
     const captured = captureRoundCompactions(manager, seededEntryIds, seeded.entryIdsByMessageId).at(-1);
     if (!captured) {
       // compact 成功却找不到新 compaction 条目 = pi 内部行为漂移,按失败处理比静默丢摘要安全。

@@ -420,7 +420,7 @@
     "no_request_body": "No request body recorded",
     "no_response_body": "No response body recorded",
     "clear": "Clear logs",
-    "clear_confirm": "Clear all request logs? This cannot be undone.",
+    "clear_confirm": "Clear the logs currently shown? This cannot be undone.",
     "cleared": "All request logs cleared",
     "field_time": "Time",
     "field_method": "Method",

@@ -10,6 +10,7 @@ import { JsonTree, tryParseJson } from "~/components/ui/json-tree";
 import { cn } from "~/lib/utils";
 import { SectionHeader } from "~/components/settings/shared";
 import { appErrorText, useAppErrorsStore } from "~/stores";
+import { confirmDialog } from "~/stores/confirm-store";
 import type { AppErrorDto } from "~/types";
 
 // FE-P1-2 收编:线上契约单源在后端 foundation/types(此前本地手抄漏了 providerId)。
@@ -34,10 +35,14 @@ export function LogsSection({ logs, onClear }: { logs: RequestLog[]; onClear: ()
     items.sort((a, b) => b.at - a.at);
     return items;
   }, [logs, errors, filter]);
-  const clearVisible = React.useCallback(() => {
+  // 日志问题 3:确认必须先于任何删除。此前请求日志的 confirm 藏在 onClear 内部,而
+  // clearErrors 在弹窗弹出前就已执行——用户点"取消"错误日志也没了,二次确认形同虚设。
+  // 收口:本层统一确认一次,通过后才按当前筛选分发两类清空;onClear 退化为纯删除动作。
+  const clearVisible = React.useCallback(async () => {
+    if (!(await confirmDialog({ title: t("settings:logs.clear_confirm"), danger: true }))) return;
     if (filter !== "errors") onClear();
     if (filter !== "requests") void clearErrors();
-  }, [filter, onClear, clearErrors]);
+  }, [filter, onClear, clearErrors, t]);
   const filterOptions: Array<{ id: LogFilter; label: string }> = [
     { id: "all", label: t("settings:logs.filter_all") },
     { id: "requests", label: t("settings:logs.filter_requests") },
@@ -68,7 +73,7 @@ export function LogsSection({ logs, onClear }: { logs: RequestLog[]; onClear: ()
         {feed.length > 0 ? (
           <button
             type="button"
-            onClick={clearVisible}
+            onClick={() => void clearVisible()}
             className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-destructive transition hover:bg-destructive/10"
           >
             <Trash2 className="size-3.5" />
