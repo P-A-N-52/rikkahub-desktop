@@ -18,7 +18,10 @@ function Switch({
         // issue8:轨道高度必须是整数像素(h-4.5=18px;原 1.15rem=18.4px)。非整数高度让
         // 圆角边缘落在半像素上(任何倍率都有锯齿),且拇指(16px)垂直居中余量 2.4px 无法
         // 均分,在 125%/150% 等非整数 DPI 下轨道与拇指各自取整方向不同 → 可见错位。
-        "peer data-[state=checked]:bg-primary data-[state=unchecked]:bg-input focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-input/80 group/switch inline-flex shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all duration-200 outline-none [transition-timing-function:cubic-bezier(0.34,1.56,0.64,1)] focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-4.5 data-[size=default]:w-8 data-[size=sm]:h-3.5 data-[size=sm]:w-6 hover:data-[state=unchecked]:bg-muted-foreground/30",
+        // 问题7(2.0.0 内测):关闭态轨道弃用 --input(两主题都是 8% 透明度,叠在卡片上
+        // 近乎隐形,悬停态反而更深) → muted-foreground 阶梯:静止 /25、悬停 /35,
+        // 随主题自适应且始终弱于选中态 primary。
+        "peer data-[state=checked]:bg-primary data-[state=unchecked]:bg-muted-foreground/25 focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-muted-foreground/30 group/switch inline-flex shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all duration-200 outline-none [transition-timing-function:cubic-bezier(0.34,1.56,0.64,1)] focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-4.5 data-[size=default]:w-8 data-[size=sm]:h-3.5 data-[size=sm]:w-6 hover:data-[state=unchecked]:bg-muted-foreground/35",
         className
       )}
       {...props}
