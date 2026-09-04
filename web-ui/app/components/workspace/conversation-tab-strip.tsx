@@ -164,7 +164,7 @@ export function ConversationTabStrip({
                       if (node && active) node.scrollIntoView({ inline: "nearest", block: "nearest" });
                     }}
                     className={cn(
-                      "group relative flex h-[26px] min-w-14 shrink basis-44 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-[13px] transition-colors duration-150",
+                      "group relative flex h-[26px] min-w-14 shrink basis-44 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-[0.8125rem] transition-colors duration-150",
                       active
                         ? "bg-[var(--ds-on-surface)] font-medium text-[var(--ds-text-primary)] shadow-[inset_0_0_0_0.5px_var(--ds-divider)]"
                         : "text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",

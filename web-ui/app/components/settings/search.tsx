@@ -727,7 +727,7 @@ export function SearchSection({
                   </div>
                   {/* issue11:失败时附底层错误原文,便于区分超时/证书/DNS/5xx */}
                   {entry.status === "fail" && entry.detail ? (
-                    <div className="pl-5.5 font-mono text-[11px] break-all text-muted-foreground">
+                    <div className="pl-5.5 font-mono text-[0.6875rem] break-all text-muted-foreground">
                       {entry.detail}
                     </div>
                   ) : null}

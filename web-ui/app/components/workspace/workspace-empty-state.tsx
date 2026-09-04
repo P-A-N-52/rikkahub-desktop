@@ -60,9 +60,9 @@ function MissingRebindPanel({ workspace }: { workspace: WorkspaceDto }) {
         <div className="flex items-start gap-2.5">
           <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" strokeWidth={2} />
           <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-medium text-foreground">{t("workspace.empty.missing_title")}</div>
-            <div className="mt-1 text-[12px] leading-5 text-muted-foreground">{t("workspace.empty.missing_desc")}</div>
-            <div className="mt-1.5 truncate font-mono text-[11px] text-[var(--ds-text-tertiary)]" title={workspace.root}>
+            <div className="text-[0.8125rem] font-medium text-foreground">{t("workspace.empty.missing_title")}</div>
+            <div className="mt-1 text-[0.75rem] leading-5 text-muted-foreground">{t("workspace.empty.missing_desc")}</div>
+            <div className="mt-1.5 truncate font-mono text-[0.6875rem] text-[var(--ds-text-tertiary)]" title={workspace.root}>
               {workspace.root}
             </div>
             <div className="mt-3 flex items-center gap-2">
@@ -70,7 +70,7 @@ function MissingRebindPanel({ workspace }: { workspace: WorkspaceDto }) {
                 value={root}
                 onChange={(event) => setRoot(event.target.value)}
                 placeholder={t("workspace.create.folder_path_placeholder")}
-                className="h-8 flex-1 font-mono text-[12px]"
+                className="h-8 flex-1 font-mono text-[0.75rem]"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void submit();
                 }}

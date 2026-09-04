@@ -1252,7 +1252,11 @@
   }
   /* 界面字号缩放:改 <html> 根字号,所有 rem 单位(字号/间距/图标/圆角…)等比同步变化,
      比例守恒 → 不可能撑破任何布局。变量 --rikkahub-ui-scale 由 root.tsx 从 displaySetting
-     写入,null/未设置时 fallback 为 1,默认根字号 16px 与浏览器默认一致,视觉零差异。 */
+     写入,null/未设置时 fallback 为 1,默认根字号 16px 与浏览器默认一致,视觉零差异。
+     不变式(2.0.0 内测修复):UI 文本字号一律 rem(Tailwind 预设或 text-[N.NNrem]),
+     禁用 text-[Npx]/font-size:Npx,否则不随本缩放。px 字号仅允许两类合法场景:
+     exported-image.tsx(导出图与界面缩放无关,需确定性)、iframe srcdoc 内联样式
+     (code-block/workbench-host,独立文档不受主文档根字号影响)。 */
   :root {
     font-size: calc(16px * var(--rikkahub-ui-scale, 1));
   }
@@ -1307,6 +1311,13 @@
 
 [data-message-bubble] .markdown {
   font-family: var(--rikkahub-chat-font, inherit);
+}
+
+/* 气泡内长词折行(2.0.0 内测:user 消息含超长无空格串时向右冲出气泡)。
+   overflow-wrap 可继承,覆盖气泡内全部 part;anywhere 参与 min-content 计算,
+   flex/max-w 上下文也能正确收缩。pre(nowrap 滚动)与 truncate(nowrap)不受影响。 */
+[data-message-bubble] {
+  overflow-wrap: anywhere;
 }
 
 .message-markdown {
@@ -1569,7 +1580,8 @@
   z-index: 2;
 }
 
-/* 菜单项:32px 高、12px 圆角、13px 字号;active 用品牌色+500 字重。 */
+/* 菜单项:32px 高、12px 圆角、0.8125rem(=13px)字号;active 用品牌色+500 字重。
+   字号/行高用 rem 以跟随界面缩放(uiFontSize),容器尺寸保持 px(固定 chrome)。 */
 .ds-menu-item {
   display: flex;
   min-height: 32px;
@@ -1578,8 +1590,8 @@
   gap: 12px;
   border-radius: 12px;
   padding: 6px 10px;
-  font-size: 13px;
-  line-height: 16px;
+  font-size: 0.8125rem;
+  line-height: 1rem;
   text-align: left;
   white-space: nowrap;
   overflow: hidden;

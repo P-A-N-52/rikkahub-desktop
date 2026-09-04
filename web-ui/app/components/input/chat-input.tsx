@@ -1009,7 +1009,7 @@ function ChatInputInner({
                 key={`${suggestion}-${index}`}
                 type="button"
                 disabled={!canUseQuickMessage}
-                className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--ds-pill-bg)] px-2.5 text-[12px] font-medium text-[var(--ds-brand-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--ds-pill-bg)] px-2.5 text-[0.75rem] font-medium text-[var(--ds-brand-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => {
                   handleSuggestionSelect(suggestion);
                 }}

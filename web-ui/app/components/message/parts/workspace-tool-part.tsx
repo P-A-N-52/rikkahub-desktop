@@ -194,11 +194,15 @@ const WRITE_PREVIEW_LINES = 12;
 
 export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loading?: boolean }) {
   const { t } = useTranslation("message");
-  const [expanded, setExpanded] = React.useState(true);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   const model = React.useMemo(() => buildCardModel(tool), [tool]);
   const running = Boolean(loading) && !model.finished;
+  // 自动折叠(2.0.0 内测,与思维链一致):执行中的卡保持展开,终局后自动收起,压住长会话
+  // 纵向空间;历史消息挂载时 running=false 直接收起。用户点过 chevron 后(userExpanded
+  // 非 null)以用户选择为准,不再自动干预。头部常驻状态图标/exit 徽标,失败收起也可见。
+  const [userExpanded, setUserExpanded] = React.useState<boolean | null>(null);
+  const expanded = userExpanded ?? running;
   const failed = model.error !== null || model.denied || (model.exitCode !== null && model.exitCode !== 0);
 
   const path = str(model.args, "path") ?? "";
@@ -242,7 +246,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
         {running ? <span className="absolute inset-y-0 left-0 w-0.5 animate-pulse bg-primary" aria-hidden /> : null}
         <button
           type="button"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setUserExpanded(!expanded)}
           className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors duration-150 hover:bg-muted/40"
         >
           <span className="shrink-0">{statusIcon}</span>
@@ -251,7 +255,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
             {model.kind === "bash" ? (
               <>
                 {t("workspace_tool.bash_prefix")}
-                <span className="font-mono text-[13px] font-normal">{title}</span>
+                <span className="font-mono text-[0.8125rem] font-normal">{title}</span>
               </>
             ) : (
               title
@@ -264,14 +268,14 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
             </span>
           ) : null}
           {writtenBytes !== null ? (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
               {t("workspace_tool.bytes", { bytes: writtenBytes })}
             </span>
           ) : null}
           {model.exitCode !== null ? (
             <span
               className={cn(
-                "shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px]",
+                "shrink-0 rounded px-1.5 py-0.5 font-mono text-[0.6875rem]",
                 model.exitCode === 0
                   ? "bg-muted text-muted-foreground"
                   : "bg-[oklch(0.95_0.05_25)] text-[oklch(0.5_0.14_25)] dark:bg-[oklch(0.3_0.05_25)] dark:text-[oklch(0.75_0.14_25)]",
@@ -382,7 +386,7 @@ function WriteBodyPreview({ content, t }: { content: string; t: TFunction }) {
         {preview}
       </pre>
       {hidden > 0 ? (
-        <div className="border-t border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground">
+        <div className="border-t border-border/40 bg-muted/30 px-3 py-1 text-[0.6875rem] text-muted-foreground">
           {t("workspace_tool.write_preview_more", { count: hidden })}
         </div>
       ) : null}

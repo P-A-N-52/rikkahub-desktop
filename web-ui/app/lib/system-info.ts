@@ -6,7 +6,7 @@ export interface SystemInfo {
   summary: string;
 }
 
-function isTauriEnvironment(): boolean {
+export function isTauriEnvironment(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 

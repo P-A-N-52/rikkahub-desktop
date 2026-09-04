@@ -40,7 +40,7 @@ export function TerminalOutput({
   return (
     <div className={cn("min-w-0", className)}>
       {hiddenLines > 0 ? (
-        <div className="border-b border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground">
+        <div className="border-b border-border/40 bg-muted/30 px-3 py-1 text-[0.6875rem] text-muted-foreground">
           {t("workspace_tool.terminal_hidden_lines", { count: hiddenLines })}
         </div>
       ) : null}
