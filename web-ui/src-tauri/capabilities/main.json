@@ -23,6 +23,7 @@
     "core:webview:allow-internal-toggle-devtools",
     "shell:allow-open",
     "dialog:allow-open",
+    "dialog:allow-save",
     "fs:default",
     "os:allow-platform",
     "os:allow-version",

@@ -1,11 +1,12 @@
 // api/handlers/data.ts — 数据备份路由（data/webdav/*、data/s3/*、data/export|import|register-schema）
 // 纪律：纯搬迁自 server.ts routeApi()；备份 zip 结构与 Android 互导契约冻结。
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { Database } from "bun:sqlite";
 import type { S3Config, State, WebDavConfig } from "../../foundation/types";
 import { dataDir } from "../../foundation/paths";
+import { isWindowsReservedName } from "../../foundation/windows-names";
 import { tempDir } from "../../foundation/platform";
 import { friendlyRequestError } from "../../foundation/net";
 import { state } from "../../persistence/json-store";
@@ -27,6 +28,7 @@ import {
   webDavRestore,
 } from "../../backup/storage";
 import { error, json, readJson, sseHeaders } from "../request";
+import { isLoopbackRequest } from "../net-context";
 import { sseFrame } from "../sse";
 import { updateSettings } from "../../app-config";
 
@@ -285,6 +287,40 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
       return error(err instanceof Error ? err.message : String(err), 500);
     } finally {
       try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* */ }
+    }
+  }
+  if (path === "data/export/to-path" && request.method === "POST") {
+    // 问题5(2.0.0 内测):Tauri 桌面端用系统保存对话框自选导出位置,服务端(与壳同机)把
+    // zip 直写目标路径——多 GB 备份零 HTTP 传输、零浏览器下载目录中转。取消场景由前端
+    // 保证零残留:先选位置后生成,未选位置时请求根本不会发出。
+    // 仅限本机直连:向任意宿主路径写文件的能力不暴露给局域网客户端(它们走 GET 下载流,
+    // 备份本就应落在客户端机器上);回环闸语义与 /api/app/shutdown 一致(net-context)。
+    if (!isLoopbackRequest(request)) return error("Forbidden: this endpoint is loopback-only", 403);
+    const body = await readJson<{ targetPath?: unknown }>(request).catch(() => null);
+    const targetPath = body && typeof body.targetPath === "string" ? body.targetPath : "";
+    if (!isAbsolute(targetPath) || !targetPath.toLowerCase().endsWith(".zip")) {
+      return error("targetPath must be an absolute path ending in .zip", 400);
+    }
+    if (isWindowsReservedName(basename(targetPath))) {
+      return error("targetPath must not be a reserved Windows device name", 400);
+    }
+    const targetDir = dirname(targetPath);
+    try {
+      if (!statSync(targetDir).isDirectory()) return error("Target directory does not exist", 400);
+    } catch {
+      return error("Target directory does not exist", 400);
+    }
+    // 原子产出:同目录部件文件生成(跨盘 rename 非原子,故不落 tempDir),成功后 rename
+    // 就位(同盘原子,覆盖语义与保存对话框的覆盖确认一致);失败清部件,不留半个 zip。
+    const partPath = join(targetDir, `.${basename(targetPath)}.part-${Math.random().toString(36).slice(2, 8)}`);
+    try {
+      const { size, warnings } = createSettingsBackupZipToPath(partPath);
+      renameSync(partPath, targetPath);
+      return json({ ok: true, size, warnings, fileName: basename(targetPath) });
+    } catch (err) {
+      try { rmSync(partPath, { force: true }); } catch { /* best-effort */ }
+      console.error("[export] to-path failed:", err);
+      return error(err instanceof Error ? err.message : String(err), 500);
     }
   }
   if (path === "data/export" && request.method === "GET") {

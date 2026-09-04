@@ -23,6 +23,7 @@ import { Switch } from "~/components/ui/switch";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
 import { cn } from "~/lib/utils";
 import api, { appendWebAuthQuery } from "~/services/api";
+import { isTauriEnvironment } from "~/lib/system-info";
 import { confirmDialog } from "~/stores/confirm-store";
 import type { S3Config, Settings, WebDavConfig } from "~/types";
 import { SectionHeader } from "~/components/settings/shared";
@@ -475,8 +476,57 @@ export function DataSection({
     }
   };
 
+  // 问题5(2.0.0 内测):桌面端(Tauri)导出用系统保存对话框自选位置。次序是"先选位置、后生成"
+  // ——用户取消对话框时请求根本不会发出,天然满足"没选位置就关掉 → 不留任何文件"。
+  // 生成期间服务端(与壳同机)把 zip 直写目标路径,多 GB 备份零 HTTP 传输、零下载目录中转,
+  // 故无字节进度可展示(构建期本就无进度,与 GET 流程的"准备导出"阶段一致)。
+  const doExportToPickedPath = async () => {
+    let target: string | null = null;
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      // 建议名与服务端 GET 流程同构(时间戳仅为对话框预填,最终名以用户输入为准)。
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/T/, "_").replace(/Z$/, "").replace(/-/g, "").slice(0, 15);
+      target = await save({
+        defaultPath: `rikkahub-backup-${stamp}.zip`,
+        filters: [{ name: "Zip", extensions: ["zip"] }],
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("settings:data.export_failed"));
+      return;
+    }
+    if (!target) return; // 用户取消:零生成零残留
+    setExporting(true);
+    const prepToast = toast.loading(t("settings:data.export_preparing"));
+    try {
+      const res = await fetch(appendWebAuthQuery("/api/data/export/to-path"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetPath: target }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; fileName?: string; warnings?: string[]; error?: string }
+        | null;
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || t("settings:data.export_http_error", { status: res.status }));
+      }
+      toast.dismiss(prepToast);
+      // 成功文案展示用户选择的完整路径(比 GET 流程的"文件名+去下载目录找"更明确)。
+      toast.success(t("settings:data.export_done", { name: target }), { duration: 8000 });
+      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 12000 });
+    } catch (err) {
+      toast.dismiss(prepToast);
+      toast.error(err instanceof Error ? err.message : t("settings:data.export_failed"));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const doExport = async () => {
     setShowExportDialog(false);
+    if (isTauriEnvironment()) {
+      await doExportToPickedPath();
+      return;
+    }
     setExporting(true);
     setExportProgress(0);
     setExportedBytes(0);

@@ -9,6 +9,7 @@ import type { JsonValue } from "../foundation/types";
 import type { Settings } from "../foundation/types/settings";
 import { isRecord, safeJsonStringify } from "../foundation/utils";
 import { dataDir, filesDir, skillsDir } from "../foundation/paths";
+import { isWindowsReservedName } from "../foundation/windows-names";
 import { reportError } from "../observability/app-errors";
 import { tempDir } from "../foundation/platform";
 import { state } from "../persistence/json-store";
@@ -655,7 +656,8 @@ type UploadStagingPlan = {
 // 清洗后为空由调用方回退 <id>.<ext>;清洗后撞名由调用方 usedNames 去重兜底。
 export function sanitizeStagingFileName(rawName: string): string {
   let name = rawName.replace(/[<>:"/\\|?*#\x00-\x1f]/g, "_").replace(/[. ]+$/, "");
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) name = `_${name}`;
+  // 设备保留名判定单源于 foundation/windows-names(问题4);此处"加 _ 前缀"的清洗行为冻结。
+  if (isWindowsReservedName(name)) name = `_${name}`;
   if (name.length > 150) {
     const ext = extname(name);
     name = name.slice(0, 150 - ext.length) + ext;
