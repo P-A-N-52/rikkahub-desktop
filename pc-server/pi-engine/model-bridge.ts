@@ -11,7 +11,15 @@ import { AuthStorage } from "../../pi/packages/coding-agent/src/core/auth-storag
 import { ModelRuntime } from "../../pi/packages/coding-agent/src/core/model-runtime.ts";
 import type { ProviderConfigInput } from "../../pi/packages/coding-agent/src/core/provider-composer.ts";
 import type { Model, Provider } from "../foundation/types";
+import { hostOfProvider } from "../inference-engine/message-builder";
 import { applyModelRequestHeaders } from "../model-providers";
+import {
+  EFFORT_LOW_HIGH_MAX_BY_LEVEL,
+  isKimiK3Model,
+  OPENAI_DEVELOPER_ROLE_ALLOWED,
+  openAiMaxTokensField,
+  openAiThinkingSwitchProtocol,
+} from "../model-providers/request-dialect";
 
 export interface PiModelMapping {
   /** 我们的 provider UUID 直接作 pi providerId：与 pi 内建 id 永不冲突，注册面完全由我们权威。 */
@@ -52,11 +60,102 @@ export function piApiFor(provider: Provider): KnownApi | null {
 
 function piBaseUrlFor(provider: Provider, api: KnownApi): string {
   const base = provider.baseUrl.replace(/\/+$/, "");
-  // 口径差：我们的 claude baseUrl 含 /v1（端点 = base + /messages）；pi 的 anthropic SDK
-  // 自己拼 /v1/messages，故剥掉尾部 /v1。openai（SDK 拼 /chat/completions 或 /responses）
-  // 与 google（两侧 base 均含 /v1beta）约定一致，逐字透传。
+  // claude 归一化(A,两引擎同款):剥尾部 /v1——pi 的 anthropic SDK 自己拼 /v1/messages;
+  // 聊天引擎 endpointFor 同规则(剥 /v1 再拼 /v1/messages),用户带不带 /v1 两引擎皆通。
+  // openai(SDK 拼 /chat/completions 或 /responses)与 google(两侧 base 均含 /v1beta)
+  // 约定一致,逐字透传。
   if (api === "anthropic-messages") return base.replace(/\/v1$/, "");
   return base;
+}
+
+/** pi compat 显式覆盖 = 统一请求方言的 pi 侧翻译（T4.6 内测缺陷修复 → T4.7 方言单源化）。
+ *
+ *  背景：pi 的 detectCompat 以西方厂商白名单自动探测，未知 baseUrl（国内生态：
+ *  DashScope/火山方舟/SiliconFlow/各类中转）一律按「官方 OpenAI 能力」假设——推理
+ *  模型系统消息发 "developer"（第三方 400 拒收）、上限字段发 max_completion_tokens
+ *  （第三方静默忽略 → 上限失效）。方言事实与依据集中在 model-providers/request-dialect
+ *  （聊天引擎构建体消费同一模块），此处只做 pi compat 旋钮的逐字段翻译：
+ *
+ *  - supportsDeveloperRole ← OPENAI_DEVELOPER_ROLE_ALLOWED（completions/responses 同名同义）。
+ *  - maxTokensField ← openAiMaxTokensField(host)（仅 completions；responses 原生
+ *    max_output_tokens 无此字段。官方主机显式 max_completion_tokens 与 pi 自动探测
+ *    同值，显式写死 = 口径由方言决定，不依赖 pi 探测碰巧一致）。
+ *  - 思考「开关」（enable_thinking/thinking.type/thinking_mode 等厂商字段）入方言：
+ *    协议种类由 openAiThinkingSwitchProtocol 声明（host 级事实＋SiliconFlow 白名单），
+ *    本层经 piThinkingOverridesFor 译成 pi 的 thinkingFormat/supportsReasoningEffort
+ *    覆盖——按 host 逐厂商覆盖，不会误伤 OpenRouter 等兜底主机（见该函数头注）。
+ *  - 思考「档位值域」同方言（Kimi K3 官方移除 thinking、reasoning_effort 仅认
+ *    low/high/max，非法值 400；DeepSeek 官方 effort 同值域）：经 pi 原生
+ *    thinkingLevelMap 喂入 EFFORT_LOW_HIGH_MAX_BY_LEVEL——与聊天引擎同一张收拢表。
+ *  - 思考档位已接通（runner 传 WORKSPACE_THINKING_LEVEL，非思考模型 pi 自动收拢回
+ *    off）。采样设置接通那天的既定口径（勿另起判定）：温度/top_p 过方言
+ *    isSamplingLockedModel；claude 老模型预算经 pi 的 options.thinkingBudgets 通道
+ *    喂聊天引擎 budgetTokensFor 同款表（届时提升方言）；google 同类。历史思考回传无需接线——pi 对称回传（收到什么字段回传什么字段），
+ *    K3/DeepSeek 官方硬性要求已天然满足，与聊天引擎 includeHistoryReasoning 默认
+ *    行为一致（工作区不支持用户关闭回传：agent 工具循环下思考连续性即正确性）。
+ *  - claude/google 协议无以上概念，不设（各自 compat 类型契约不同）。 */
+function piCompatOverridesFor(provider: Provider, api: KnownApi) {
+  if (api === "openai-responses") return { supportsDeveloperRole: OPENAI_DEVELOPER_ROLE_ALLOWED };
+  if (api !== "openai-completions") return undefined;
+  return {
+    supportsDeveloperRole: OPENAI_DEVELOPER_ROLE_ALLOWED,
+    maxTokensField: openAiMaxTokensField(hostOfProvider(provider)),
+  };
+}
+
+/** 厂商思考开关的 pi 侧翻译——方言 openAiThinkingSwitchProtocol 的消费者（全面审查 7）。
+ *
+ *  修复的故障面：此前工作区对智谱/DeepSeek（pi 白名单探测 zai/deepseek format）在
+ *  未接档位时强制发 thinking:{type:"disabled"} 关思考（agent 推理能力被残废）；对
+ *  DashScope/火山/SiliconFlow（pi 白名单外）不发任何开关字段，用户无从控制。
+ *  原则同 maxTokensField：显式覆盖＝口径由方言决定，不依赖 pi 探测碰巧一致（对
+ *  智谱/DeepSeek 的覆盖与 pi 探测同值，幂等锁定）。
+ *
+ *  已知降级（诚实记录）：DashScope thinking_budget 预算精调、K2.6 keep:"all" 保留式
+ *  思考——pi 无对应旋钮，开关生效但附加参数不发；书生 thinking_mode pi 无法表达，
+ *  压制思考字段走模型默认。NVIDIA：pi 白名单显式关 effort（作者实证，值域特殊），
+ *  预置无此厂商，尊重探测不覆盖。 */
+function piThinkingOverridesFor(
+  provider: Provider,
+  model: Model,
+): { compat?: Record<string, unknown>; thinkingLevelMap?: Record<string, string | null> } | undefined {
+  const host = hostOfProvider(provider);
+  if (host === "integrate.api.nvidia.com") return undefined;
+  if (isKimiK3Model(model.modelId)) {
+    // K3(模型级,跨渠道):pi 对官方 moonshot 探测 supportsReasoningEffort=false,须显式
+    // 开回才能发档位;收拢与 off 不可关(null 隐藏 off 项)由映射表表达,与聊天引擎同表。
+    return {
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { off: null, ...EFFORT_LOW_HIGH_MAX_BY_LEVEL },
+    };
+  }
+  const protocol = openAiThinkingSwitchProtocol(host, model.modelId);
+  if (protocol === "enable-thinking-flag") {
+    // DashScope/SiliconFlow 白名单:qwen format 发 enable_thinking;这些端点不认
+    // reasoning_effort,压制(聊天引擎同样不发)。
+    return { compat: { thinkingFormat: "qwen", supportsReasoningEffort: false } };
+  }
+  if (protocol === "thinking-type-object") {
+    if (host === "api.deepseek.com") {
+      // DeepSeek 官方:pi 原生 deepseek format(thinking:{type}+reasoning_effort)幂等
+      // 锁定;effort 只认 low/high/max,收拢喂方言同表(off 不标 null:可关思考,off 时
+      // pi 发 thinking:{type:"disabled"},与聊天引擎一致)。
+      return { compat: { thinkingFormat: "deepseek" }, thinkingLevelMap: { ...EFFORT_LOW_HIGH_MAX_BY_LEVEL } };
+    }
+    if (host === "open.bigmodel.cn") {
+      // 智谱:pi 原生 zai format(thinking:{type,clear_thinking};effort 探测已关)幂等锁定。
+      return { compat: { thinkingFormat: "zai" } };
+    }
+    // 火山方舟/Moonshot K2.5/K2.6:deepseek format 发 thinking:{type},端点不认
+    // reasoning_effort,压制。
+    return { compat: { thinkingFormat: "deepseek", supportsReasoningEffort: false } };
+  }
+  if (protocol === "thinking-mode-flag" || protocol === "suppress") {
+    // 书生(pi 无 thinking_mode 旋钮)/SiliconFlow 白名单外(发 enable_thinking 会 400)/
+    // K2.7-code(始终思考,开关拒收):压制全部思考字段,模型走默认行为。
+    return { compat: { supportsReasoningEffort: false } };
+  }
+  return undefined; // reasoning-effort:pi openai format 默认已对(官方/混元/阶跃/中转)。
 }
 
 /** 映射不到时给用户看的原因（模型选择器过滤面与错误提示共用，方案"诚实披露，不硬塞"）。 */
@@ -76,6 +175,10 @@ export function mapProviderModelToPi(provider: Provider, model: Model, limits?: 
   // 复用聊天引擎的请求头语义（模型级自定义头 + 主机特例），保证两个引擎行为逐字一致。
   const headers: Record<string, string> = {};
   applyModelRequestHeaders(headers, provider, model);
+  const compatOverrides = piCompatOverridesFor(provider, api);
+  // 思考开关翻译仅适用 openai-completions 生态(anthropic/google/responses 各有原生
+  // 思考协议,pi 原生处理);K3 判定在函数内(模型级,跨渠道)。
+  const thinkingOverrides = api === "openai-completions" ? piThinkingOverridesFor(provider, model) : undefined;
 
   const contextWindow =
     typeof limits?.contextWindow === "number" && limits.contextWindow > 0
@@ -104,6 +207,12 @@ export function mapProviderModelToPi(provider: Provider, model: Model, limits?: 
         cost: ZERO_COST,
         contextWindow,
         maxTokens,
+        // 厂商思考开关+档位收拢(方言单源,与聊天引擎同表同判定;见 piThinkingOverridesFor 头注)。
+        ...(thinkingOverrides?.thinkingLevelMap ? { thinkingLevelMap: thinkingOverrides.thinkingLevelMap } : {}),
+        // 请求口径对齐聊天引擎(缺陷修复与依据见 piCompatOverridesFor/piThinkingOverridesFor 头注)。
+        ...(compatOverrides || thinkingOverrides?.compat
+          ? { compat: { ...compatOverrides, ...thinkingOverrides?.compat } }
+          : {}),
       },
     ],
   };

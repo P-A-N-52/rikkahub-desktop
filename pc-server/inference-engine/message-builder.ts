@@ -5,6 +5,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ApiMessage, Assistant, JsonValue, Message, MessagePart, Model, Provider, ToolOutputEntry } from "../foundation/types";
 import { id, isRecord } from "../foundation/utils";
+import {
+  effortLowHighMaxFor,
+  isKimiK26Model,
+  isKimiK27Model,
+  isKimiK3Model,
+  isSamplingLockedModel,
+  SILICONFLOW_THINKING_MODELS,
+} from "../model-providers/request-dialect";
 import { fallbackDocumentText, readExtractedTextSync } from "../files/index";
 import { ensureExtractedTextAsync } from "../files/extraction";
 import { parseToolInput, resolvedToolOutput } from "../tools/format";
@@ -939,10 +947,10 @@ export function responseApiInstructions(messagesForApi: ApiMessage[]) {
 
 
 export function isModelAllowTemperature(modelItem: Model) {
-  // Mirror Android's ModelRegistry-based check: OPENAI_O_MODELS (o1, o3, o4 etc.)
-  // and GPT_5 (exact "gpt-5" only — NOT gpt-5.1, gpt-5.2 etc., which Android allows).
-  const id = modelItem.modelId;
-  return !/(^o\d|[/:_-]o\d)/i.test(id) && !/^gpt[-._]?5$/i.test(id);
+  // 薄壳:锁定事实单源在 request-dialect.isSamplingLockedModel(o 系/精确 gpt-5/
+  // Kimi K2.5+,依据见彼处);orchestrator 主对话与 auxiliary 的 temperature/top_p
+  // 都经本函数,未来引擎接采样设置时直接消费方言谓词。
+  return !isSamplingLockedModel(modelItem.modelId);
 }
 
 
@@ -972,46 +980,36 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
     return result;
   }
   if (host === "api.siliconflow.cn") {
-    const siliconflowThinkingModels = new Set([
-      "Pro/moonshotai/Kimi-K2.5",
-      "Pro/zai-org/GLM-5",
-      "Pro/zai-org/GLM-5.1",
-      "Pro/zai-org/GLM-4.7",
-      "deepseek-ai/DeepSeek-V3.2",
-      "Pro/deepseek-ai/DeepSeek-V3.2",
-      "Qwen/Qwen3.5-397B-A17B",
-      "Qwen/Qwen3.5-122B-A10B",
-      "Qwen/Qwen3.5-35B-A3B",
-      "Qwen/Qwen3.5-27B",
-      "Qwen/Qwen3.5-9B",
-      "Qwen/Qwen3.5-4B",
-      "zai-org/GLM-4.6",
-      "Qwen/Qwen3-8B",
-      "Qwen/Qwen3-14B",
-      "Qwen/Qwen3-32B",
-      "Qwen/Qwen3-30B-A3B",
-      "tencent/Hunyuan-A13B-Instruct",
-      "zai-org/GLM-4.5V",
-      "deepseek-ai/DeepSeek-V3.1-Terminus",
-      "Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
-      "deepseek-ai/DeepSeek-V4-Flash",
-      "Pro/deepseek-ai/DeepSeek-V4-Flash",
-      "deepseek-ai/DeepSeek-V4-Pro",
-      "Pro/deepseek-ai/DeepSeek-V4-Pro",
-    ]);
-    return siliconflowThinkingModels.has(modelItem.modelId) ? { enable_thinking: enabled } : {};
+    // 白名单单源在 request-dialect(工作区引擎经 model-bridge 消费同一份名单)。
+    return SILICONFLOW_THINKING_MODELS.has(modelItem.modelId) ? { enable_thinking: enabled } : {};
   }
-  if (["ark.cn-beijing.volces.com", "open.bigmodel.cn", "api.moonshot.cn", "api.deepseek.com"].includes(host)) {
-    // 对齐 Android ChatCompletionsAPI:367-379——DeepSeek 官方开思考且非 auto 时补 reasoning_effort,
-    // 但只认 low/high/max 三档:medium/high 收拢成 high,xhigh 收拢成 max。
+  if (host === "api.moonshot.cn") {
+    // Kimi 逐代 thinking 语义(官方"思考模型"文档;安卓仅覆盖到 K2.6 #1586,K3 为 PC 先行。
+    // 代际判定与 K3 档位收拢表单源在 request-dialect,pi 引擎消费同一张表):
+    // - K3:始终思考+保留式思考常开,thinking 参数已移除(官方明示"不应传入",对照
+    //   K2.7-code 传 disabled 直接 400);推理强度改用顶层 reasoning_effort,仅
+    //   low/high/max 三档(默认 max)。off 无法关思考,映射 low(官方 FAQ:嫌思考久
+    //   就调 low);auto 不发字段,用服务端默认。
+    // - K2.7-code:始终思考,传 {type:"disabled"} 报错;省略 thinking 即 keep:"all"
+    //   语义,故一律不发。
+    // - K2.6:thinking{type} 可开关;开启时需显式 keep:"all" 才保留历史思考(#1586)。
+    // - 其余(K2.5/kimi-latest 等):维持 thinking{type} 开关,与安卓一致。
+    if (isKimiK3Model(modelItem.modelId)) {
+      if (normalized === "auto") return {};
+      if (!enabled) return { reasoning_effort: "low" };
+      return { reasoning_effort: effortLowHighMaxFor(normalized) ?? "high" };
+    }
+    if (isKimiK27Model(modelItem.modelId)) return {};
+    const thinking: Record<string, any> = { type: enabled ? "enabled" : "disabled" };
+    if (enabled && isKimiK26Model(modelItem.modelId)) thinking.keep = "all";
+    return { thinking };
+  }
+  if (["ark.cn-beijing.volces.com", "open.bigmodel.cn", "api.deepseek.com"].includes(host)) {
+    // 对齐 Android ChatCompletionsAPI:367-379——DeepSeek 官方开思考且非 auto 时补
+    // reasoning_effort,只认 low/high/max 三档,收拢查方言同一张表(pi 引擎经
+    // thinkingLevelMap 消费,两引擎口径恒同)。
     const deepseekEffort =
-      host === "api.deepseek.com" && enabled && normalized !== "auto"
-        ? normalized === "medium" || normalized === "high"
-          ? "high"
-          : normalized === "xhigh"
-            ? "max"
-            : normalized // low / max 原样
-        : undefined;
+      host === "api.deepseek.com" && enabled && normalized !== "auto" ? effortLowHighMaxFor(normalized) : undefined;
     return { thinking: { type: enabled ? "enabled" : "disabled" }, ...(deepseekEffort ? { reasoning_effort: deepseekEffort } : {}) };
   }
   if (host === "integrate.api.nvidia.com") {
@@ -1055,6 +1053,10 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
   // OFF maps to "low" (lowest budget), AUTO sends no field.
   if (normalized === "auto") return {};
   if (normalized === "off") return { reasoning_effort: "low" };
+  // K3 经透传型中转(未知 host)同样只认 low/high/max——档位收拢与 moonshot 官方
+  // 分支、pi 引擎共用 request-dialect 同一张表;网关型 host(OpenRouter/DashScope
+  // 等)有自己的方言翻译,已在上方各自分支返回,不经此兜底。
+  if (isKimiK3Model(modelItem.modelId)) return { reasoning_effort: effortLowHighMaxFor(normalized) ?? "high" };
   return { reasoning_effort: normalized };
 }
 

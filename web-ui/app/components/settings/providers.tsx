@@ -153,7 +153,9 @@ function endpointPreview(provider: ProviderProfile): string {
   if (!base) return defaultPathForKind(kind, provider.useResponseApi === true);
   if (kind === "openai")
     return `${base}${provider.useResponseApi === true ? "/responses" : textValue(provider.chatCompletionsPath) || "/chat/completions"}`;
-  if (kind === "claude") return `${base}/messages`;
+  // claude 拼接标准化(A):与服务端 endpointFor 同款规则(剥尾部 /v1 拼 /v1/messages),
+  // 预览即真实请求 URL,带不带 /v1 都能工作。
+  if (kind === "claude") return `${base.replace(/\/v1$/, "")}/v1/messages`;
   // issue10:Gemini 鉴权已改走 x-goog-api-key 头,URL 不再带 ?key=,预览同步。
   return `${base}/models/{model}:generateContent`;
 }
@@ -163,6 +165,8 @@ function modelListEndpointPreview(provider: ProviderProfile): string {
   const base = textValue(provider.baseUrl).replace(/\/+$/, "");
   if (!base) return kind === "google" ? "/models?pageSize=100" : "/models";
   if (kind === "google") return `${base}/models?pageSize=100`;
+  // claude 拼接标准化(A):与服务端 modelsEndpointFor 同款规则。
+  if (kind === "claude") return `${base.replace(/\/v1$/, "")}/v1/models`;
   return `${base}/models`;
 }
 

@@ -10,6 +10,7 @@ import {
   dataUrlForMessageUrl,
   documentPartsFirst,
   groupAssistantPartsByToolBoundary,
+  isModelAllowTemperature,
   parseDataUrl,
   reasoningPayloadForProvider,
   responseApiContentFromUiParts,
@@ -200,5 +201,74 @@ describe("reasoningPayloadForProvider — Gemini via OpenAI 兼容层", () => {
   test("OpenRouter 等已知 host 分支优先,不走 extra_body", () => {
     const openrouter = { type: "openai", baseUrl: "https://openrouter.ai/api/v1", apiKey: "k" } as unknown as Provider;
     expect(reasoningPayloadForProvider(openrouter, gemini25, "high")).toEqual({ reasoning: { effort: "high" } });
+  });
+});
+
+// Kimi K3 请求格式收紧(官方"思考模型/模型参数参考"文档):K3 移除 thinking 参数,改用
+// 顶层 reasoning_effort(仅 low/high/max);K2.7-code 传 disabled 报 400,一律不发;
+// K2.6 开思考需显式 keep:"all" 才保留历史思考(#1586);K2.5 起采样参数官方固定禁发。
+describe("reasoningPayloadForProvider — Moonshot Kimi 代际", () => {
+  const moonshot = { type: "openai", baseUrl: "https://api.moonshot.cn/v1", apiKey: "k" } as unknown as Provider;
+  const m = (modelId: string) => ({ modelId, abilities: ["REASONING"] }) as unknown as Model;
+
+  test("K3:不发 thinking,档位收拢为顶层 reasoning_effort(low/high/max)", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "high")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "medium")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "xhigh")).toEqual({ reasoning_effort: "max" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "max")).toEqual({ reasoning_effort: "max" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "low")).toEqual({ reasoning_effort: "low" });
+  });
+
+  test("K3:off 无法关思考,映射 low(官方 FAQ);auto 不发字段用服务端默认", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "off")).toEqual({ reasoning_effort: "low" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3"), "auto")).toEqual({});
+  });
+
+  test("K3 变体:裸 k3(安卓 KIMI_K3_ALIAS)/带前缀/k3.5 同代延续;k30 不误伤", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("k3"), "high")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(moonshot, m("moonshotai/Kimi-K3"), "high")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k3.5"), "high")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k30"), "high")).toEqual({ thinking: { type: "enabled" } });
+  });
+
+  test("K2.7-code:始终思考且传 disabled 会 400,一律不发 thinking", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k2.7-code"), "high")).toEqual({});
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k2.7-code-highspeed"), "off")).toEqual({});
+  });
+
+  test("K2.6:开思考补 keep:'all' 保留历史思考(#1586);关思考只发 type", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k2.6"), "high")).toEqual({
+      thinking: { type: "enabled", keep: "all" },
+    });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k2.6"), "off")).toEqual({ thinking: { type: "disabled" } });
+  });
+
+  test("K2.5/kimi-latest 维持 thinking{type} 开关(现状不回归)", () => {
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-k2.5"), "high")).toEqual({ thinking: { type: "enabled" } });
+    expect(reasoningPayloadForProvider(moonshot, m("kimi-latest"), "off")).toEqual({ thinking: { type: "disabled" } });
+  });
+
+  test("K3 经透传型中转(未知 host)同样收拢档位——K3 事实是模型级、跨渠道成立", () => {
+    const relay = { type: "openai", baseUrl: "https://relay.example.com/v1", apiKey: "k" } as unknown as Provider;
+    expect(reasoningPayloadForProvider(relay, m("kimi-k3"), "medium")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayloadForProvider(relay, m("kimi-k3"), "xhigh")).toEqual({ reasoning_effort: "max" });
+    expect(reasoningPayloadForProvider(relay, m("kimi-k3"), "off")).toEqual({ reasoning_effort: "low" });
+    expect(reasoningPayloadForProvider(relay, m("kimi-k3"), "auto")).toEqual({});
+    // 非 K3 模型经中转不受影响,档位原样透传(既有兜底行为)。
+    expect(reasoningPayloadForProvider(relay, m("some-model"), "medium")).toEqual({ reasoning_effort: "medium" });
+  });
+
+  test("温度禁发:K2.5+ 采样参数官方固定(跨 host 生效);旧 kimi 与其他模型不受影响", () => {
+    const locked = ["kimi-k3", "k3", "kimi-k3.5", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "Pro/moonshotai/Kimi-K2.5"];
+    for (const id of locked) {
+      expect(isModelAllowTemperature({ modelId: id } as unknown as Model)).toBe(false);
+    }
+    const allowed = ["kimi-latest", "moonshot-v1-8k", "kimi-k2", "gpt-4o"];
+    for (const id of allowed) {
+      expect(isModelAllowTemperature({ modelId: id } as unknown as Model)).toBe(true);
+    }
+    // 既有规则回归:o 系与精确 "gpt-5" 仍禁温度
+    expect(isModelAllowTemperature({ modelId: "o3" } as unknown as Model)).toBe(false);
+    expect(isModelAllowTemperature({ modelId: "gpt-5" } as unknown as Model)).toBe(false);
   });
 });

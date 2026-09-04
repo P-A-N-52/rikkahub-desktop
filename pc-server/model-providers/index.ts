@@ -5,6 +5,7 @@ import type { Assistant, JsonValue, Model, Provider } from "../foundation/types"
 import { id, isRecord, mergeObjects, uniqueStrings } from "../foundation/utils";
 import { hostOfProvider } from "../inference-engine/message-builder";
 import { state } from "../persistence/json-store";
+import { isKimiReasoningModel } from "./request-dialect";
 
 export const DEFAULT_AUTO_MODEL_ID = "b7055fb4-39f9-4042-a88a-0d80ed76cf08";
 
@@ -18,7 +19,14 @@ export function inferModelAbilities(modelId: string): string[] {
   // `claude-opus-4-6` don't contain literal "claude-4" as a substring (there's `opus` between),
   // so we match either the legacy `claude-3.7 / claude-4` patterns OR any modern variant of
   // claude-{opus,sonnet,haiku}-X to catch all Anthropic models 3.5+ which all support thinking.
-  if (/(gpt-5|^o[134]|[/:_-]o[134]|reason|reasoning|thinking|deepseek-r1|deepseek-reasoner|deepseek-v4|deepseek.*v4|qwq|qvq|qwen3|glm-[45]|glm-z1|hunyuan-a13b|mimo-v2|claude-3[.-]7|claude-4|claude-(opus|sonnet|haiku)-(3[.-]7|[4-9]|\d{2,})|gemini-2[.-]5|gemini-3|grok-4)/i.test(name)) {
+  // Kimi 代际走方言谓词(K2.5 起全系支持思考;正则无 kimi 模式曾致能力位缺失,
+  // UI 推理选项不显示、两引擎思考链路未激活)。存量模型由启动时 enrichModel 并集自愈。
+  if (
+    /(gpt-5|^o[134]|[/:_-]o[134]|reason|reasoning|thinking|deepseek-r1|deepseek-reasoner|deepseek-v4|deepseek.*v4|qwq|qvq|qwen3|glm-[45]|glm-z1|hunyuan-a13b|mimo-v2|claude-3[.-]7|claude-4|claude-(opus|sonnet|haiku)-(3[.-]7|[4-9]|\d{2,})|gemini-2[.-]5|gemini-3|grok-4)/i.test(
+      name,
+    ) ||
+    isKimiReasoningModel(name)
+  ) {
     abilities.push("REASONING");
   }
   return uniqueStrings(abilities);
@@ -295,6 +303,8 @@ export function textBody(value: string, limit?: number): string {
 export function modelsEndpointFor(providerItem: Provider) {
   const base = providerItem.baseUrl.replace(/\/+$/, "");
   if (providerItem.type === "google") return `${base}/models?pageSize=100`;
+  // claude 拼接标准化(A):同 endpointFor,剥尾部 /v1 拼 /v1/models,带不带 /v1 都能工作。
+  if (providerItem.type === "claude") return `${base.replace(/\/v1$/, "")}/v1/models`;
   return `${base}/models`;
 }
 

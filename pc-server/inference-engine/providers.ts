@@ -34,6 +34,20 @@ export { MAX_TOOL_STEPS, toolCallContext };
  *  overloaded/rate_limit 错误当碎片吞掉,残缺回答被当正常完成落库)。 */
 export class UpstreamStreamError extends Error {}
 
+/** 上游非 2xx 统一报文(B:404 形态诊断)。404 几乎总是「URL 打错了地方」——Base URL
+ *  缺/多路径段(最常见漏 /v1)、chatCompletionsPath 拼写、中转平台改版,或模型 ID 不存在
+ *  (Anthropic 的 model not_found 也走 404)。这类错误的响应正文往往是一页 HTML 或空串,
+ *  毫无线索,故报文带上最终请求 URL 让用户一眼定位;其他状态码语义清晰(401/403 鉴权、
+ *  429 限流、400 参数),厂商正文自带解释,保持原样拼接。 */
+export function upstreamHttpError(providerItem: Provider, url: string, status: number, bodyText: string): Error {
+  const body = bodyText.slice(0, 500);
+  if (status !== 404) return new Error(`${providerItem.name} ${status}: ${body}`);
+  return new Error(
+    `${providerItem.name} 404: 接口路径不存在。实际请求 URL: ${url}\n` +
+      `请检查 Base URL 形态(是否缺少或多了 /v1 等路径段)与模型 ID 是否存在。${body ? `\n${body}` : ""}`,
+  );
+}
+
 // models.dev 开源模型目录缓存 —— 用于查询模型的最大上下文窗口,显示在对话统计行
 // (分子 = 当前上下文 = promptTokens,分母 = 模型 contextLimit)。
 // 数据源 https://models.dev/api.json,缓存到 pc-data,1 天 TTL,fetch 失败降级为空(不报错)。
@@ -225,7 +239,7 @@ export async function fetchText(
     responseBody: textBody(rawText),
     error: response.ok ? undefined : textBody(rawText),
   });
-  if (!response.ok) throw new Error(`${providerItem.name} ${response.status}: ${rawText.slice(0, 500)}`);
+  if (!response.ok) throw upstreamHttpError(providerItem, url, response.status, rawText);
   return pick(raw)?.trim() || "(empty response)";
 }
 
@@ -623,7 +637,7 @@ export async function fetchClaudeTextWithTools(
       responseBody: textBody(rawText),
       error: response.ok ? undefined : textBody(rawText),
     });
-    if (!response.ok) throw new Error(`${providerItem.name} ${response.status}: ${rawText.slice(0, 500)}`);
+    if (!response.ok) throw upstreamHttpError(providerItem, url, response.status, rawText);
 
     const content: JsonValue[] = Array.isArray(raw.content) ? raw.content : [];
     const text = claudeTextFromContent(content);
@@ -986,7 +1000,7 @@ export async function fetchOpenAiText(
       responseBody: textBody(rawText),
       error: response.ok ? undefined : textBody(rawText),
     });
-    if (!response.ok) throw new Error(`${providerItem.name} ${response.status}: ${rawText.slice(0, 500)}`);
+    if (!response.ok) throw upstreamHttpError(providerItem, url, response.status, rawText);
 
     const assistantMessage = raw.choices?.[0]?.message ?? {};
     const content = completionMessageText(raw);
@@ -1420,7 +1434,7 @@ export async function fetchOpenAiAuxiliaryStream(
     responseBody: textBody(text),
     error: response.ok ? undefined : textBody(text),
   });
-  if (!response.ok) throw new Error(`${providerItem.name} ${response.status}: ${text.slice(0, 500)}`);
+  if (!response.ok) throw upstreamHttpError(providerItem, url, response.status, text);
   return text.trim() || "(empty response)";
 }
 
@@ -1450,7 +1464,7 @@ export async function fetchClaudeAuxiliaryStream(
       responseBody: textBody(text),
       error: textBody(text),
     });
-    throw new Error(`${providerItem.name} ${response.status}: ${text.slice(0, 500)}`);
+    throw upstreamHttpError(providerItem, url, response.status, text);
   }
   const text = await readClaudeStream(response, (content) => {
     onDelta(content);
@@ -1553,7 +1567,7 @@ export async function fetchGoogleAuxiliaryStream(
     responseBody: textBody(rawText),
     error: response.ok ? undefined : textBody(rawText),
   });
-  if (!response.ok) throw new Error(`${providerItem.name} ${response.status}: ${rawText.slice(0, 500)}`);
+  if (!response.ok) throw upstreamHttpError(providerItem, url, response.status, rawText);
   const chunks = rawText
     .split(/\r?\n/)
     .map((line) => line.trim())
