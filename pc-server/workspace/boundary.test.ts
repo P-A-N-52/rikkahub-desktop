@@ -174,3 +174,32 @@ describe("工具全链路(内核 pi 原样 + 有界 Operations)", () => {
       .rejects.toThrow(/Access denied|Could not edit/);
   });
 });
+
+describe("Windows 保留设备名写入阻断(问题4,2.0.0 内测)", () => {
+  const onWindows = process.platform === "win32";
+
+  test.if(onWindows)("write/edit/mkdir 拒绝保留名(含带扩展名形式),普通名不受影响", async () => {
+    const ops = createBoundedWriteOperations(root);
+    await expect(ops.writeFile(join(root, "nul"), "x")).rejects.toThrow("reserved Windows device name");
+    await expect(ops.writeFile(join(root, "CON.log"), "x")).rejects.toThrow("reserved Windows device name");
+    await expect(ops.mkdir(join(root, "lpt1"))).rejects.toThrow("reserved Windows device name");
+
+    const editOps = createBoundedEditOperations(root);
+    await expect(editOps.writeFile(join(root, "com3.txt"), "x")).rejects.toThrow("reserved Windows device name");
+
+    await ops.writeFile(join(root, "reserved-ok.txt"), "fine");
+    expect(readFileSync(join(root, "reserved-ok.txt"), "utf-8")).toBe("fine");
+  });
+
+  test.if(onWindows)("宽界写同样拒绝(full_access 也不许写设备黑洞)", async () => {
+    const wide = createWideWriteOperations(root);
+    await expect(wide.writeFile(join(root, "aux"), "x")).rejects.toThrow("reserved Windows device name");
+    await expect(wide.mkdir(join(root, "prn"))).rejects.toThrow("reserved Windows device name");
+  });
+
+  test.if(!onWindows)("非 win32 平台不拦(nul 是合法文件名)", async () => {
+    const ops = createBoundedWriteOperations(root);
+    await ops.writeFile(join(root, "nul"), "posix-ok");
+    expect(readFileSync(join(root, "nul"), "utf-8")).toBe("posix-ok");
+  });
+});

@@ -7,10 +7,12 @@ import { state } from "../persistence/json-store";
 import { broadcastConversation } from "../api/sse";
 import { DEFAULT_AUTO_MODEL_ID, applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
+import { openAiMaxTokensField } from "../model-providers/request-dialect";
 import {
   auxiliaryReasoningPayloadForProvider,
   claudeThinkingPayload,
   dataUrlForMessageUrl,
+  hostOfProvider,
   isModelAllowTemperature,
   parseDataUrl,
   reasoningLevelNormalized,
@@ -195,7 +197,8 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
         model: selectedModel,
         messages: [{ role: "user", content: prompt }],
         stream,
-        ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
+        // 上限字段名走统一请求方言（model-providers/request-dialect），与主生成路径一致。
+        ...(maxTokens != null ? { [openAiMaxTokensField(hostOfProvider(providerItem))]: maxTokens } : {}),
         ...(options.temperature != null && isModelAllowTemperature(modelItem) ? { temperature: options.temperature } : {}),
         ...(options.topP != null && isModelAllowTemperature(modelItem) ? { top_p: options.topP } : {}),
         ...auxiliaryReasoningPayloadForProvider(providerItem, modelItem, reasoningLevel),
@@ -308,7 +311,8 @@ async function fetchAuxiliaryOcrText(imageUrl: string) {
             { type: "image_url", image_url: { url: dataUrl } },
           ],
         }],
-        max_tokens: 2048,
+        // 上限字段名走统一请求方言（o 系官方口同样具备视觉能力，恒发 max_tokens 会 400）。
+        [openAiMaxTokensField(hostOfProvider(providerItem))]: 2048,
         temperature: isModelAllowTemperature(modelItem) ? 0 : undefined,
       };
   return cleanAuxiliaryText(await fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, completionMessageText));

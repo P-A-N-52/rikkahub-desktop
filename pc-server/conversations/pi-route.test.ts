@@ -17,7 +17,7 @@ const conversations = await import("./index");
 const { configureWorkingSet, registerConversation } = await import("./working-set");
 const { getConversationMeta } = await import("./read-queries");
 const { generating } = await import("./generation-state");
-const { generateAnswer } = await import("./orchestrator");
+const { compactEngineConversation, generateAnswer, resolveEngineForConversation } = await import("./orchestrator");
 const ws = await import("../workspace");
 const { defaultAssistant } = await import("../assistants");
 const { defaultState } = await import("../app-config/defaults");
@@ -50,11 +50,15 @@ afterAll(async () => {
   await Promise.all(servers.map((server) => server.close()));
 });
 
-/** 每用例独立假上游 + 独立 state(chatModelId 指向该上游),脚本互不串扰。 */
-async function installUpstream(turns: FakeSseTurn[]) {
+/** 每用例独立假上游 + 独立 state(chatModelId 指向该上游),脚本互不串扰。
+ *  reasoningModel:给模型标 REASONING 能力(pi 侧映射 reasoning=true)——请求口径
+ *  回归用(推理模型才触发 pi 的 developer 角色分支,见 model-bridge compat 覆盖)。
+ *  maxTokens/systemPrompt:写进助手配置,跨引擎方言平价用例用(两引擎读同一配置)。 */
+async function installUpstream(turns: FakeSseTurn[], opts?: { reasoningModel?: boolean; maxTokens?: number; systemPrompt?: string }) {
   const server = await startFakeOpenAiSse(turns);
   servers.push(server);
   const ourModel = model("fake-model", "Route Test Model");
+  if (opts?.reasoningModel) ourModel.abilities.push("REASONING");
   const ourProvider = provider({
     id: crypto.randomUUID(),
     name: "Route Test Provider",
@@ -65,7 +69,13 @@ async function installUpstream(turns: FakeSseTurn[]) {
   });
   const next = defaultState();
   next.settings.assistantId = "a1";
-  next.settings.assistants = [{ ...defaultAssistant(), id: "a1", name: "route-e2e" }];
+  next.settings.assistants = [{
+    ...defaultAssistant(),
+    id: "a1",
+    name: "route-e2e",
+    ...(opts?.maxTokens != null ? { maxTokens: opts.maxTokens } : {}),
+    ...(opts?.systemPrompt != null ? { systemPrompt: opts.systemPrompt } : {}),
+  }];
   next.settings.providers = [ourProvider];
   next.settings.chatModelId = ourModel.id;
   next.settings.titleModelId = "";
@@ -178,6 +188,63 @@ describe("generateAnswer P3 路由", () => {
     expect(serialized).toContain("接着干活");
   }, 30_000);
 
+  test("推理模型的工作区请求:系统提示词恒 system 角色 + 上限恒 max_tokens(2.0.0 内测缺陷回归)", async () => {
+    // 复现内测环境:第三方 OpenAI 兼容端点(假上游即"未知 baseUrl")+ 标 REASONING 的
+    // 模型。修复前 pi 的 compat 自动探测按官方 OpenAI 假设:1)系统消息以 "developer"
+    // 角色发出——DashScope 类 400 拒角色、火山方舟报 missing input.role;2)输出上限发
+    // max_completion_tokens——第三方端点静默忽略未知字段,上限失效。修复(model-bridge
+    // piCompatOverridesFor)后与聊天引擎同发 "system" + max_tokens。断言真实出站请求体,
+    // 锁两引擎请求口径一致。
+    const server = await installUpstream([{ content: "推理模型工作区回答" }], { reasoningModel: true });
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-reasoning-role" });
+    const conversation = seedConversation(workspace.id);
+    await generateAnswer(conversation);
+
+    expect(partsText(conversation)).toContain("推理模型工作区回答");
+    const request = server.requests[0] as {
+      messages?: Array<{ role?: string }>;
+      max_tokens?: number;
+      max_completion_tokens?: number;
+    };
+    const roles = (request?.messages ?? []).map((item) => item.role ?? "");
+    expect(roles.length).toBeGreaterThan(0);
+    expect(roles).toContain("system");
+    expect(roles).not.toContain("developer");
+    expect(request?.max_completion_tokens).toBeUndefined();
+    expect(request?.max_tokens).toBeGreaterThan(0);
+  }, 30_000);
+
+  test("跨引擎请求方言平价:chat 与 pi 对同一第三方上游,系统角色/上限字段/上限数值逐字一致(T4.7)", async () => {
+    // 统一请求方言(model-providers/request-dialect)的层3回归:同一助手配置
+    // (maxTokens=1024 + 系统提示词)驱动两个引擎打同一个假上游,断言真实出站请求体的
+    // 方言字段完全一致——聊天引擎由构建体直接消费方言,pi 经 model-bridge compat 翻译,
+    // 两条翻译路径必须收敛到同一字节。任一引擎将来漂移(如 pi 升级改探测默认),此测试先红。
+    const server = await installUpstream(
+      [{ content: "chat 侧回答" }, { content: "pi 侧回答" }],
+      { reasoningModel: true, maxTokens: 1024, systemPrompt: "平价测试系统提示词" },
+    );
+    const chatConversation = seedConversation(null);
+    await generateAnswer(chatConversation);
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-dialect-parity" });
+    const piConversation = seedConversation(workspace.id);
+    await generateAnswer(piConversation);
+
+    expect(partsText(chatConversation)).toContain("chat 侧回答");
+    expect(partsText(piConversation)).toContain("pi 侧回答");
+    expect(server.requests.length).toBe(2);
+    for (const request of server.requests as Array<{
+      messages?: Array<{ role?: string }>;
+      max_tokens?: number;
+      max_completion_tokens?: number;
+    }>) {
+      const roles = (request.messages ?? []).map((item) => item.role ?? "");
+      expect(roles).toContain("system");
+      expect(roles).not.toContain("developer");
+      expect(request.max_completion_tokens).toBeUndefined();
+      expect(request.max_tokens).toBe(1024);
+    }
+  }, 30_000);
+
   test("非工作区会话走聊天引擎原路:零 pi 痕迹", async () => {
     const server = await installUpstream([{ content: "聊天回答" }]);
     const conversation = seedConversation(null);
@@ -231,5 +298,38 @@ describe("generateAnswer P3 路由", () => {
     expect(toolPart?.approvalState?.type).toBe("approved");
     expect(pendingToolApprovalCount()).toBe(0);
     expect(generating.has(conversation.id)).toBe(false);
+  }, 30_000);
+});
+
+describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
+  test("resolveEngineForConversation:工作区会话命中 pi,普通会话落 chat 兜底", async () => {
+    await installUpstream([{ content: "未使用" }]);
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-resolve" });
+
+    // 审批端点(tool-approval)据 resumeSemantics 决定"记录状态"还是"重触发续跑",
+    // 压缩端点据 compact 有无决定"引擎压缩"还是"回落 UI 历史压缩"——这里锁死两个
+    // 引擎的声明,防止 adapter 改动悄悄改变端点行为。
+    const piAdapter = resolveEngineForConversation(seedConversation(workspace.id));
+    expect(piAdapter.kind).toBe("pi");
+    expect(piAdapter.resumeSemantics).toBe("run-and-suspend");
+    expect(typeof piAdapter.compact).toBe("function");
+
+    const chatAdapter = resolveEngineForConversation(seedConversation(null));
+    expect(chatAdapter.kind).toBe("chat");
+    expect(chatAdapter.resumeSemantics).toBe("pause-resume");
+    expect(chatAdapter.compact).toBeUndefined();
+  }, 30_000);
+
+  test("compactEngineConversation:普通会话回落(null),工作区会话穿透到 pi 压缩驱动", async () => {
+    await installUpstream([{ content: "未使用" }]);
+    // chat 无 compact 能力 → null,调用方(compress 端点)回落 UI 历史压缩。
+    expect(await compactEngineConversation(seedConversation(null), "")).toBeNull();
+
+    // 工作区会话:注册表命中 pi adapter → runtime 透传 → 压缩装配(富化/资源)→
+    // pi session.compact。小会话在发起任何模型请求前抛"记忆还很小"(runner 已映射
+    // 成人话)——该错误文本即"路由穿透到引擎压缩驱动"的硬证据,且全程无上游请求。
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-compact" });
+    const conversation = seedConversation(workspace.id);
+    await expect(compactEngineConversation(conversation, "")).rejects.toThrow("引擎记忆还很小");
   }, 30_000);
 });

@@ -31,11 +31,10 @@ import {
 import { bumpAnalyticsMsgCount } from "../../app-config/analytics";
 import { DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
 import { attachOcrToImageParts, compressConversation, englishLanguageName, fetchAuxiliaryText, generateTitleForConversation, isQwenMtModel, markOcrPendingParts } from "../../conversations/auxiliary";
-import { compactWorkspaceConversation, generateAnswer } from "../../conversations/orchestrator";
+import { compactEngineConversation, generateAnswer, resolveEngineForConversation } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
 import { generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
-import { workspaceRuntimeForConversation } from "../../workspace/runtime";
 import { resolveToolApproval } from "../../inference-engine/approval-gate";
 
 export async function handleConversationRoutes(request: Request, url: URL, path: string): Promise<Response | null> {
@@ -528,14 +527,15 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       generating.delete(conversation.id);
       finishInterruptedPendingToolsInConversation(conversation);
       try {
-        // P5:工作区会话(工作区可用)手动压缩走引擎原生 compaction——压引擎记忆
-        // (它才决定发给上游的上下文),UI 历史不动。targetTokens/keepRecentMessages
-        // 是 UI 历史压缩的参数,对引擎压缩无意义,只透传 additionalPrompt 作自定义指示。
-        // 工作区不可用(缺根/未信任)返回 null → 回落 UI 历史压缩,与生成路由降级一致。
-        // T3:压缩是引擎无关能力——函数/字段名去 pi 化;返回体 engine 仍报当前引擎(pi)。
-        const engineResult = await compactWorkspaceConversation(conversation, String(body.additionalPrompt ?? ""), request.signal);
+        // P5:手动压缩优先走引擎原生 compaction——压引擎记忆(它才决定发给上游的
+        // 上下文),UI 历史不动。targetTokens/keepRecentMessages 是 UI 历史压缩的参数,
+        // 对引擎压缩无意义,只透传 additionalPrompt 作自定义指示。
+        // 压缩路由收编:经注册表分发(与生成路由同源),每个引擎自带压缩机制;
+        // 命中引擎无 compact 能力(chat)或工作区不可用(pi 不命中、落 chat 兜底)
+        // 返回 null → 回落 UI 历史压缩,与生成路由降级一致。engine 报真实命中引擎。
+        const engineResult = await compactEngineConversation(conversation, String(body.additionalPrompt ?? ""), request.signal);
         if (engineResult) {
-          return json({ status: "compressed", engine: "pi", summaries: [engineResult.summary] });
+          return json({ status: "compressed", engine: engineResult.engine, summaries: [engineResult.summary] });
         }
         // R7-4:透传 request.signal——客户端取消(压缩框取消键)后,compressConversation
         // 在分块间与落库前检查,保证取消后不改写会话。
@@ -599,16 +599,19 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       conversation.updateAt = Date.now();
       persistConversation(conversation);
       broadcastConversation(conversation);
-      // P3(pi 引擎,方案 §4.4):审批内化后决定送达在途等待者,生成保持在跑,execute
-      // 原地放行/拒绝——不走"暂停→重触发续跑"。pi 路由会话即使无等待者(生成已死的
-      // 孤儿审批:重启/停止后才点卡)也只记录状态:pi 无续跑模型,重触发会向引擎记忆
-      // 重复注入末条用户消息;引擎侧悬空 toolCall 由 pi 在下轮请求时自愈
-      // (pi/packages/ai transform-messages 注入合成空结果)。
+      // P3(方案 §4.4):审批内化后优先送达在途等待者(approval-gate 汇合),生成保持
+      // 在跑,execute 原地放行/拒绝——不走"暂停→重触发续跑"。
+      // 审批旁路判定收编(原 B-2 登记点):无等待者时"是否重触发"改问注册表的
+      // resumeSemantics,不再以"工作区可用"旁路推断引擎——与生成路由同源,第三引擎
+      // 接入时本端点自动跟随其声明的语义。run-and-suspend 引擎(pi)即使无等待者
+      // (生成已死的孤儿审批:重启/停止后才点卡)也只记录状态:该类引擎无续跑模型,
+      // 重触发会向引擎记忆重复注入末条用户消息;引擎侧悬空 toolCall 由 pi 在下轮
+      // 请求时自愈(pi/packages/ai transform-messages 注入合成空结果)。
       const consumed = resolveToolApproval(conversation.id, String(body.toolCallId ?? ""), {
         approved: body.approved === true,
         ...(body.reason ? { reason: String(body.reason) } : {}),
       });
-      if (consumed || workspaceRuntimeForConversation(conversation)) {
+      if (consumed || resolveEngineForConversation(conversation).resumeSemantics === "run-and-suspend") {
         return json({ status: "accepted" }, { status: 202 });
       }
       const hasPendingTools = conversation.messages.some((node) =>

@@ -236,3 +236,53 @@ describe("会话工作区列迁移", () => {
     expect(ws.listWorkspaces().length).toBeGreaterThan(0);
   });
 });
+
+describe("工作区 ↔ 文件夹 1:1 不变式(2.0.0 内测反馈)", () => {
+  test("同目录重复创建 = 打开既有工作区:同 id、不建新行、名字与信任状态保持", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rkh-ws-dup-"));
+    const first = ws.createWorkspace({ type: "folder", root: dir });
+    ws.trustWorkspace(first.id);
+    const before = ws.listWorkspaces().length;
+    const again = ws.createWorkspace({ type: "folder", root: dir });
+    expect(again.id).toBe(first.id);
+    expect(again.name).toBe(first.name);
+    expect(again.trustedAt).not.toBeNull(); // 打开既有工作区,信任状态原样保留
+    expect(ws.listWorkspaces().length).toBe(before);
+  });
+
+  test("路径写法归一:尾部斜杠与大小写变体(win32)命中同一工作区", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rkh-ws-norm-"));
+    const first = ws.createWorkspace({ type: "folder", root: dir });
+    const withTrailing = ws.createWorkspace({ type: "folder", root: dir + sep });
+    expect(withTrailing.id).toBe(first.id);
+    if (process.platform === "win32") {
+      const upper = ws.createWorkspace({ type: "folder", root: dir.toUpperCase() });
+      expect(upper.id).toBe(first.id);
+    }
+  });
+
+  test("重绑到已被其他工作区绑定的目录 → 拒绝;自身大小写变体 → 视为无变化不重置信任", () => {
+    const dirA = mkdtempSync(join(tmpdir(), "rkh-ws-rb-a-"));
+    const dirB = mkdtempSync(join(tmpdir(), "rkh-ws-rb-b-"));
+    const a = ws.createWorkspace({ type: "folder", root: dirA });
+    const b = ws.createWorkspace({ type: "folder", root: dirB });
+    expect(() => ws.updateWorkspace(b.id, { root: dirA })).toThrow("已绑定");
+    // 重绑到空闲目录仍然可用(B6-①b 能力保留,信任门重置)
+    const dirC = mkdtempSync(join(tmpdir(), "rkh-ws-rb-c-"));
+    ws.trustWorkspace(b.id);
+    const rebound = ws.updateWorkspace(b.id, { root: dirC });
+    expect(rebound?.root).toBe(dirC);
+    expect(rebound?.trustedAt).toBeNull();
+    // 自身同目录的大小写变体:非换绑,信任与原路径写法保持
+    ws.trustWorkspace(a.id);
+    if (process.platform === "win32") {
+      const updated = ws.updateWorkspace(a.id, { root: dirA.toUpperCase() });
+      expect(updated?.trustedAt).not.toBeNull();
+      expect(updated?.root).toBe(dirA); // 保留原写法
+    }
+    // managed 型不受不变式影响:root 由 id 派生天然互异,可并存多个
+    const m1 = ws.createWorkspace({ type: "managed", name: "inv-m1" });
+    const m2 = ws.createWorkspace({ type: "managed", name: "inv-m2" });
+    expect(m1.id).not.toBe(m2.id);
+  });
+});

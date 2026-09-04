@@ -1,12 +1,13 @@
 // workspace/files.test.ts — 文件面板领域操作单测（M3-5）。reveal 不测（起系统进程）。
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Workspace } from "../foundation/types";
 import { WorkspaceBoundaryError } from "./boundary";
-import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, renameWorkspaceEntry } from "./files";
+import { deleteWorkspaceEntry, listWorkspaceDir, previewWorkspaceFile, renameWorkspaceEntry, sweepWorkspaceReservedNameArtifacts } from "./files";
+import { windowsSafeFsPath } from "../foundation/windows-names";
 
 const host = mkdtempSync(join(tmpdir(), "rkh-files-"));
 const root = join(host, "ws");
@@ -64,5 +65,39 @@ describe("rename/delete", () => {
     expect(() => deleteWorkspaceEntry(workspace, "")).toThrow("Cannot delete the workspace root");
     expect(() => deleteWorkspaceEntry(workspace, "../outside.txt")).toThrow(WorkspaceBoundaryError);
     expect(existsSync(join(host, "outside.txt"))).toBe(true);
+  });
+});
+
+describe("Windows 保留设备名残留处置(问题4,2.0.0 内测)", () => {
+  const onWindows = process.platform === "win32";
+
+  test.if(onWindows)("字面 nul 残留:面板可见(真实体积)、可预览、可删除", async () => {
+    await Bun.write(windowsSafeFsPath(join(root, "nul")), "stray-bytes");
+    const entries = listWorkspaceDir(workspace, "");
+    const nul = entries.find((e) => e.name === "nul");
+    expect(nul?.type).toBe("file");
+    expect(nul?.size).toBe(11);
+
+    const preview = await previewWorkspaceFile(workspace, "nul");
+    expect(preview).toEqual({ kind: "text", text: "stray-bytes", truncated: false, size: 11 });
+
+    deleteWorkspaceEntry(workspace, "nul");
+    expect(listWorkspaceDir(workspace, "").some((e) => e.name === "nul")).toBe(false);
+  });
+
+  test.if(onWindows)("重命名救活残留;重命名目标为保留名被拒", async () => {
+    await Bun.write(windowsSafeFsPath(join(root, "nul")), "rescue-me");
+    renameWorkspaceEntry(workspace, "nul", "rescued.txt");
+    expect(readFileSync(join(root, "rescued.txt"), "utf-8")).toBe("rescue-me");
+
+    expect(() => renameWorkspaceEntry(workspace, "rescued.txt", "con")).toThrow("reserved Windows device name");
+    expect(() => renameWorkspaceEntry(workspace, "rescued.txt", "NUL.txt")).toThrow("reserved Windows device name");
+    deleteWorkspaceEntry(workspace, "rescued.txt");
+  });
+
+  test.if(onWindows)("sweepWorkspaceReservedNameArtifacts 清扫顶层裸名残留", async () => {
+    await Bun.write(windowsSafeFsPath(join(root, "nul")), "x");
+    sweepWorkspaceReservedNameArtifacts(root);
+    expect(listWorkspaceDir(workspace, "").some((e) => e.name === "nul")).toBe(false);
   });
 });

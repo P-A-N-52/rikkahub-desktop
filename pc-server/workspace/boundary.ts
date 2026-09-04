@@ -21,6 +21,7 @@ import { realpathSync } from "node:fs";
 import { constants } from "node:fs";
 import { access as fsAccess, mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { isWindowsReservedName } from "../foundation/windows-names";
 import type { ReadOperations } from "./tools/read";
 import type { WriteOperations } from "./tools/write";
 import type { EditOperations } from "./tools/edit";
@@ -100,7 +101,7 @@ export function createBoundedWriteOperations(root: string): WriteOperations {
     // async 包裹:边界断言的同步 throw 统一成 rejected promise(Operations 契约)
     writeFile: async (absolutePath, content) => writeWithHardLimit(assertInsideWorkspace(absolutePath, root), content, "Content"),
     mkdir: async (dir) => {
-      await fsMkdir(assertInsideWorkspace(dir, root), { recursive: true });
+      await fsMkdir(assertNotWindowsReservedName(assertInsideWorkspace(dir, root)), { recursive: true });
     },
   };
 }
@@ -150,7 +151,24 @@ export function assertWideWritablePath(absolutePath: string, root: string): stri
   return canonicalizeWithNonexistentTail(absolutePath);
 }
 
+/** Windows 保留设备名写入阻断(问题4,2.0.0 内测)。此类路径在 Win32 语义下是设备:
+ *  写入内容会静默进入设备黑洞(工具却报成功),而经 NT 命名空间落盘的同名真实文件
+ *  Explorer/cmd 无法删除。模型写它必属误用(通常把 nul 当 /dev/null),明确报错引导换名。
+ *  仅 win32 生效:macOS/Linux 上这些是合法文件名。读不设限(读残留文件是合法诊断动作)。 */
+function assertNotWindowsReservedName(safePath: string): string {
+  if (process.platform === "win32") {
+    const name = basename(safePath);
+    if (isWindowsReservedName(name)) {
+      throw new Error(
+        `"${name}" is a reserved Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9). Writing to it goes to a device, not a file. Choose a different name.`,
+      );
+    }
+  }
+  return safePath;
+}
+
 async function writeWithHardLimit(safePath: string, content: string, what: string): Promise<void> {
+  assertNotWindowsReservedName(safePath);
   const bytes = Buffer.byteLength(content, "utf-8");
   if (bytes > WRITE_HARD_LIMIT_BYTES) {
     throw new Error(
@@ -175,7 +193,7 @@ export function createWideWriteOperations(root: string): WriteOperations {
   return {
     writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Content"),
     mkdir: async (dir) => {
-      await fsMkdir(assertWideWritablePath(dir, root), { recursive: true });
+      await fsMkdir(assertNotWindowsReservedName(assertWideWritablePath(dir, root)), { recursive: true });
     },
   };
 }

@@ -43,6 +43,26 @@ export interface EngineRunContext {
   executeTool: ToolExecutor;
 }
 
+/** 引擎无关的压缩输入包(编排器压缩入口装配,与 EngineRunContext 同哲学:
+ *  只含引擎无关输入,引擎专属决策由各 adapter 内部解析)。 */
+export interface EngineCompactContext {
+  conversation: Conversation;
+  assistant: Assistant;
+  provider: Provider;
+  model: Model;
+  /** 用户附加指示(compress 框的 additionalPrompt)。 */
+  customInstructions: string;
+}
+
+/** 引擎原生压缩的产出(展示/日志用途)。压缩记录落库(conversation.engineCompactions)
+ *  是各引擎注入实现的义务——与生成路径的压缩捕获同一落点、同一 helper。 */
+export interface EngineCompactionResult {
+  summary: string;
+  tokensBefore: number;
+  /** 引擎对压缩后上下文的估算(拿不到为 null)。 */
+  estimatedTokensAfter: number | null;
+}
+
 export interface EngineAdapter {
   readonly kind: EngineKind;
   /** 路由判定:该会话是否由本引擎接管。注册表按序取首个命中;chat 恒 true 兜底。 */
@@ -50,6 +70,11 @@ export interface EngineAdapter {
   readonly resumeSemantics: EngineResumeSemantics;
   /** 驱动一次生成,经 sink 发出 GenerationEvent,返回最终文本。 */
   run(ctx: EngineRunContext, sink: GenerationEventSink, signal?: AbortSignal): Promise<string>;
+  /** 可选能力:引擎原生压缩(压引擎记忆,UI 历史不动)。每个引擎的压缩机制独立设计
+   *  (prompt/切点语义各异),但共享同一调用面与 engine_status 瞬态状态通道(经 sink,
+   *  广播与终局清条由调用方统一负责)。未声明 = 该引擎无原生压缩,调用方回落
+   *  UI 历史压缩。 */
+  compact?(ctx: EngineCompactContext, sink: GenerationEventSink, signal?: AbortSignal): Promise<EngineCompactionResult>;
 }
 
 /** 生成函数注入形状:编排器把真实实现注入 adapter 工厂,engines/ 与 orchestrator 解耦。 */
@@ -65,11 +90,21 @@ export type PiRunFn = (
   sink: GenerationEventSink,
   signal?: AbortSignal,
 ) => Promise<string>;
+/** pi 压缩实现签名:与 PiRunFn 同构(引擎无关输入包 + adapter 透传的 runtime)。 */
+export type PiCompactFn = (
+  ctx: EngineCompactContext & { piRuntime: WorkspaceRuntime | null },
+  sink: GenerationEventSink,
+  signal?: AbortSignal,
+) => Promise<EngineCompactionResult>;
 
 /** 组装引擎注册表(编排器在模块加载时调用一次)。顺序即优先级:pi 在前(能力命中
  *  才接管),chat 恒兜底。新增引擎往数组前部插(chat 必须保持最后兜底)。 */
-export function createEngineRegistry(deps: { chatRun: ChatRunFn; piRun: PiRunFn }): EngineAdapter[] {
-  return [createPiAdapter(deps.piRun), createChatAdapter(deps.chatRun)];
+export function createEngineRegistry(deps: {
+  chatRun: ChatRunFn;
+  piRun: PiRunFn;
+  piCompact: PiCompactFn;
+}): EngineAdapter[] {
+  return [createPiAdapter({ run: deps.piRun, compact: deps.piCompact }), createChatAdapter(deps.chatRun)];
 }
 
 /** 路由:遍历注册表取首个 matches() 命中的 adapter;数组恒含 chat 兜底,不会空。 */

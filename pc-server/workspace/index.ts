@@ -121,6 +121,26 @@ function sanitizeName(raw: unknown, fallback: string): string {
   return name || fallback;
 }
 
+/** 路径身份比较键:Windows 文件系统大小写不敏感,统一小写参与比较;resolve() 已归一
+ *  分隔符与尾部斜杠。不追 symlink/junction 别名——目录别名的越权问题归边界层
+ *  (boundary.ts)管,这里只负责"同一路径写法"的身份判定,过度解析反而引入网络盘/
+ *  subst 的兼容坑。 */
+function comparablePath(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/** 工作区 ↔ 文件夹 1:1 不变式的查询半边:该目录当前绑定的 folder 型工作区(无则 null)。
+ *  会话/信任/权限/宿主目录全挂在工作区实体上,允许同目录重复绑定会造成"平行工作区、
+ *  历史互不可见"的割裂(2.0.0 内测反馈)。managed 型 root 由 id 派生且必在 dataDir 内、
+ *  与 folder 型准入互斥(validateFolderRoot 拒绝 dataDir 重叠),天然不参与查重。 */
+export function findWorkspaceByRoot(root: string): Workspace | null {
+  const target = comparablePath(root);
+  for (const workspace of listWorkspaces()) {
+    if (workspace.type === "folder" && comparablePath(workspace.root) === target) return workspace;
+  }
+  return null;
+}
+
 /** folder 型根目录准入校验。返回规范化绝对路径,不合法抛错(错误文案直达 UI)。 */
 export function validateFolderRoot(rawRoot: unknown): string {
   const raw = String(rawRoot ?? "").trim();
@@ -144,9 +164,8 @@ export function validateFolderRoot(rawRoot: unknown): string {
   // 操作系统系统目录拒绝(M1 冒烟发现的缺口):这类目录做工作区无正当场景,
   // 写坏即系统级灾难。只拦"等于或位于系统目录内",不拦包含关系(C:\ 已被盘根规则拦)。
   // Windows 路径大小写不敏感,比较前统一小写。
-  const comparable = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
   for (const sysDir of systemDenyDirs()) {
-    if (comparable(root) === comparable(sysDir) || comparable(rootPrefixed).startsWith(comparable(sysDir + sep))) {
+    if (comparablePath(root) === comparablePath(sysDir) || comparablePath(rootPrefixed).startsWith(comparablePath(sysDir + sep))) {
       throw new Error("不能以操作系统目录作为工作区");
     }
   }
@@ -173,6 +192,14 @@ export function createWorkspace(input: { type: WorkspaceType; name?: unknown; ro
   let trustedAt: number | null = now; // managed 型创建即信任(§3.3)
   if (input.type === "folder") {
     root = validateFolderRoot(input.root);
+    // 工作区 ↔ 文件夹 1:1 不变式(2.0.0 内测反馈):同一目录重复"创建"= 打开既有
+    // 工作区(open-or-create),不再造平行工作区把历史会话藏起来。folder 型创建
+    // 对话框本就不收名字,无"改名"歧义;返回形状与新建一致,前端 onCreated 自然选中。
+    const bound = findWorkspaceByRoot(root);
+    if (bound) {
+      touchWorkspaceAccess(bound.id);
+      return getWorkspace(bound.id) ?? bound;
+    }
     trustedAt = null; // folder 型必须显式过信任门
   }
   // 默认档位(权限档位改版):一律"默认权限"(balanced);但记住用户上一次的显式选择——
@@ -219,7 +246,11 @@ export function updateWorkspace(workspaceId: string, patch: { name?: unknown; pe
   if (patch.root !== undefined) {
     if (existing.type !== "folder") throw new Error("仅 folder 型工作区可重新绑定目录");
     const newRoot = validateFolderRoot(patch.root);
-    if (newRoot !== existing.root) {
+    // 大小写变体视为同目录(comparablePath):不算换绑,信任不重置。
+    if (comparablePath(newRoot) !== comparablePath(existing.root)) {
+      // 1:1 不变式的另一半:重绑目标已被其他工作区绑定 → 拒绝(错误文案直达 UI)。
+      const bound = findWorkspaceByRoot(newRoot);
+      if (bound && bound.id !== workspaceId) throw new Error(`该文件夹已绑定工作区「${bound.name}」`);
       root = newRoot;
       trustedAt = null; // 重绑新目录 → 信任门重置,待用户重确认
     }

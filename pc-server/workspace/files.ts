@@ -7,6 +7,8 @@ import { readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync 
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import type { Workspace } from "../foundation/types";
+import { isWindowsReservedName, reservedNameSafeFsPath, sweepWindowsReservedNames } from "../foundation/windows-names";
+import { reportError } from "../observability/app-errors";
 import { assertInsideWorkspace, READ_HARD_LIMIT_BYTES } from "./boundary";
 import { detectSupportedImageMimeTypeFromFile } from "./tools/mime";
 
@@ -34,7 +36,9 @@ export function listWorkspaceDir(workspace: Workspace, relPath: string): Workspa
   const entries: WorkspaceFileEntry[] = [];
   for (const name of readdirSync(dir)) {
     try {
-      const stats = statSync(join(dir, name));
+      // 保留名条目(nul 等,问题4)必须经 NT 路径 stat:Win32 语义把它当设备报 ENOENT,
+      // 条目被 catch 跳过而在面板"隐身"——残留却在 Explorer 里可见,用户无从处置。
+      const stats = statSync(reservedNameSafeFsPath(join(dir, name)));
       entries.push({
         name,
         type: stats.isDirectory() ? "dir" : "file",
@@ -48,6 +52,13 @@ export function listWorkspaceDir(workspace: Workspace, relPath: string): Workspa
   return entries.sort((a, b) => (a.type !== b.type ? (a.type === "dir" ? -1 : 1) : a.name.localeCompare(b.name)));
 }
 
+/** 预览读取:普通路径用 node:fs;NT 前缀路径(保留名残留,问题4)用 Bun.file——Bun 的
+ *  node:fs 对裸设备名有特判(读写可能被路由到设备),Bun.file 无此特判(实证 2026-09)。 */
+async function readPreviewBuffer(fsPath: string): Promise<Buffer> {
+  if (!fsPath.startsWith("\\\\?\\")) return readFileSync(fsPath);
+  return Buffer.from(await Bun.file(fsPath).arrayBuffer());
+}
+
 /** 首 8KB 含 NUL 即按二进制处理(通用启发,git 同款)。 */
 function looksBinary(buffer: Buffer): boolean {
   return buffer.subarray(0, 8192).includes(0);
@@ -55,15 +66,17 @@ function looksBinary(buffer: Buffer): boolean {
 
 export async function previewWorkspaceFile(workspace: Workspace, relPath: string): Promise<WorkspaceFilePreview> {
   const path = resolveInside(workspace, relPath);
-  const stats = statSync(path);
+  // 保留名文件(问题4)走 NT 路径;stat/mime/读取全部同源,预览残留内容可辅助定位制造者。
+  const fsPath = reservedNameSafeFsPath(path);
+  const stats = statSync(fsPath);
   if (!stats.isFile()) throw new Error("Not a file");
-  const imageMime = await detectSupportedImageMimeTypeFromFile(path);
+  const imageMime = await detectSupportedImageMimeTypeFromFile(fsPath);
   if (imageMime) {
     if (stats.size > IMAGE_PREVIEW_LIMIT_BYTES) return { kind: "binary", size: stats.size };
-    return { kind: "image", dataUrl: `data:${imageMime};base64,${readFileSync(path).toString("base64")}`, size: stats.size };
+    return { kind: "image", dataUrl: `data:${imageMime};base64,${(await readPreviewBuffer(fsPath)).toString("base64")}`, size: stats.size };
   }
   const truncated = stats.size > READ_HARD_LIMIT_BYTES;
-  const buffer = readFileSync(path);
+  const buffer = await readPreviewBuffer(fsPath);
   if (looksBinary(buffer)) return { kind: "binary", size: stats.size };
   const slice = truncated ? buffer.subarray(0, READ_HARD_LIMIT_BYTES) : buffer;
   return { kind: "text", text: slice.toString("utf-8"), truncated, size: stats.size };
@@ -72,6 +85,10 @@ export async function previewWorkspaceFile(workspace: Workspace, relPath: string
 function assertValidEntryName(name: string): void {
   if (!name || name === "." || name === "..") throw new Error("Invalid name");
   if (name.includes("/") || name.includes("\\") || name.includes("\0")) throw new Error("Name must not contain path separators");
+  // 问题4:win32 拒绝设备保留名(nul/con/com1…,含带扩展名形式)——重命名成它即产生残留。
+  if (process.platform === "win32" && isWindowsReservedName(name)) {
+    throw new Error("Name is a reserved Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)");
+  }
 }
 
 export function renameWorkspaceEntry(workspace: Workspace, relPath: string, newName: string): void {
@@ -80,13 +97,16 @@ export function renameWorkspaceEntry(workspace: Workspace, relPath: string, newN
   if (comparable(path) === comparable(workspace.root)) throw new Error("Cannot rename the workspace root");
   const target = join(dirname(path), newName);
   assertInsideWorkspace(target, workspace.root);
-  renameSync(path, target);
+  // 源经 NT 安全路径:保留名残留可被"改名成正常名"救活(问题4 自愈路径);目标名已过校验必非保留名。
+  renameSync(reservedNameSafeFsPath(path), target);
 }
 
 export function deleteWorkspaceEntry(workspace: Workspace, relPath: string): void {
   const path = resolveInside(workspace, relPath);
   if (comparable(path) === comparable(workspace.root)) throw new Error("Cannot delete the workspace root");
-  rmSync(path, { recursive: true, force: true });
+  // 保留名残留(问题4)必须走 NT 路径删除:Win32 语义下 rmSync 报 ENOENT 被 force 吞掉,
+  // 表现为"删除成功但文件还在"的假成功。
+  rmSync(reservedNameSafeFsPath(path), { recursive: true, force: true });
 }
 
 function comparable(path: string): string {
@@ -177,5 +197,23 @@ export function revealWorkspaceEntry(workspace: Workspace, relPath: string): voi
     // Linux 无通用"选中"协议,退而打开所在目录
     const dir = statSync(path).isDirectory() ? path : dirname(path);
     spawn("xdg-open", [dir], { detached: true, stdio: "ignore" }).unref();
+  }
+}
+// ---- Windows 保留设备名残留清扫(问题4,2.0.0 内测) ----
+
+/** 清扫工作区目录顶层的保留设备名残留文件并留痕。调用点:bash 工具执行后(runtime.ts 的
+ *  operations 包装)与每轮生成开始(pi-engine/runner.ts,存量残留自愈)。
+ *  清扫范围与平台守卫见 foundation/windows-names。 */
+export function sweepWorkspaceReservedNameArtifacts(dir: string): void {
+  const removed = sweepWindowsReservedNames(dir);
+  if (removed.length > 0) {
+    reportError(
+      "workspace",
+      "warn",
+      `已清理 Windows 保留设备名残留文件:${removed.join("、")}(通常由把 nul 当作丢弃目标的原生程序产生;此类文件在资源管理器中无法删除)`,
+      undefined,
+      "reserved_name_artifacts_swept",
+      { dir, removed: removed.join(",") },
+    );
   }
 }

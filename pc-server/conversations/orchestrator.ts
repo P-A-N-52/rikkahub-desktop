@@ -12,6 +12,7 @@ import { addLog } from "../api/logs";
 import { broadcastConversation, broadcastEngineStatus, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
 import { applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
+import { openAiMaxTokensField } from "../model-providers/request-dialect";
 import {
   claudeCacheControlEphemeral,
   claudeMessagesFromApiMessages,
@@ -54,8 +55,16 @@ import { createGenerationEventApplier } from "./generation-apply";
 import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
-import { workspaceRuntimeForConversation, type WorkspaceRuntime } from "../workspace/runtime";
-import { createEngineRegistry, resolveEngine, type EngineAdapter, type EngineRunContext } from "../engines";
+import type { WorkspaceRuntime } from "../workspace/runtime";
+import {
+  createEngineRegistry,
+  resolveEngine,
+  type EngineAdapter,
+  type EngineCompactContext,
+  type EngineCompactionResult,
+  type EngineKind,
+  type EngineRunContext,
+} from "../engines";
 import { runPiCompaction, runPiGeneration, type CapturedEngineCompaction } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
@@ -203,7 +212,9 @@ export async function callProvider(
     messages: messagesForApi,
     temperature: isModelAllowTemperature(picked.model) ? assistant.temperature ?? undefined : undefined,
     top_p: isModelAllowTemperature(picked.model) ? assistant.topP ?? undefined : undefined,
-    max_tokens: assistant.maxTokens ?? undefined,
+    // 上限字段名走统一请求方言（model-providers/request-dialect）：官方 OpenAI 口
+    // max_completion_tokens（o 系硬要求），其余 max_tokens（第三方对未知字段静默忽略）。
+    ...(assistant.maxTokens != null ? { [openAiMaxTokensField(hostOfProvider(providerItem))]: assistant.maxTokens } : {}),
     ...(providerItem.type === "openai" ? { modalities: openAiChatCompletionsModalities(picked.model, providerItem) } : {}),
     ...reasoningPayloadForProvider(providerItem, picked.model, assistant.reasoningLevel),
     tools: tools.length ? tools : undefined,
@@ -285,7 +296,8 @@ export async function callProviderStreaming(
     messages: messagesForApi,
     temperature: isModelAllowTemperature(picked.model) ? assistant.temperature ?? undefined : undefined,
     top_p: isModelAllowTemperature(picked.model) ? assistant.topP ?? undefined : undefined,
-    max_tokens: assistant.maxTokens ?? undefined,
+    // 上限字段名走统一请求方言（与非流式路径同一行注释所指）。
+    ...(assistant.maxTokens != null ? { [openAiMaxTokensField(hostOfProvider(providerItem))]: assistant.maxTokens } : {}),
     ...(providerItem.type === "openai" ? { modalities: openAiChatCompletionsModalities(picked.model, providerItem) } : {}),
     ...reasoningPayloadForProvider(providerItem, picked.model, assistant.reasoningLevel),
     tools: tools.length ? tools : undefined,
@@ -604,8 +616,9 @@ async function runPiWorkspaceGeneration(
   return result.text;
 }
 
-/** 引擎注册表(T1):编排器把两个引擎的生成函数注入 adapter 工厂。pi 在前(工作区
- *  可用即接管),chat 兜底。新增引擎在此注册一行,runGeneration/续跑语义无需再改。 */
+/** 引擎注册表(T1):编排器把各引擎的生成/压缩实现注入 adapter 工厂。pi 在前(工作区
+ *  可用即接管),chat 兜底。新增引擎在此注册一行,runGeneration/续跑语义/压缩路由/
+ *  审批旁路判定无需再改。 */
 const ENGINE_REGISTRY = createEngineRegistry({
   chatRun: (ctx, sink, signal) =>
     callProviderStreaming(ctx.conversation, ctx.assistantMessage, ctx.assistantNode, {
@@ -617,6 +630,7 @@ const ENGINE_REGISTRY = createEngineRegistry({
       snapshot: { assistant: ctx.assistant, provider: ctx.provider, model: ctx.model },
     }),
   piRun: (ctx, sink, signal) => runPiWorkspaceGeneration(ctx, sink, signal),
+  piCompact: (ctx, sink, signal) => runPiWorkspaceCompaction(ctx, sink, signal),
 });
 
 /** 纯生成逻辑：经引擎注册表分发到命中 adapter,由 sink 发出生成事件。
@@ -633,31 +647,31 @@ async function runGeneration(
   return deps.adapter.run(deps, sink, signal);
 }
 
-/** P5:工作区会话手动压缩走引擎原生 compaction;P7:压缩产物落
- *  conversation.engineCompactions(下一轮生成由编码器把它重放进引擎上下文),UI 历史
- *  一字不动。返回 null = 非工作区会话/工作区不可用(缺根/未信任)——调用方回落
- *  UI 历史压缩(与生成路由的降级一致:聊天引擎从 UI 历史构建请求,压 UI 历史即
- *  压上下文)。压缩期间经 engine_status 直通状态条,finally 兜底清除(取消/失败
- *  不挂"压缩中")。T3:压缩是引擎无关能力,函数去 pi 名(引擎选择仍由路由判定)。 */
-export async function compactWorkspaceConversation(
-  conversation: Conversation,
-  customInstructions: string,
+/** pi 引擎压缩装配(P5 原生 compaction + P7 产物落 engineCompactions)。压缩路由收编:
+ *  收敛为 pi adapter 的 compact 实现——路由判定(工作区可用)已由 matches() 承担,
+ *  本函数只管驱动;engine_status 经调用方注入的 sink 直通,广播与终局清条不在此层。
+ *  压缩的对象是"模型实际看到的消息":与生成路径同一富化裁决(模板/提醒/注入),
+ *  但合成消息经 encodableMessages 剥回纯真实行(P9)——手动压缩是用户策展行为,
+ *  摘要只覆盖真实对话;注入是配置不是对话,时间提醒只描述节奏,均不进摘要。
+ *  窗口锚照常生效:切点前的历史已被上一轮摘要吸收,压缩对象从切点起即可。 */
+async function runPiWorkspaceCompaction(
+  ctx: EngineCompactContext & { piRuntime: WorkspaceRuntime | null },
+  sink: GenerationEventSink,
   signal?: AbortSignal,
-): Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter: number | null } | null> {
-  const runtime = workspaceRuntimeForConversation(conversation);
-  if (!runtime) return null;
-  const assistant = findAssistant(conversation.assistantId);
-  const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
-  // 压缩的对象是"模型实际看到的消息":与生成路径同一富化裁决(模板/提醒/注入),
-  // 但合成消息经 encodableMessages 剥回纯真实行(P9)——手动压缩是用户策展行为,
-  // 摘要只覆盖真实对话;注入是配置不是对话,时间提醒只描述节奏,均不进摘要。
-  // 窗口锚照常生效:切点前的历史已被上一轮摘要吸收,压缩对象从切点起即可。
+): Promise<EngineCompactionResult> {
+  const { conversation, assistant } = ctx;
+  const runtime = ctx.piRuntime;
+  if (!runtime) {
+    // 路由不变式:resolveEngine 选中 pi 时 matches() 已确认工作区可用。此处为防御兜底
+    // (与 runPiWorkspaceGeneration 同一防御)——不可达于正常路径,报错好过静默走错引擎。
+    throw new Error("pi 引擎被选中但工作区运行时不可用(路由判定与执行不一致)。");
+  }
   const compactionRecords = parseEngineCompactions(conversation.engineCompactions);
-  const cut = effectiveEngineCompaction(compactionRecords, selectedConversationMessages(conversation), picked.model);
+  const cut = effectiveEngineCompaction(compactionRecords, selectedConversationMessages(conversation), ctx.model);
   const enriched = enrichMessages(selectedConversationMessages(conversation), {
     conversation,
     assistant,
-    model: picked.model,
+    model: ctx.model,
     windowStartMessageId: cut?.cutMessageId,
   });
   const history = encodableMessages(enriched.messages, enriched.syntheticIds);
@@ -665,32 +679,69 @@ export async function compactWorkspaceConversation(
   const resources = await createPiSessionResources({
     conversation,
     assistant,
-    model: picked.model,
+    model: ctx.model,
     cwd: runtime.cwd,
     root: runtime.root,
     extraAppendSystemPrompt: systemInjection ? [systemInjection] : undefined,
   });
+  const result = await runPiCompaction({
+    provider: ctx.provider,
+    model: ctx.model,
+    modelLimits: piModelLimitsFor(ctx.provider, ctx.model, assistant),
+    conversationId: conversation.id,
+    cwd: runtime.cwd,
+    history,
+    compactions: compactionRecords,
+    resources,
+    customInstructions: ctx.customInstructions,
+    signal,
+    sink,
+  });
+  // 产物落库是引擎注入实现的义务——与生成路径的压缩捕获同一落点、同一 helper。
+  applyCapturedEngineCompactions(conversation, [result.compaction]);
+  return result;
+}
+
+/** 引擎原生压缩入口(压缩路由收编:经注册表分发,与生成路由同源)。返回 null =
+ *  命中引擎未声明 compact 能力(chat 无引擎记忆)——调用方回落 UI 历史压缩(聊天
+ *  引擎从 UI 历史构建请求,压 UI 历史即压上下文)。工作区不可用(缺根/未信任)时
+ *  pi 的 matches() 不命中、落到 chat 兜底,同样回落——与生成路由的降级天然一致。
+ *  压缩期间 engine_status 直通状态条,finally 兜底清除(取消/失败不挂"压缩中");
+ *  瞬态状态的「怎么发」是引擎的事(经 sink),「怎么播/怎么兜底清」是本层的事,
+ *  与 generateAnswer 的 sink 职责划分一致。 */
+export async function compactEngineConversation(
+  conversation: Conversation,
+  customInstructions: string,
+  signal?: AbortSignal,
+): Promise<{ engine: EngineKind; summary: string; tokensBefore: number; estimatedTokensAfter: number | null } | null> {
+  const assistant = findAssistant(conversation.assistantId);
+  const adapter = resolveEngine(ENGINE_REGISTRY, conversation, assistant);
+  if (!adapter.compact) return null;
+  const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
   try {
-    const result = await runPiCompaction({
-      provider: picked.provider,
-      model: picked.model,
-      modelLimits: piModelLimitsFor(picked.provider, picked.model, assistant),
-      conversationId: conversation.id,
-      cwd: runtime.cwd,
-      history,
-      compactions: compactionRecords,
-      resources,
-      customInstructions,
-      signal,
-      sink: (event) => {
+    const result = await adapter.compact(
+      { conversation, assistant, provider: picked.provider, model: picked.model, customInstructions },
+      (event) => {
         if (event.kind === "engine_status") broadcastEngineStatus(conversation.id, event.status);
       },
-    });
-    applyCapturedEngineCompactions(conversation, [result.compaction]);
-    return result;
+      signal,
+    );
+    return {
+      engine: adapter.kind,
+      summary: result.summary,
+      tokensBefore: result.tokensBefore,
+      estimatedTokensAfter: result.estimatedTokensAfter,
+    };
   } finally {
     broadcastEngineStatus(conversation.id, { busy: false });
   }
+}
+
+/** 会话的引擎判定(注册表路由的只读查询)。编排器外的消费点(审批端点等)用它替代
+ *  自行判定(如以"工作区可用"旁路推断引擎),保证与生成/压缩路由永远同源——
+ *  第三引擎接入时这些消费点自动跟随注册表,无需再改。 */
+export function resolveEngineForConversation(conversation: Conversation): EngineAdapter {
+  return resolveEngine(ENGINE_REGISTRY, conversation, findAssistant(conversation.assistantId));
 }
 
 export async function generateAnswer(conversation: Conversation, regenerateAtNodeId?: string) {

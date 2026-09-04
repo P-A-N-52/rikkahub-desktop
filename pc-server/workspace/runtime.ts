@@ -31,7 +31,8 @@ import { findDangerousCommandReason, isWorkspaceToolName, type WorkspaceToolName
 import { createReadTool } from "./tools/read";
 import { createWriteTool } from "./tools/write";
 import { createEditTool } from "./tools/edit";
-import { createBashTool, type BashToolInput } from "./tools/bash";
+import { createBashTool, createLocalBashOperations, type BashOperations, type BashToolInput } from "./tools/bash";
+import { sweepWorkspaceReservedNameArtifacts } from "./files";
 import { createGrepTool } from "./tools/grep";
 import { createFindTool } from "./tools/find";
 import { createLsTool } from "./tools/ls";
@@ -152,9 +153,13 @@ function buildWorkspaceTool(
       if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
       // 透传用户自定义 shellPath(空串→undefined=自动探测);与 shellAvailability 同源。
       // state?. 可选链:测试/未初始化时取 undefined 走自动探测。
+      const shellPath = state?.settings?.shellPath || undefined;
       return createBashTool(runtime.cwd, {
         tempFileDir: tmpDir,
-        shellPath: state?.settings?.shellPath || undefined,
+        shellPath,
+        // 问题4(2.0.0 内测):bash 命令或其派生原生进程(如 bun 的 node:fs 相对路径写)
+        // 可能在 cwd 落下 Windows 保留设备名残留文件,执行后清扫出生点。
+        operations: withReservedNameSweep(createLocalBashOperations({ shellPath })),
       }) as WorkspaceToolDefinition<unknown, unknown>;
     }
     case "grep":
@@ -404,4 +409,17 @@ export async function runWorkspaceTool(
     onUpdate: onPartial ? (partial) => onPartial(toToolResult(name as WorkspaceToolName, partial).output) : undefined,
   });
   return toToolResult(name as WorkspaceToolName, result);
+}
+/** 问题4:bash Operations 包装——执行完成后清扫 cwd 顶层的 Windows 保留设备名残留
+ *  (成功/失败/超时/中止一视同仁,残留可能诞生于任一路径)。 */
+function withReservedNameSweep(ops: BashOperations): BashOperations {
+  return {
+    exec: async (command, cwd, options) => {
+      try {
+        return await ops.exec(command, cwd, options);
+      } finally {
+        sweepWorkspaceReservedNameArtifacts(cwd);
+      }
+    },
+  };
 }
