@@ -5,7 +5,8 @@ import i18n from "~/i18n";
 import { ArrowLeft, Bot, CheckCircle2, CopyPlus, Database, FileClock, Globe, Heart, KeyRound, Loader2, Mic, Search, Settings2, UserRound, Brain } from "lucide-react";
 import { Link } from "react-router";
 
-import { WindowControlsBar } from "~/components/window-controls";
+import { WindowControlsBar, windowDragRegionProps } from "~/components/window-controls";
+import { SidebarBrandRow } from "~/components/sidebar-brand";
 import { MemorySection } from "~/components/memory/memory-section";
 import { toast } from "sonner";
 
@@ -113,8 +114,9 @@ export default function SettingsPage() {
       .catch((error: Error) => toast.error(error.message));
   }, [section]);
 
+  // 日志问题 3:二次确认收口到 LogsSection.clearVisible(一次确认管请求+错误两类);
+  // 本回调退化为纯删除动作,绝不能再各自弹确认(双弹窗)或先删后问。
   const clearLogs = React.useCallback(async () => {
-    if (!(await confirmDialog({ title: t("settings:logs.clear_confirm"), danger: true }))) return;
     try {
       await api.delete("logs");
       setLogs([]);
@@ -150,26 +152,27 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-background">
-      {/* I1:无边框窗口下每个全屏路由都需要拖拽区 + 窗控钮 */}
-      <WindowControlsBar />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+    <div className="flex h-svh overflow-hidden bg-background">
+      {/* 问题7(2.0.0 内测):镶边结构与主界面对齐——侧栏通顶(品牌行兼窗口拖拽区),
+          窗控条只嵌在右侧内容列顶部,不再横贯全宽把侧栏压下一条。 */}
       <aside
         className={cn(
           "w-full flex-col border-r border-divider bg-sidebar text-sidebar-foreground md:w-64",
           mobileContentOpen ? "hidden md:flex" : "flex",
         )}
       >
-        {/* 原生标题栏回归后无需再为沉浸标题栏让位,普通页内间距即可。
-            border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。 */}
-        <div className="flex items-center gap-2 border-b border-divider px-4 py-3">
-          <Button asChild size="icon-sm" variant="ghost">
-            <Link to="/">
-              <ArrowLeft className="size-4" />
-            </Link>
-          </Button>
-          <div>
-            <div className="text-sm font-semibold">RikkaHub PC</div>
+        {/* border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。
+            问题7回访:品牌行(Logo+RikkaHub,SidebarBrandRow 三页同源)延续主界面设计;
+            下方动作行放返回键+分区副标题。两行都是拖拽区(drag props 放行交互元素,
+            返回键是 asChild Link 渲染的 <a>——放行选择器已覆盖)。 */}
+        <div className="border-b border-divider px-4 pb-3 pt-2">
+          <SidebarBrandRow />
+          <div className="mt-2 flex items-center gap-2" {...windowDragRegionProps()}>
+            <Button asChild size="icon-sm" variant="ghost">
+              <Link to="/" aria-label={t("settings:nav.back")}>
+                <ArrowLeft className="size-4" />
+              </Link>
+            </Button>
             <div className="text-xs text-muted-foreground">{t("settings:nav.subtitle")}</div>
           </div>
         </div>
@@ -208,8 +211,11 @@ export default function SettingsPage() {
           })}
         </nav>
       </aside>
-      <main className={cn("min-w-0 flex-1", mobileContentOpen ? "block" : "hidden md:block")}>
-        <ScrollArea className="h-svh">
+      <div className={cn("min-w-0 flex-1 flex-col", mobileContentOpen ? "flex" : "hidden md:flex")}>
+        {/* I1:无边框窗口拖拽区 + 窗控钮(仅内容列;侧栏顶部由品牌行承担) */}
+        <WindowControlsBar />
+        <main className="min-h-0 flex-1">
+        <ScrollArea className="h-full">
           <div className="mx-auto w-full max-w-5xl px-6 py-6">
             {/* 窄屏内容页头:返回导航列表 + 当前分区名(md 起隐藏) */}
             <div className="mb-4 flex items-center gap-2 md:hidden">
@@ -255,7 +261,7 @@ export default function SettingsPage() {
             {section === "about" && <AboutSection />}
           </div>
         </ScrollArea>
-      </main>
+        </main>
       </div>
     </div>
   );

@@ -5,7 +5,8 @@ import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
-import { WindowControlsBar } from "~/components/window-controls";
+import { WindowControlsBar, windowDragRegionProps } from "~/components/window-controls";
+import { SidebarBrandRow } from "~/components/sidebar-brand";
 import { motion } from "motion/react";
 
 import { AIIcon } from "~/components/ui/ai-icon";
@@ -211,12 +212,15 @@ export default function ImagesPage() {
   ]);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      {/* I1:无边框窗口下每个全屏路由都需要拖拽区 + 窗控钮 */}
-      <WindowControlsBar />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-4 md:block">
-        <div className="flex items-center justify-between">
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      {/* 问题7(2.0.0 内测):镶边结构与主界面对齐——侧栏通顶(顶行兼窗口拖拽区),
+          窗控条只嵌在右侧内容列顶部,不再横贯全宽把侧栏压下一条。 */}
+      <aside className="hidden w-[340px] shrink-0 border-r bg-sidebar/80 px-4 pb-4 pt-2 md:block">
+        {/* 问题7回访:品牌行(Logo+RikkaHub,SidebarBrandRow 三页同源)延续主界面设计;
+            下方动作行放返回键+模型设置。两行都是拖拽区(drag props 放行交互元素,
+            asChild Link 渲染的 <a> 已被放行选择器覆盖)。 */}
+        <SidebarBrandRow />
+        <div className="mt-2 flex items-center justify-between" {...windowDragRegionProps()}>
           <Button asChild size="icon-sm" variant="ghost">
             <Link
               to="/"
@@ -230,7 +234,7 @@ export default function ImagesPage() {
             <Link to="/settings?section=models">{t("image_page.model_settings")}</Link>
           </Button>
         </div>
-        <div className="mt-7 space-y-1">
+        <div className="mt-6 space-y-1">
           <div className="flex items-center gap-2 text-xl font-semibold">
             <WandSparkles className="size-5 text-primary" />
             {t("image_page.title")}
@@ -304,7 +308,10 @@ export default function ImagesPage() {
           </div>
         </div>
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* I1:无边框窗口拖拽区 + 窗控钮(仅内容列;侧栏顶部由顶行承担) */}
+        <WindowControlsBar />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="border-b px-4 py-3 md:hidden">
           <div className="flex items-center justify-between">
             <Link className="text-sm text-muted-foreground" to="/">

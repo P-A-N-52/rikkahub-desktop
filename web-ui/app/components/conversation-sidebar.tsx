@@ -33,7 +33,7 @@ import { AvatarCropper } from "~/components/avatar-cropper";
 import { RenameConversationDialog } from "~/components/rename-conversation-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import Logo from "~/components/logo";
+import { SidebarBrandRow } from "~/components/sidebar-brand";
 import {
   Dialog,
   DialogContent,
@@ -80,7 +80,6 @@ import { ConversationSearchButton } from "~/components/conversation-search-butto
 import { CustomThemeDialog } from "~/components/custom-theme-dialog";
 import { getAssistantDisplayName } from "~/lib/display";
 import { cn } from "~/lib/utils";
-import { windowDragRegionProps } from "~/components/window-controls";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { clearWebAuthToken } from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
@@ -852,13 +851,9 @@ export const ConversationSidebar = React.memo(
       <Sidebar collapsible="offcanvas" variant="sidebar">
         <SidebarHeader>
           {/* 品牌行(G8/I5):只留 Logo+应用名(折叠钮已挪到用户资料行右侧);
-              I1:与右侧窗控带同属顶部窗控行,整行可拖拽窗口。 */}
-          <div className="-mt-1 flex h-7 items-center pl-2 pr-0.5" {...windowDragRegionProps()}>
-            <div className="flex min-w-0 items-center gap-2">
-              <Logo className="size-5 shrink-0 text-primary" />
-              <span className="truncate text-sm font-semibold text-[var(--ds-text-primary)]">RikkaHub</span>
-            </div>
-          </div>
+              I1:与右侧窗控带同属顶部窗控行,整行可拖拽窗口。
+              问题7回访:抽成 SidebarBrandRow,设置页/图像页同源延续。 */}
+          <SidebarBrandRow className="-mt-1 pl-2 pr-0.5" />
           {/* 用户资料行(F1:按用户要求保持顶部,不学 NewMax 的用户归底);
               I5:折叠钮居其右侧垂直居中。 */}
           <div className="flex items-center gap-1">

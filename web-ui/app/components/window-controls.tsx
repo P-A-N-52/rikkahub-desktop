@@ -56,18 +56,21 @@ function runWindowAction(fn: (api: WindowApi) => Promise<void>) {
 
 // WebView2 对 data-tauri-drag-region 的声明式识别偶发失效(光标下无绘制内容时),
 // mousedown 里直接 startDragging() 跨版本可靠。
-// 关键闸门:点击拖拽区内按钮时事件会冒泡到这里,若不跳过会立即进入原生拖拽、OS 捕获
-// 鼠标,button 的 click 永远不触发(按钮"点不动"假死)。target 在 button 内则放行。
+// 关键闸门:点击拖拽区内交互元素时事件会冒泡到这里,若不跳过会立即进入原生拖拽、OS 捕获
+// 鼠标,click 永远不触发("点不动"假死)。放行必须覆盖全部交互形态:shadcn 的
+// <Button asChild><Link>> 渲染成 <a>(设置页/图像页返回键正是它——曾因只放行 button
+// 而假死,问题7回访),外加 input/label/role=button 等潜在形态,一次收口。
+const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, label, [role='button']";
 function handleDragMouseDown(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0) return;
   const target = event.target as HTMLElement | null;
-  if (target?.closest("button")) return;
+  if (target?.closest(INTERACTIVE_SELECTOR)) return;
   runWindowAction((api) => api.startDragging());
 }
 function handleDragDoubleClick(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0) return;
   const target = event.target as HTMLElement | null;
-  if (target?.closest("button")) return;
+  if (target?.closest(INTERACTIVE_SELECTOR)) return;
   event.preventDefault();
   runWindowAction((api) => api.toggleMaximize());
 }
