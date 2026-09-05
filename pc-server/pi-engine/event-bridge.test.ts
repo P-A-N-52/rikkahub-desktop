@@ -321,17 +321,22 @@ describe("pi 事件桥:纯映射", () => {
     ]);
   });
 
-  test("压缩失败(pi 0.84.2 compaction_end.errorMessage)→ 全局上报 + 状态清除;成功/中止不上报", () => {
+  test("压缩失败(pi 0.84.2 compaction_end.errorMessage)→ 自动压缩上报;手动/成功/中止不上报", () => {
     clearAppErrors();
     const bridge = createPiEventBridge();
-    // 失败:状态条照常清除,同时把 errorMessage 上报进错误中心(severity error,用户必须知道)。
+    // 自动压缩(threshold/overflow)失败:状态条照常清除,同时把 errorMessage 上报进错误中心
+    // (severity error;用户不知情,压缩没发生=后续可能上下文溢出,必须知道)。
     expect(
       bridge.handle({ type: "compaction_end", reason: "threshold", result: undefined, aborted: false, willRetry: false, errorMessage: "Compaction failed: boom" }),
     ).toEqual([{ kind: "engine_status", status: { busy: false } }]);
     const errs = recentAppErrors();
     expect(errs.some((e) => e.domain === "pi-engine" && e.severity === "error" && e.message.includes("压缩失败"))).toBe(true);
-    // 成功(有 result)与中止(aborted,errorMessage 为 undefined)均不上报。
+    // 手动压缩(manual)失败不上报:HTTP 错误路径已给人话 toast(runner PI_COMPACT_ERROR_TEXT
+    // 映射),再报即同一失败双 toast(内测反馈:/compact 小会话必报"记忆还很小"时弹两条)。
     clearAppErrors();
+    bridge.handle({ type: "compaction_end", reason: "manual", result: undefined, aborted: false, willRetry: false, errorMessage: "Compaction failed: Nothing to compact (session too small)" });
+    expect(recentAppErrors().filter((e) => e.domain === "pi-engine")).toHaveLength(0);
+    // 成功(有 result)与中止(aborted,errorMessage 为 undefined)均不上报。
     bridge.handle({ type: "compaction_end", reason: "manual", result: { summary: "s", firstKeptEntryId: "e", tokensBefore: 1, estimatedTokensAfter: 1, usage: undefined, details: undefined } as never, aborted: false, willRetry: false });
     bridge.handle({ type: "compaction_end", reason: "manual", result: undefined, aborted: true, willRetry: false });
     expect(recentAppErrors().filter((e) => e.domain === "pi-engine")).toHaveLength(0);

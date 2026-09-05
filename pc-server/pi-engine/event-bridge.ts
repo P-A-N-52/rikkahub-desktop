@@ -342,10 +342,13 @@ export function createPiEventBridge() {
       case "compaction_end": {
         // pi 0.84.2 起 compaction_end 失败分支携带 errorMessage(同 session_compact_failed
         // 扩展事件的信息,但走我们已订阅的 AgentSessionEvent 主通道——接扩展事件是冗余副本)。
-        // 手动压缩失败 willRetry:false(真失败);摘要生成失败走 summarization_retry_* 自动重试
-        // (上面已映射成状态条,非终败)。aborted 时 errorMessage 为 undefined,天然排除。
-        // 故 errorMessage 存在即真失败:压缩没发生=后续可能上下文溢出,用户必须知道。
-        if (event.errorMessage) {
+        // 摘要生成失败走 summarization_retry_* 自动重试(上面已映射成状态条,非终败);
+        // aborted 时 errorMessage 为 undefined,天然排除。
+        // reason 分流(内测反馈:/compact 失败双 toast):manual = 用户主动压缩,失败已由
+        // HTTP 错误路径给出人话 toast(runner PI_COMPACT_ERROR_TEXT 映射),此处再报即同一
+        // 失败重复打扰;threshold/overflow = 生成期间自动压缩,用户不知情,失败必须上报
+        // (压缩没发生=后续可能上下文溢出)。
+        if (event.errorMessage && event.reason !== "manual") {
           reportError("pi-engine", "error", "会话上下文压缩失败,继续对话可能超出模型上下文窗口", event.errorMessage);
         }
         return [{ kind: "engine_status", status: { busy: false } }];

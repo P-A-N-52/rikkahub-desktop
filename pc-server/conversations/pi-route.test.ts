@@ -340,4 +340,41 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     const conversation = seedConversation(workspace.id);
     await expect(compactEngineConversation(conversation, "")).rejects.toThrow("引擎记忆还很小");
   }, 30_000);
+
+  test("compactEngineConversation:大会话(超 keepRecentTokens 预算)压缩成功返回摘要", async () => {
+    // 内测反馈(/compact 测试):工作区小会话必报"记忆还很小"——那是 pi 上游语义
+    // (手动 compact 保留最近 keepRecentTokens≈2 万 token,只压更早历史;不足预算
+    // 即无可压内容)。本用例钉住"预算之上必须可压":灌注 >2 万 token(chars/4 估
+    // 算)的多轮历史,穿透 pi session.compact 到假上游取摘要,成功返回。若灌注条
+    // 目形态漂移导致 pi 估算不识别(token 记 0),会退化成"无论多大都报记忆还很小",
+    // 本用例即时暴露。
+    const server = await installUpstream([{ content: "早期历史的压缩摘要。" }]);
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-compact-large" });
+    const conversation = seedConversation(workspace.id);
+    // 6 轮 user/assistant,每条 2 万字符 ≈ 5000 token,合计 ≈ 6 万 token >> 20000 预算。
+    for (let round = 0; round < 6; round++) {
+      const filler = `第${round}轮长历史。`.repeat(2000);
+      appendUserNode(conversation, filler);
+      conversation.messages.push({
+        id: `piroute-n-a${seq}-${conversation.messages.length}`,
+        selectIndex: 0,
+        messages: [{
+          id: `piroute-m-a${seq}-${conversation.messages.length}`,
+          role: "ASSISTANT",
+          parts: [{ type: "text", text: filler }],
+          annotations: [],
+          createdAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          translation: null,
+        }],
+      } as never);
+    }
+    const result = await compactEngineConversation(conversation, "");
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("pi");
+    expect(result!.summary).toContain("早期历史的压缩摘要");
+    expect(result!.tokensBefore).toBeGreaterThan(20_000);
+    // 摘要请求确实打到了上游(区别于小会话零请求即抛错)。
+    expect(server.requests.length).toBe(1);
+  }, 60_000);
 });
