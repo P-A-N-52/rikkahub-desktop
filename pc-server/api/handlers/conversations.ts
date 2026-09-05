@@ -4,6 +4,7 @@
 import type { Conversation, ConversationSnapshotEventDto, ConversationSnapshotMetaEventDto, JsonValue, MessageNode, MessagePart } from "../../foundation/types";
 import type { ConversationListDto, ConversationNodesPageDto, MessageSearchResultDto, PagedResult } from "../../foundation/types";
 import { applyPlaceholders, id, message, textFromParts } from "../../foundation/utils";
+import { CodedError } from "../../foundation/errors";
 import { state } from "../../persistence/json-store";
 import {
   getConversation,
@@ -548,7 +549,9 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         );
         return json({ status: "compressed", summaries });
       } catch (err) {
-        return error(err instanceof Error ? err.message : String(err), 400);
+        // CodedError 透传业务码,前端按码查 i18n 文案(message 兜底,通道见 foundation/errors)。
+        const errorCode = err instanceof CodedError ? err.errorCode : undefined;
+        return error(err instanceof Error ? err.message : String(err), 400, errorCode);
       }
     }
     if (sub === "fork" && request.method === "POST") {

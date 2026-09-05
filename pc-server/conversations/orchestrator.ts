@@ -64,7 +64,7 @@ import {
   type EngineKind,
   type EngineRunContext,
 } from "../engines";
-import { runPiCompaction, runPiGeneration, type CapturedEngineCompaction } from "../pi-engine/runner";
+import { MANUAL_COMPACT_KEEP_RECENT_TOKENS, runPiCompaction, runPiGeneration, type CapturedEngineCompaction } from "../pi-engine/runner";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
@@ -686,6 +686,8 @@ async function runPiWorkspaceCompaction(
     cwd: runtime.cwd,
     root: runtime.root,
     extraAppendSystemPrompt: systemInjection ? [systemInjection] : undefined,
+    // 手动压缩门槛/保留窗口调低(中文 chars/4 低估问题,rationale 见 runner.ts 常量)。
+    compactionKeepRecentTokens: MANUAL_COMPACT_KEEP_RECENT_TOKENS,
   });
   const result = await runPiCompaction({
     provider: ctx.provider,

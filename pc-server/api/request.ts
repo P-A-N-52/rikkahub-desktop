@@ -10,8 +10,10 @@ export function json(data: JsonValue | object, init: ResponseInit = {}) {
   });
 }
 
-export function error(message: string, status = 400) {
-  return json({ error: message, code: status }, { status });
+/** errorCode:业务错误码(foundation/errors.ts CodedError 通道)——前端按码查 i18n
+ *  文案,message 是兜底。不传则响应结构与旧版完全一致(向后兼容)。 */
+export function error(message: string, status = 400, errorCode?: string) {
+  return json({ error: message, code: status, ...(errorCode ? { errorCode } : {}) }, { status });
 }
 
 /** 4-6:非空但不可解析的 body 抛出,routeApi 统一映射 400。此前静默返回 {},

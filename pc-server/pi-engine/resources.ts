@@ -147,15 +147,25 @@ export async function createPiSessionResources(options: {
   /** P8 注入面统一:lorebook/模式注入的系统位文本(before/after_system_prompt),
    *  追加在人设/记忆之后、stableGuidanceLines 之前——与聊天引擎 systemParts 同位。 */
   extraAppendSystemPrompt?: string[];
+  /** 压缩保留窗口覆盖(pi chars/4 估算口径)。手动压缩装配点传
+   *  MANUAL_COMPACT_KEEP_RECENT_TOKENS(门槛/保留都调低,rationale 见 runner.ts 常量);
+   *  不传 = pi 默认 20000(生成会话的 threshold/overflow 自动压缩用)。 */
+  compactionKeepRecentTokens?: number;
 }): Promise<PiSessionResources> {
-  const { conversation, assistant, model, cwd, root, extraAppendSystemPrompt } = options;
+  const { conversation, assistant, model, cwd, root, extraAppendSystemPrompt, compactionKeepRecentTokens } = options;
   // inMemory:零文件 I/O(不读不写任何 settings.json);projectTrusted:false 是给
   // resource-loader 的发现逻辑看的(.pi/SYSTEM.md 门控)。压缩面 P5 接管:threshold/
   // overflow 自动压缩显式开启(数值与 pi 默认一致,但不再依赖库默认值漂移),
   // reserveTokens/keepRecentTokens 取 pi 默认;重试等其余会话行为仍取 pi 默认值。
   // thinkingBudgets:Google 2.x 预算通道与聊天引擎同数值(model-bridge 四键投影,方言单源)。
   const settingsManager = SettingsManager.inMemory(
-    { compaction: { enabled: true }, thinkingBudgets: { ...PI_THINKING_BUDGETS } },
+    {
+      compaction: {
+        enabled: true,
+        ...(compactionKeepRecentTokens != null ? { keepRecentTokens: compactionKeepRecentTokens } : {}),
+      },
+      thinkingBudgets: { ...PI_THINKING_BUDGETS },
+    },
     { projectTrusted: false },
   );
   const enabledSkills = new Set(getStringArray(assistant.enabledSkills));

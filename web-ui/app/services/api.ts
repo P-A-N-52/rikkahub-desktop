@@ -3,6 +3,9 @@ import ky, { type Options, HTTPError } from "ky";
 interface ErrorResponse {
   error: string;
   code: number;
+  /** 业务错误码(服务端 foundation/errors CodedError 通道;可选,旧端点不带)。
+   *  前端按码查 i18n 文案,error 字段是兜底人话。 */
+  errorCode?: string;
 }
 
 interface WebAuthTokenResponse {
@@ -17,11 +20,14 @@ interface WebAuthRequiredEventDetail {
 
 export class ApiError extends Error {
   code: number;
+  /** 业务错误码(可选):有码时调用方可按 `errors.${errorCode}` 查 i18n 文案,message 兜底。 */
+  errorCode?: string;
 
-  constructor(message: string, code: number) {
+  constructor(message: string, code: number, errorCode?: string) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.errorCode = errorCode;
   }
 }
 
@@ -107,7 +113,7 @@ async function handleError(error: unknown): Promise<never> {
       // 用状态端点探明后弹出迁移进度页;普通业务 503 探测结果是 ready,不打扰。
       void maybeDispatchStartupPending();
     }
-    throw new ApiError(message, code);
+    throw new ApiError(message, code, errorData?.errorCode);
   }
   throw error;
 }
@@ -263,10 +269,12 @@ const api = {
         }
         let message = `HTTP ${xhr.status}`;
         let code = xhr.status;
+        let errorCode: string | undefined;
         try {
           const data = JSON.parse(xhr.responseText) as ErrorResponse;
           message = data.error ?? message;
           code = data.code ?? code;
+          errorCode = data.errorCode;
         } catch {
           // 非 JSON 错误体,保留 HTTP 状态文案
         }
@@ -274,7 +282,7 @@ const api = {
           clearWebAuthToken();
           dispatchWebAuthRequired({ message, code });
         }
-        reject(new ApiError(message, code));
+        reject(new ApiError(message, code, errorCode));
       };
       xhr.onerror = () => reject(new ApiError("Network error", 0));
       xhr.send(formData);

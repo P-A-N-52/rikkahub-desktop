@@ -30,6 +30,7 @@ import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-
 import type { GenerationEventSink } from "../inference-engine/events";
 import type { Message, Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
+import { CodedError } from "../foundation/errors";
 import { createPiModelRuntime, mapProviderModelToPi, piThinkingLevelFor, type PiModelLimits } from "./model-bridge";
 import { llmLogContextFor, runWithLlmRequestLog } from "./llm-request-log";
 import { createPiEventBridge } from "./event-bridge";
@@ -234,10 +235,28 @@ export interface PiCompactionResult {
   compaction: CapturedEngineCompaction;
 }
 
-/** pi 已知压缩失败信息 → 人话(其余原样上抛,handler 统一转 400)。 */
-const PI_COMPACT_ERROR_TEXT: Record<string, string> = {
-  "Already compacted": "引擎记忆刚完成压缩,无需再次压缩。",
-  "Nothing to compact (session too small)": "引擎记忆还很小,暂无可压缩的历史。",
+/** 手动压缩的保留窗口(pi chars/4 估算口径;settingsManager compaction.keepRecentTokens)。
+ *
+ *  为什么不用 pi 默认 20000:该估算按英文习惯(4 字符≈1 token),中文 1 字≈1+ 真实 token
+ *  却只计 0.25——低估 4~6 倍。默认线要消息历史(不含系统提示词/工具定义,它们不进
+ *  session entries)累计 8 万字符才可压,中文用户真实上下文近 10 万 token 仍报"过短"
+ *  (内测实证:UI 上下文 26.5k 时 /compact 仍拒)。手动压缩=用户明确意图,门槛应低:
+ *  2000(≈8000 字符)几乎任何"觉得该压"的会话都能过,压后保留最近 ≈8000 字符 + pi 摘要
+ *  (含文件操作/任务状态),连续性足够。自动压缩(threshold/overflow)不走本常量,维持
+ *  pi 默认——那是"上下文将溢出"的被动兜底,保留窗口宁大勿小。 */
+export const MANUAL_COMPACT_KEEP_RECENT_TOKENS = 2000;
+
+/** pi 已知压缩失败信息 → 业务错误码 + 人话兜底(其余原样上抛,handler 统一转 400)。
+ *  errorCode 走 foundation/errors.ts CodedError 通道,前端按码查 i18n 文案。 */
+const PI_COMPACT_ERRORS: Record<string, { errorCode: string; message: string }> = {
+  "Already compacted": {
+    errorCode: "compact_already_compacted",
+    message: "引擎记忆刚完成压缩,无需再次压缩。",
+  },
+  "Nothing to compact (session too small)": {
+    errorCode: "compact_context_too_short",
+    message: "当前会话上下文过短,暂不需要压缩。",
+  },
 };
 
 /**
@@ -306,7 +325,9 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
     if (ctx.signal?.aborted || message === "Compaction cancelled") {
       throw new DOMException("Compaction cancelled", "AbortError");
     }
-    throw new Error(PI_COMPACT_ERROR_TEXT[message] ?? `工作区引擎压缩失败：${message}`);
+    const known = PI_COMPACT_ERRORS[message];
+    if (known) throw new CodedError(known.message, known.errorCode);
+    throw new Error(`工作区引擎压缩失败：${message}`);
   } finally {
     ctx.signal?.removeEventListener("abort", onAbort);
     unsubscribe();

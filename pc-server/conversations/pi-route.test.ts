@@ -334,21 +334,44 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     expect(await compactEngineConversation(seedConversation(null), "")).toBeNull();
 
     // 工作区会话:注册表命中 pi adapter → runtime 透传 → 压缩装配(富化/资源)→
-    // pi session.compact。小会话在发起任何模型请求前抛"记忆还很小"(runner 已映射
-    // 成人话)——该错误文本即"路由穿透到引擎压缩驱动"的硬证据,且全程无上游请求。
+    // pi session.compact。小会话在发起任何模型请求前抛"上下文过短"(runner 映射成
+    // CodedError 人话)——该错误文本即"路由穿透到引擎压缩驱动"的硬证据,且全程无上游请求。
     const workspace = ws.createWorkspace({ type: "managed", name: "route-compact" });
     const conversation = seedConversation(workspace.id);
-    await expect(compactEngineConversation(conversation, "")).rejects.toThrow("引擎记忆还很小");
+    await expect(compactEngineConversation(conversation, "")).rejects.toThrow("当前会话上下文过短");
+
+    // 端点面(错误码通道):compress 返回 400 + errorCode,前端按码查 i18n 文案。
+    registerConversation(conversation);
+    const url = new URL(`http://localhost/api/conversations/${conversation.id}/compress`);
+    const response = await handleConversationRoutes(
+      new Request(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ additionalPrompt: "" }),
+      }),
+      url,
+      `conversations/${conversation.id}/compress`,
+    );
+    expect(response?.status).toBe(400);
+    const body = (await response?.json()) as { error: string; errorCode?: string };
+    expect(body.errorCode).toBe("compact_context_too_short");
+    expect(body.error).toContain("当前会话上下文过短");
   }, 30_000);
 
   test("compactEngineConversation:大会话(超 keepRecentTokens 预算)压缩成功返回摘要", async () => {
-    // 内测反馈(/compact 测试):工作区小会话必报"记忆还很小"——那是 pi 上游语义
-    // (手动 compact 保留最近 keepRecentTokens≈2 万 token,只压更早历史;不足预算
-    // 即无可压内容)。本用例钉住"预算之上必须可压":灌注 >2 万 token(chars/4 估
-    // 算)的多轮历史,穿透 pi session.compact 到假上游取摘要,成功返回。若灌注条
-    // 目形态漂移导致 pi 估算不识别(token 记 0),会退化成"无论多大都报记忆还很小",
-    // 本用例即时暴露。
-    const server = await installUpstream([{ content: "早期历史的压缩摘要。" }]);
+    // 内测反馈(/compact 测试):工作区小会话必报"上下文过短"——那是 pi 上游语义
+    // (手动 compact 保留最近 keepRecentTokens 预算,只压更早历史;不足预算即无可
+    // 压内容;手动压缩预算已调低为 MANUAL_COMPACT_KEEP_RECENT_TOKENS=2000,中文
+    // chars/4 低估 rationale 见 runner.ts)。本用例钉住"预算之上必须可压":灌注远超
+    // 预算(chars/4 估算)的多轮历史,穿透 pi session.compact 到假上游取摘要,成功
+    // 返回。若灌注条目形态漂移导致 pi 估算不识别(token 记 0),会退化成"无论多大
+    // 都报过短",本用例即时暴露。
+    // 两份脚本:压缩预算 2000 时切点可能落在轮中间(isSplitTurn),pi 会额外发一次
+    // turn prefix 摘要请求——主摘要+前缀摘要给同文本,断言与切点形态解耦。
+    const server = await installUpstream([
+      { content: "早期历史的压缩摘要。" },
+      { content: "早期历史的压缩摘要。" },
+    ]);
     const workspace = ws.createWorkspace({ type: "managed", name: "route-compact-large" });
     const conversation = seedConversation(workspace.id);
     // 6 轮 user/assistant,每条 2 万字符 ≈ 5000 token,合计 ≈ 6 万 token >> 20000 预算。
@@ -374,7 +397,7 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     expect(result!.engine).toBe("pi");
     expect(result!.summary).toContain("早期历史的压缩摘要");
     expect(result!.tokensBefore).toBeGreaterThan(20_000);
-    // 摘要请求确实打到了上游(区别于小会话零请求即抛错)。
-    expect(server.requests.length).toBe(1);
+    // 摘要请求确实打到了上游(区别于小会话零请求即抛错);split turn 时多一次前缀摘要。
+    expect(server.requests.length).toBeGreaterThanOrEqual(1);
   }, 60_000);
 });

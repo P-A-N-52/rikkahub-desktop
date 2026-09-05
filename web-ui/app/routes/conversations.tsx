@@ -50,7 +50,7 @@ import {
 } from "~/lib/export-markdown";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
-import api from "~/services/api";
+import api, { ApiError } from "~/services/api";
 import { useChatInputStore } from "~/stores";
 import {
   evictConversations,
@@ -1686,7 +1686,13 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
       } catch (error) {
         // R7-4:用户主动取消不报错(取消不是失败)。
         if (!controller.signal.aborted) {
-          const message = error instanceof Error ? error.message : t("conversations.compress.failed");
+          // 带业务码的错误按码查 i18n 文案(服务端 CodedError 通道;查不到用后端 message 兜底)。
+          const coded =
+            error instanceof ApiError && error.errorCode
+              ? t(`conversations.compress.error.${error.errorCode}`, { defaultValue: error.message })
+              : undefined;
+          const message =
+            coded ?? (error instanceof Error ? error.message : t("conversations.compress.failed"));
           toast.error(`${errorPrefix}${message}`);
         }
       } finally {
