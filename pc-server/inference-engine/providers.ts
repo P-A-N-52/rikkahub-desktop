@@ -1622,12 +1622,18 @@ export function compactAssistantToolMessage(content: string, toolCalls: any[], r
   return payload;
 }
 
-export function responseApiToolCallItems(toolCalls: any[]) {
-  return toolCalls.map((toolCall) => ({
+/** Responses API 续传的 function_call 回放项。入参必须是归一化后的密集工具数组
+ *  （RoundResult.toolCalls）：readRound 已过滤稀疏槽洞/无名条目并给缺失 id 兜底。
+ *  此前误用 replay 原始数组——Responses 流按 output_index 建槽，reasoning/内置工具
+ *  混发时 function_call 不从 0 号槽起，数组洞经 JSON.stringify 变成 input 里的
+ *  null 项，火山等严格端点直接 400（MissingParameter input.role）；且原始条目缺
+ *  id 时这里发 call_id:""，与 output 项的兜底 id 配对断裂。 */
+export function responseApiToolCallItems(toolCalls: NormalizedToolCall[]) {
+  return toolCalls.map((call) => ({
     type: "function_call",
-    call_id: String(toolCall.id ?? ""),
-    name: String(toolCall.function?.name ?? ""),
-    arguments: String(toolCall.function?.arguments ?? "{}"),
+    call_id: call.id,
+    name: call.name,
+    arguments: call.arguments,
   }));
 }
 
@@ -1818,7 +1824,9 @@ export async function fetchOpenAiTextStreaming(
           : { role: "tool", tool_call_id: call.id, content: resolvedToolOutput(toolPart) };
       });
       if (useResponseInput) {
-        messages = [...messages, ...responseApiToolCallItems(r.toolCalls), ...toolMessages];
+        // 用归一化密集数组（与 toolMessages 的 call.id 同源，配对恒成立；勿用 r.toolCalls
+        // 原始稀疏数组——洞会序列化成 input 的 null 项，见 responseApiToolCallItems 头注）。
+        messages = [...messages, ...responseApiToolCallItems(result.toolCalls), ...toolMessages];
         return { ...body, input: messages, stream: true };
       }
       messages = [
