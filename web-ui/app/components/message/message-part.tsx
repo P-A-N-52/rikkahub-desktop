@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { UIMessagePart } from "~/types";
 import type { AssistantProfile } from "~/types";
 
-import { ChainOfThought } from "./chain-of-thought";
+import { ChainOfThought, type ChainOfThoughtProps } from "./chain-of-thought";
 import { AudioPart } from "./parts/audio-part";
 import { DocumentPart } from "./parts/document-part";
 import { ImagePart } from "./parts/image-part";
@@ -18,11 +18,35 @@ import { applyAssistantRegexes } from "~/lib/assistant-regex";
 // 分组规则(抽屉合并方案,2026-09-05 拍板):连续 reasoning/工具调用合并进一张
 // 思维链大卡;抽出成独立卡的语义唯一=需要用户注意(pending 审批/失败的工作区动作)。
 // 纯函数与块类型定义在 lib/message-grouping.ts(可单测)。
-import { groupMessageParts } from "~/lib/message-grouping";
+import { groupMessageParts, thinkingBlockKey, type ThinkingStep } from "~/lib/message-grouping";
 import { isWorkspaceActionTool } from "~/lib/workspace-tool-model";
+import { useChainExpandStore } from "~/stores/chain-expand-store";
+
+// 展开态主权(用户 2026-09-05 拍板):大卡的展开/折叠一旦由用户表态即归用户所有,
+// 系统自动行为(新事件到达/块弹出切链/虚拟化卸载重建)无权重置。状态存会话级
+// store(键=消息id:块稳定身份),组件重建后照常读回;订阅按 key 精确到本块,
+// 其它链的开合不牵连重渲染。
+function ThinkingChainBlock({
+  expandKey,
+  ...chainProps
+}: Omit<ChainOfThoughtProps<ThinkingStep>, "expanded" | "onExpandedChange"> & {
+  expandKey: string;
+}) {
+  const expanded = useChainExpandStore((state) => state.expandedByKey[expandKey] ?? false);
+  const setExpanded = useChainExpandStore((state) => state.setExpanded);
+  return (
+    <ChainOfThought
+      {...chainProps}
+      expanded={expanded}
+      onExpandedChange={(next) => setExpanded(expandKey, next)}
+    />
+  );
+}
 
 interface MessagePartsProps {
   parts: UIMessagePart[];
+  /** 展开态 store 键的命名空间;缺省时块身份仍稳定,仅跨消息撞键风险略升。 */
+  messageId?: string;
   loading?: boolean;
   assistant?: AssistantProfile | null;
   role?: "USER" | "ASSISTANT" | "SYSTEM" | "TOOL";
@@ -80,6 +104,7 @@ function renderContentPart(
 export const MessageParts = React.memo(
   ({
     parts,
+    messageId,
     loading = false,
     assistant,
     role,
@@ -114,7 +139,7 @@ export const MessageParts = React.memo(
     return (
       <>
         {loading && parts.length === 0 ? <TypingIndicator className="px-1 py-2" /> : null}
-        {groupedParts.map((block, blockIndex) => {
+        {groupedParts.map((block) => {
           if (block.type === "pendingTool") {
             // pending tool 从思考链中抽出，渲染独立 attention 卡片。ToolStepPart
             // 内部对 ask_user 已有专属醒目卡片；其它 pending tool 由我们在这里
@@ -145,9 +170,13 @@ export const MessageParts = React.memo(
           if (block.type === "thinking") {
             if (block.steps.length === 0) return null;
 
+            // 渲染 key 与展开态键都用块稳定身份(块首步骤标识),不用会漂移的块序号:
+            // 新块弹出/链被切分时,已有块的组件实例与用户展开态原地存活。
+            const blockKey = thinkingBlockKey(block);
             return (
-              <ChainOfThought
-                key={`thinking-${blockIndex}`}
+              <ThinkingChainBlock
+                key={`thinking-${blockKey}`}
+                expandKey={`${messageId ?? "msg"}:${blockKey}`}
                 className="my-1"
                 collapseLabel={t("message_parts.collapse_thinking")}
                 showMoreLabel={(hiddenCount) =>
@@ -156,7 +185,7 @@ export const MessageParts = React.memo(
                 steps={block.steps}
                 renderStep={(step, stepIndex, { isFirst, isLast }) => {
                   if (step.type === "reasoning") {
-                    const stepKey = step.reasoning.createdAt ?? `${blockIndex}-${stepIndex}`;
+                    const stepKey = step.reasoning.createdAt ?? `part-${step.partIndex}`;
                     return (
                       <ReasoningStepPart
                         key={stepKey}
@@ -167,7 +196,7 @@ export const MessageParts = React.memo(
                     );
                   }
 
-                  const stepKey = step.tool.toolCallId || `${blockIndex}-${stepIndex}`;
+                  const stepKey = step.tool.toolCallId || `part-${step.partIndex}`;
                   if (isWorkspaceActionTool(step.tool.toolName)) {
                     // 工作区动作步骤:传消息级 loading(bash 流式中已有输出仍在运行,
                     // 终局以结构化 exitCode 为准,由步骤内部的 finished 判定)。
@@ -217,40 +246,3 @@ export const MessageParts = React.memo(
     );
   },
 );
-
-interface MessagePartProps {
-  part: UIMessagePart;
-  loading?: boolean;
-  assistant?: AssistantProfile | null;
-  role?: "USER" | "ASSISTANT" | "SYSTEM" | "TOOL";
-  onToolApproval?: (
-    toolCallId: string,
-    approved: boolean,
-    reason: string,
-    answer?: string,
-  ) => void | Promise<void>;
-  onClickCitation?: (id: string) => void;
-  citationOrdinalMap?: Map<string, number>;
-}
-
-export function MessagePart({
-  part,
-  loading,
-  assistant,
-  role,
-  onToolApproval,
-  onClickCitation,
-  citationOrdinalMap,
-}: MessagePartProps) {
-  return (
-    <MessageParts
-      parts={[part]}
-      loading={loading}
-      assistant={assistant}
-      role={role}
-      onToolApproval={onToolApproval}
-      onClickCitation={onClickCitation}
-      citationOrdinalMap={citationOrdinalMap}
-    />
-  );
-}

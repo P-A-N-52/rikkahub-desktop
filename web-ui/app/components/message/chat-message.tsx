@@ -1085,6 +1085,7 @@ export const ChatMessage = React.memo(
             >
               <MessageParts
                 parts={message.parts}
+                messageId={message.id}
                 loading={loading}
                 assistant={assistant}
                 role={message.role as "USER" | "ASSISTANT" | "SYSTEM" | "TOOL"}

@@ -5,7 +5,7 @@
 // 正文(text/媒体/loading)切卡。
 import { describe, expect, test } from "bun:test";
 
-import { groupMessageParts } from "~/lib/message-grouping";
+import { groupMessageParts, thinkingBlockKey } from "~/lib/message-grouping";
 import { isFailedWorkspaceAction } from "~/lib/workspace-tool-model";
 import type { ReasoningPart, TextPart, ToolPart } from "~/types";
 
@@ -126,5 +126,45 @@ describe("groupMessageParts:抽屉合并分组", () => {
   test("loading 占位符按 content 处理并切卡", () => {
     const blocks = groupMessageParts([reasoning(), { type: "loading" }]);
     expect(blocks.map((b) => b.type)).toEqual(["thinking", "content"]);
+  });
+});
+
+describe("thinkingBlockKey:块稳定身份(展开态主权)", () => {
+  function firstThinking(blocks: ReturnType<typeof groupMessageParts>) {
+    const block = blocks.find((b) => b.type === "thinking");
+    if (!block || block.type !== "thinking") throw new Error("expect thinking block");
+    return block;
+  }
+
+  test("首步为工具取 toolCallId,首步为思维链取 createdAt", () => {
+    const call = tool("read");
+    expect(thinkingBlockKey(firstThinking(groupMessageParts([call, reasoning()])))).toBe(
+      `tool-${call.toolCallId}`,
+    );
+
+    const withTime: ReasoningPart = { type: "reasoning", reasoning: "x", createdAt: "2026-09-05T12:00:00Z" };
+    expect(thinkingBlockKey(firstThinking(groupMessageParts([withTime])))).toBe(
+      "reasoning-2026-09-05T12:00:00Z",
+    );
+  });
+
+  test("首步无标识时退回块首 part 下标", () => {
+    const blocks = groupMessageParts([text(), reasoning()]);
+    expect(thinkingBlockKey(firstThinking(blocks))).toBe("part-1");
+  });
+
+  test("回归:新事件追加/失败块弹出切链,已有块身份不变(旧 blockIndex 键会漂移)", () => {
+    const first = tool("read");
+    const before = groupMessageParts([first, reasoning()]);
+    const keyBefore = thinkingBlockKey(firstThinking(before));
+
+    // 流式继续:追加失败动作(弹出成独立块)+新一轮 reasoning——首块身份必须纹丝不动
+    const after = groupMessageParts([first, reasoning(), bashWithExit(1), reasoning()]);
+    expect(thinkingBlockKey(firstThinking(after))).toBe(keyBefore);
+
+    // 切链产生的后半块拥有自己独立的稳定身份
+    const tails = after.filter((b) => b.type === "thinking");
+    expect(tails).toHaveLength(2);
+    expect(tails[1]?.type === "thinking" && thinkingBlockKey(tails[1])).not.toBe(keyBefore);
   });
 });

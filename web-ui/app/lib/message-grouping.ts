@@ -16,16 +16,21 @@ export type ThinkingStep =
   | {
       type: "reasoning";
       reasoning: ReasoningPart;
+      /** 该步骤在消息 parts 数组中的下标:步骤级渲染 key 的兜底身份(尾部追加不漂移)。 */
+      partIndex: number;
     }
   | {
       type: "tool";
       tool: ToolPart;
+      partIndex: number;
     };
 
 export type MessagePartBlock =
   | {
       type: "thinking";
       steps: ThinkingStep[];
+      /** 块首步骤在消息 parts 数组中的下标(thinkingBlockKey 的兜底身份)。 */
+      firstPartIndex: number;
     }
   | {
       type: "content";
@@ -57,11 +62,21 @@ export function isPendingTool(tool: ToolPart): boolean {
 export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
   const result: MessagePartBlock[] = [];
   let currentThinkingSteps: ThinkingStep[] = [];
+  let currentThinkingStartIndex = 0;
 
   const flushThinkingSteps = () => {
     if (currentThinkingSteps.length === 0) return;
-    result.push({ type: "thinking", steps: currentThinkingSteps });
+    result.push({
+      type: "thinking",
+      steps: currentThinkingSteps,
+      firstPartIndex: currentThinkingStartIndex,
+    });
     currentThinkingSteps = [];
+  };
+
+  const pushThinkingStep = (step: ThinkingStep, index: number) => {
+    if (currentThinkingSteps.length === 0) currentThinkingStartIndex = index;
+    currentThinkingSteps.push(step);
   };
 
   parts.forEach((part, index) => {
@@ -72,7 +87,7 @@ export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
     }
 
     if (part.type === "reasoning") {
-      currentThinkingSteps.push({ type: "reasoning", reasoning: part });
+      pushThinkingStep({ type: "reasoning", reasoning: part, partIndex: index }, index);
       return;
     }
 
@@ -87,7 +102,7 @@ export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
         result.push({ type: "failedWorkspaceAction", tool: part, index });
         return;
       }
-      currentThinkingSteps.push({ type: "tool", tool: part });
+      pushThinkingStep({ type: "tool", tool: part, partIndex: index }, index);
       return;
     }
 
@@ -97,4 +112,19 @@ export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
 
   flushThinkingSteps();
   return result;
+}
+
+/** 思维链块的稳定身份:取块首步骤的全局唯一标识(工具=toolCallId,思维链=createdAt),
+ *  与"分组后的块序号/步数"彻底解耦——流式期间新步骤追加、pending/失败块弹出切链、
+ *  组件重建都不改变已有块的身份。用途(用户 2026-09-05 拍板的展开态主权修复):
+ *  1) React 渲染 key:避免块序号漂移引发的无谓子树重建(重建会连带清空步骤级状态);
+ *  2) 展开态 store 的键:用户展开的大卡不因任何系统自动行为回到折叠态。
+ *  兜底:首步无标识时退回块首 part 下标(流式尾部追加不影响已有块的下标)。 */
+export function thinkingBlockKey(block: Extract<MessagePartBlock, { type: "thinking" }>): string {
+  const first = block.steps[0];
+  if (first?.type === "tool" && first.tool.toolCallId) return `tool-${first.tool.toolCallId}`;
+  if (first?.type === "reasoning" && first.reasoning.createdAt) {
+    return `reasoning-${first.reasoning.createdAt}`;
+  }
+  return `part-${block.firstPartIndex}`;
 }

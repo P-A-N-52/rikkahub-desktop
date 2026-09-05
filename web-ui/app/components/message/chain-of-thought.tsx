@@ -7,6 +7,8 @@ import { cn } from "~/lib/utils";
 interface ChainOfThoughtProps<T> extends React.ComponentProps<typeof Card> {
   steps: T[];
   collapsedVisibleCount?: number;
+  /** 注意:返回的元素必须自带稳定 key(如 toolCallId)——步骤直接按数组渲染,
+   *  不再用窗口内下标包 key,滑动窗口移动时已有步骤实例才能存活(状态不丢)。 */
   renderStep: (
     step: T,
     index: number,
@@ -14,6 +16,10 @@ interface ChainOfThoughtProps<T> extends React.ComponentProps<typeof Card> {
   ) => React.ReactNode;
   collapseLabel?: React.ReactNode;
   showMoreLabel?: (hiddenCount: number) => React.ReactNode;
+  /** 受控展开态(可选):传入后展开状态完全归调用方所有(配合会话级 store 实现
+   *  "用户展开的大卡不被任何系统自动行为重置");不传则退回组件内部 state。 */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 interface ChainOfThoughtStepBaseProps {
@@ -45,9 +51,17 @@ function ChainOfThought<T>({
   collapseLabel = "Collapse",
   showMoreLabel,
   className,
+  expanded: controlledExpanded,
+  onExpandedChange,
   ...props
 }: ChainOfThoughtProps<T>) {
-  const [expanded, setExpanded] = React.useState(false);
+  const [innerExpanded, setInnerExpanded] = React.useState(false);
+  const expanded = controlledExpanded ?? innerExpanded;
+  const toggleExpanded = () => {
+    const next = !expanded;
+    onExpandedChange?.(next);
+    if (controlledExpanded === undefined) setInnerExpanded(next);
+  };
   const canCollapse = steps.length > collapsedVisibleCount;
   const visibleSteps = expanded || !canCollapse ? steps : steps.slice(-collapsedVisibleCount);
   const hiddenCount = Math.max(steps.length - collapsedVisibleCount, 0);
@@ -66,7 +80,7 @@ function ChainOfThought<T>({
           className={cn(
             "text-primary hover:bg-muted/60 focus-visible:ring-ring/50 mb-1 flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm outline-none focus-visible:ring-[3px]",
           )}
-          onClick={() => setExpanded((prev) => !prev)}
+          onClick={toggleExpanded}
         >
           <span className="flex w-6 items-center justify-center">
             <ChevronDown
@@ -82,14 +96,14 @@ function ChainOfThought<T>({
       )}
 
       <div>
-        {visibleSteps.map((step, index) => (
-          <React.Fragment key={index}>
-            {renderStep(step, index, {
-              isFirst: index === 0,
-              isLast: index === visibleSteps.length - 1,
-            })}
-          </React.Fragment>
-        ))}
+        {/* 不用窗口内下标当 key:renderStep 返回的元素自带稳定 key(toolCallId 等),
+            滑动窗口前移时已有步骤按身份匹配存活,运行中步骤的内部状态不被重建清空。 */}
+        {visibleSteps.map((step, index) =>
+          renderStep(step, index, {
+            isFirst: index === 0,
+            isLast: index === visibleSteps.length - 1,
+          }),
+        )}
       </div>
     </Card>
   );
