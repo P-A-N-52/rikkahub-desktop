@@ -65,4 +65,38 @@ describe("usage 合并语义(新值>0 才覆盖)", () => {
     expect(mergeTokenUsage(null, only)).toEqual(only);
     expect(mergeTokenUsage(only, null)).toEqual(only);
   });
+
+  test("mergeTokenUsage:generationMs 累计值后到覆盖,后到缺省保留旧值,恒零不写字段", () => {
+    const base = { promptTokens: 1, completionTokens: 2, totalTokens: 3, cachedTokens: 0 };
+    // 骨架每轮发的都是至今累计,后到值更大 → 覆盖。
+    const merged = mergeTokenUsage({ ...base, generationMs: 1200 }, { ...base, generationMs: 3400 });
+    expect((merged as Record<string, number>).generationMs).toBe(3400);
+    // 后到事件不带该字段(如 pi 路径的 usage)不清掉已知值。
+    const kept = mergeTokenUsage({ ...base, generationMs: 1200 }, { ...base });
+    expect((kept as Record<string, number>).generationMs).toBe(1200);
+    // 两侧都没有 → 不虚构字段(旧数据形状不变,前端按缺省回退全程)。
+    expect("generationMs" in (mergeTokenUsage({ ...base }, { ...base }) as object)).toBe(false);
+  });
+});
+
+describe("ensureUsage 估算兜底与纯时长载荷的交互", () => {
+  test("骨架下沉的全 0 token+generationMs 载荷不挡估算;估算保留真实生成时长", async () => {
+    const { ensureUsage } = await import("../conversations/helpers");
+    const msg = message("ASSISTANT", [{ type: "text", text: "这是一段需要估算 token 的回复文本内容" }]);
+    msg.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, generationMs: 500 };
+    ensureUsage(msg);
+    const usage = msg.usage as Record<string, unknown>;
+    expect(usage.estimated).toBe(true);
+    expect(Number(usage.completionTokens)).toBeGreaterThan(0);
+    expect(usage.generationMs).toBe(500);
+  });
+
+  test("实质 token 存在时不动(厂商已回报,不得覆盖为估算)", async () => {
+    const { ensureUsage } = await import("../conversations/helpers");
+    const msg = message("ASSISTANT", [{ type: "text", text: "文本" }]);
+    msg.usage = { promptTokens: 10, completionTokens: 20, totalTokens: 30, cachedTokens: 0, generationMs: 800 };
+    ensureUsage(msg);
+    expect(msg.usage).toMatchObject({ promptTokens: 10, completionTokens: 20, generationMs: 800 });
+    expect((msg.usage as Record<string, unknown>).estimated).toBeUndefined();
+  });
 });

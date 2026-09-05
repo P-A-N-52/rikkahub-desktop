@@ -39,12 +39,15 @@ export function mergeTokenUsage(prev: Message["usage"], next: Message["usage"]):
     return value > 0 ? value : Number(prevRec[key] ?? 0) || 0;
   };
   const contextLimit = nextRec.contextLimit !== undefined ? nextRec.contextLimit : prevRec.contextLimit;
+  // generationMs 单调累计(骨架每轮发的都是至今总和),新值>0 覆盖语义天然正确。
+  const generationMs = pick("generationMs");
   return {
     promptTokens: pick("promptTokens"),
     completionTokens: pick("completionTokens"),
     totalTokens: pick("totalTokens"),
     cachedTokens: pick("cachedTokens"),
     ...(contextLimit !== undefined ? { contextLimit: contextLimit as number | null } : {}),
+    ...(generationMs > 0 ? { generationMs } : {}),
   };
 }
 
@@ -196,6 +199,10 @@ export async function runStreamingToolLoop(
   let currentBody = initialBody;
   let allContent = "";
   let forceNonStream = false;
+  // 纯生成耗时累计(usage.generationMs):每轮"发请求→流读完"的成功轮时长之和。轮间
+  // 工具执行/审批不在计时窗内;失败轮(fetch 或读流抛错后降级重试)不计——统计行
+  // token/s 的语义是模型生成吞吐,等待与重试损耗不摊进去。
+  let generationMs = 0;
   // 专题9:助手"流式输出"关闭 → 从第一轮起就按非流式请求(工具循环的每一轮都非流式)。
   // 用户显式选择时 nonStreamFallback 的降级重试不再适用(已经是非流式,降无可降)。
   const userNonStream = assistant.streamOutput === false && adapter.makeNonStreamBody != null;
@@ -257,9 +264,21 @@ export async function runStreamingToolLoop(
       throw err;
     }
 
-    if (hooks.message && result.usage) {
-      if (hooks.sink) hooks.sink({ kind: "usage", usage: result.usage });
-      else hooks.message.usage = mergeTokenUsage(hooks.message.usage, result.usage);
+    generationMs += Date.now() - roundStarted;
+    if (hooks.message) {
+      // 即使本轮上游未回报 usage 也要下沉 generationMs 累计值:token 字段给 0,
+      // mergeTokenUsage 的 pick 语义会保留已知旧值,不会清零。
+      const roundUsage = result.usage && typeof result.usage === "object" && !Array.isArray(result.usage) ? result.usage : {};
+      const usagePayload = {
+        promptTokens: 0,
+        completionTokens: 0,
+        cachedTokens: 0,
+        totalTokens: 0,
+        ...roundUsage,
+        generationMs,
+      };
+      if (hooks.sink) hooks.sink({ kind: "usage", usage: usagePayload });
+      else hooks.message.usage = mergeTokenUsage(hooks.message.usage, usagePayload);
     }
 
     logRound(adapter, round, roundStarted, requestBody, {

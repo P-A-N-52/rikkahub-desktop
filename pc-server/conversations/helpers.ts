@@ -163,8 +163,15 @@ export function estimatePromptTokensForConversation(conversation: Conversation) 
 }
 
 export function ensureUsage(msg: Message, conversation?: Conversation) {
-  const existing = msg.usage;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) return;
+  const existing = msg.usage as Record<string, unknown> | null | undefined;
+  const usable = existing && typeof existing === "object" && !Array.isArray(existing);
+  // 判定"实质 usage"看 token 是否非零:流式骨架每轮下沉 generationMs 时会发全 0
+  // token 的载荷(厂商未回报 usage 的轮),纯时长对象不能挡住估算兜底,否则输出
+  // token 恒显 0。上游真回报全 0 的边缘场景同样落估算(estimated 标记,统计页照旧排除)。
+  const hasRealTokens =
+    usable &&
+    (Number(existing.promptTokens ?? 0) > 0 || Number(existing.completionTokens ?? 0) > 0 || Number(existing.totalTokens ?? 0) > 0);
+  if (hasRealTokens) return;
   const completionTokens = estimateTokens(textFromParts(msg.parts) || reasoningFromParts(msg.parts));
   const promptTokens = conversation ? estimatePromptTokensForConversation(conversation) : 0;
   msg.usage = {
@@ -173,6 +180,8 @@ export function ensureUsage(msg: Message, conversation?: Conversation) {
     totalTokens: promptTokens + completionTokens,
     cachedTokens: 0,
     estimated: true,
+    // 估算只兜 token;骨架已累计的纯生成耗时是真实测量值,保留(速度=估算token/真实时长)。
+    ...(usable && Number(existing.generationMs ?? 0) > 0 ? { generationMs: Number(existing.generationMs) } : {}),
   };
   fillContextLimit(msg);
 }

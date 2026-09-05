@@ -100,6 +100,26 @@ describe("轮次与返回值", () => {
     expect(await runStreamingToolLoop(adapter, {}, assistant, undefined, hooks)).toBe("AB");
     expect(events.some((e) => e.kind === "tool_call_created" && e.toolCallId === "tc1")).toBe(true);
   });
+
+  test("generationMs:每轮都下沉累计值(无上游 usage 也发),工具执行时间不计入(统计行 token/s 内测反馈)", async () => {
+    const { hooks, events } = hooksFixture(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120)); // 模拟耗时工具
+      return { output: [] };
+    });
+    const adapter = baseAdapter([withTool("A"), noTools("B")]);
+    const wallStarted = Date.now();
+    await runStreamingToolLoop(adapter, {}, assistant, undefined, hooks);
+    const wallMs = Date.now() - wallStarted;
+    const usageEvents = events.filter((e) => e.kind === "usage") as Array<{ usage: { generationMs?: number } }>;
+    // 两轮各发一次(rounds 无 usage 字段也要下沉累计值)。
+    expect(usageEvents.length).toBe(2);
+    const last = usageEvents[usageEvents.length - 1]!.usage.generationMs!;
+    const first = usageEvents[0]!.usage.generationMs!;
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(last).toBeGreaterThanOrEqual(first); // 单调累计
+    // 全程含 120ms 工具执行,纯生成(假 readRound 即返)应远小于全程——留宽余量防 CI 抖动。
+    expect(last).toBeLessThanOrEqual(Math.max(wallMs - 100, 1));
+  });
 });
 
 describe("审批与异常", () => {

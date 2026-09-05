@@ -310,7 +310,11 @@ function getNerdStats(
   const durationMs = getDurationMs(createdAt, finishedAt);
   if (durationMs && usage.completionTokens > 0) {
     const durationSeconds = durationMs / 1000;
-    const tps = usage.completionTokens / durationSeconds;
+    // 速度分母 = 纯生成耗时(服务端骨架累计,不含轮间工具执行/审批等待)。工具调用
+    // 回合用全程墙钟会把速度稀释到失真(内测反馈)。旧数据/工作区 pi 路径无该字段,
+    // 回退全程。时长指标仍显示全程(用户等待感知),两者语义不同属有意设计。
+    const speedMs = usage.generationMs && usage.generationMs > 0 ? usage.generationMs : durationMs;
+    const tps = usage.completionTokens / (speedMs / 1000);
 
     items.push({
       key: "speed",
