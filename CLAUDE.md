@@ -26,6 +26,13 @@ web-ui/                 # React Router 7 SPA (SPA mode, no SSR)
   copy.ts               # Post-build: mirrors build/client into ../dist/web-ui/build/client
                         # so the portable exe can serve it
 
+pi/                     # Vendored pi coding agent (workspace-mode engine). Independent
+                        # shallow git clone, EXCLUDED from this repo (.gitignore) — its
+                        # version control lives in pi/.git. Carries local patch commits;
+                        # see "pi vendor 维护手册" below.
+pi-patches/             # git format-patch exports of our local pi commits (tracked here
+                        # so patches survive re-clones; restore with `git am`)
+
 icons/                  # Provider/search-service SVG/PNG logos
 dist/                   # Portable bundle: rikkahub-pc.exe + icons + web-ui build
                         # Also where pc-data/ lives at runtime when running the exe
@@ -137,3 +144,39 @@ the runtime will.
   `Rikkahub_<tag>_linux_x64.tar.gz` naming convention, so don't rename the uploaded file.
   Windows (`Rikkahub_<tag>_x64-setup.exe`) and Linux assets live side by side on the same
   Release.
+
+## pi vendor 维护手册（工作区引擎上游）
+
+`pi/` 是工作区模式引擎的 vendored 源码：独立浅克隆 git 仓库，宿主 `.gitignore` 排除，
+版本管理在 `pi/.git` 内。**pc-server 直接 import 其 TS 源码**（见 `pi-engine/`），因此
+它的状态直接影响构建与行为。
+
+**当前基线**：上游 `5cd93f688`（2026-08-20）+ 本地补丁提交 `fe2d0c560`
+（`[RIKKAHUB PATCH: budget-xhigh-max]`，5 文件 14 处：ThinkingBudgets 扩 xhigh/max 键，
+详见提交信息）。本地提交同步导出于 `pi-patches/`（宿主仓库跟踪，可分发）。
+
+**补丁纪律**（typecheck.ts 头注同款）：
+- 仅允许功能补丁，且必须同时具备三件套：行内 `[RIKKAHUB PATCH: <名>]` 标记、
+  pi 仓库独立 commit + `pi-patches/` 导出、宿主侧行为锁定测试（补丁丢失即测试变红，
+  现有样例：`pc-server/pi-engine/model-bridge.test.ts` 的 "vendor 补丁行为锁定"）。
+- 禁止为压 tsc 噪音改 pi 源码（消音性改动）。
+- 动 pi 文件后必须裸跑 `cd pc-server && bunx tsc --noEmit` 核对补丁文件零新增诊断
+  （`bun run typecheck` 会滤除 pi 内部诊断，补丁自身的类型错误会被吞掉）。
+
+**上游更新流程**（每次升级 pi 必须走完）：
+1. `pi/` 内 fetch 上游新版 → rebase 本地补丁提交（冲突点即补丁点，逐个调和）。
+2. `grep -rn "RIKKAHUB PATCH" pi/packages` 核对全部标记存活；重新 `git format-patch`
+   刷新 `pi-patches/`。
+3. **清除冗余（必做）**：逐个补丁自问"上游是否已原生支持？"——若已支持（如
+   ThinkingBudgets 原生含 xhigh/max），删除对应补丁改用上游实现；同时重审
+   `pc-server/pi-engine/model-bridge.ts` 的全部 compat 覆盖与 thinkingLevelMap 登记
+   （supportsStore / supportsDeveloperRole / forceAdaptiveThinking / xhigh/max 放行等），
+   上游默认行为已对齐的覆盖一并删除，不留冗余层。
+4. 宿主验证：裸跑 tsc 核对补丁文件（见补丁纪律）→ `bun test pc-server web-ui` 全量
+   （跨引擎平价测试 + 补丁行为锁定测试兜底）。
+5. pi 的 pre-commit 在浅克隆环境有既有噪音（bedrock/smithy 类型错，与补丁无关）：
+   若报错均位于未触碰文件，`--no-verify` 提交并在提交信息注明缘由。
+
+**重建环境**（换机器 / 重新 clone 宿主仓库后 `pi/` 不存在）：
+浅克隆 pi 上游到基线提交，然后 `git am pi-patches/*.patch` 重放本地补丁，
+跑一遍上面第 4 步验证。
