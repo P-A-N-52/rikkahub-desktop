@@ -22,6 +22,7 @@ import {
   isOfficialOpenAiHost,
   openAiMaxTokensField,
   openAiThinkingSwitchProtocol,
+  responsesHistoryReasoningAllowed,
   SILICONFLOW_THINKING_MODELS,
   ZHIPU_GLM53_EFFORT_BY_LEVEL,
 } from "./request-dialect";
@@ -51,6 +52,14 @@ describe("request-dialect 统一请求方言", () => {
     expect(openAiMaxTokensField("ark.cn-beijing.volces.com")).toBe("max_tokens");
     expect(openAiMaxTokensField("dashscope.aliyuncs.com")).toBe("max_tokens");
     expect(openAiMaxTokensField("127.0.0.1")).toBe("max_tokens");
+  });
+
+  it("历史 reasoning 项:仅官方主机回传(火山 400 内测实证 2026-09-05,第二轮必炸根因)", () => {
+    expect(responsesHistoryReasoningAllowed("api.openai.com")).toBe(true);
+    expect(responsesHistoryReasoningAllowed("my-rg.openai.azure.com")).toBe(true);
+    expect(responsesHistoryReasoningAllowed("ark.cn-beijing.volces.com")).toBe(false);
+    expect(responsesHistoryReasoningAllowed("open.bigmodel.cn")).toBe(false);
+    expect(responsesHistoryReasoningAllowed("")).toBe(false);
   });
 });
 

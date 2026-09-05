@@ -828,7 +828,11 @@ export function responseApiImageGenerationItem(part: Record<string, JsonValue>) 
 }
 
 
-export function responseApiMessagesFromUiMessages(messages: Message[], targetModel?: Model) {
+/** UI 消息 → Responses API input 项数组。includeReasoningItems 控制历史 reasoning
+ *  项（{type:"reasoning", summary:[…]}）是否回传：OpenAI 私有形态，仅官方主机接受，
+ *  第三方端点（火山等）解析不了直接 400——判定在调用方（conversationResponseApiInput）
+ *  按主机方言 + provider 开关决定，本函数默认 true 跟随 OpenAI 官方语义。 */
+export function responseApiMessagesFromUiMessages(messages: Message[], targetModel?: Model, includeReasoningItems = true) {
   const stripImageForOcr = targetModel ? !supportsInputModality(targetModel, "IMAGE") : false;
   const items: ApiMessage[] = [];
   for (const messageValue of messages) {
@@ -847,8 +851,10 @@ export function responseApiMessagesFromUiMessages(messages: Message[], targetMod
         if (!isRecord(part)) continue;
         if (part.type === "reasoning") {
           flushContent();
-          const reasoningItem = responseApiReasoningItem(part);
-          if (reasoningItem) items.push(reasoningItem);
+          if (includeReasoningItems) {
+            const reasoningItem = responseApiReasoningItem(part);
+            if (reasoningItem) items.push(reasoningItem);
+          }
           continue;
         }
         if (part.type === "image") {

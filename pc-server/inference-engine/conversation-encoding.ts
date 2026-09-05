@@ -10,7 +10,8 @@ import { buildSearchContext } from "../search";
 import { findModel } from "../model-providers";
 import { listSkills } from "../tools/skills";
 import { conversationFunctionTools } from "../tools/bound";
-import { GOOGLE_SAFETY_SETTINGS, apiContentFromParts, apiContentText, appendAssistantApiMessages, googleContentsFromApiMessages, googleFunctionDeclarations, googleGenerationConfig, hasBuiltInTool, responseApiMessagesFromUiMessages, supportsAbility, supportsOutputModality } from "./message-builder";
+import { GOOGLE_SAFETY_SETTINGS, apiContentFromParts, apiContentText, appendAssistantApiMessages, googleContentsFromApiMessages, googleFunctionDeclarations, googleGenerationConfig, hasBuiltInTool, hostOfProvider, responseApiMessagesFromUiMessages, supportsAbility, supportsOutputModality } from "./message-builder";
+import { responsesHistoryReasoningAllowed } from "../model-providers/request-dialect";
 import { isEmptyAssistantPlaceholder } from "./parts";
 import { enrichMessages, templateVariables } from "./message-enrichment";
 
@@ -160,7 +161,13 @@ export function conversationMessagesForApi(
 
 export function conversationResponseApiInput(conversation: Conversation, assistant: Assistant) {
   const { messages: transformedMessages, picked } = conversationTransformedMessages(conversation, assistant);
-  return responseApiMessagesFromUiMessages(transformedMessages, picked.model);
+  // 历史思考项回传方言：仅官方 OpenAI 主机（第三方 Responses 端点形态各异，火山
+  // 直接 400，见 responsesHistoryReasoningAllowed 头注）；另尊重 provider 级
+  // includeHistoryReasoning 开关（与 chat-completions 路径 e63d017 同语义——
+  // Responses 路径只有 openai 型 provider 会走到，无需再判 type）。
+  const includeReasoningItems = responsesHistoryReasoningAllowed(hostOfProvider(picked.provider))
+    && picked.provider.includeHistoryReasoning !== false;
+  return responseApiMessagesFromUiMessages(transformedMessages, picked.model, includeReasoningItems);
 }
 
 export function conversationResponseApiInstructions(conversation: Conversation, assistant: Assistant) {

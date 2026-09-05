@@ -14,6 +14,7 @@ import {
   parseDataUrl,
   reasoningPayloadForProvider,
   responseApiContentFromUiParts,
+  responseApiMessagesFromUiMessages,
   supportsInputModality,
 } from "./message-builder";
 import type { MessagePart, Model, Provider } from "../foundation/types";
@@ -376,5 +377,39 @@ describe("reasoningPayloadForProvider — 2026-09 新格式方言", () => {
     expect(reasoningPayloadForProvider(dashscope, model("kimi-k3"), "high")).toEqual({
       enable_thinking: true,
     });
+  });
+});
+
+describe("responseApiMessagesFromUiMessages — 历史 reasoning 项方言（2026-09-05 内测火山 400）", () => {
+  const twoRoundMessages = [
+    { id: "u1", role: "USER", parts: [{ type: "text", text: "第一问" }], annotations: [], createdAt: 1 },
+    {
+      id: "a1",
+      role: "ASSISTANT",
+      parts: [
+        { type: "reasoning", reasoning: "历史思考", createdAt: "2026-09-05T14:00:00Z" },
+        { type: "tool", toolCallId: "call_1", toolName: "lookup", input: "{}", output: [{ type: "text", text: "r" }], approvalState: { type: "auto" } },
+        { type: "text", text: "第一答" },
+      ],
+      annotations: [],
+      createdAt: 2,
+    },
+    { id: "u2", role: "USER", parts: [{ type: "text", text: "第二问" }], annotations: [], createdAt: 3 },
+  ] as never[];
+
+  test("默认（官方语义）回传 reasoning 项，fc/out/text 完整", () => {
+    const input = responseApiMessagesFromUiMessages(twoRoundMessages) as Array<Record<string, unknown>>;
+    expect(input.map((item) => String(item.type ?? item.role))).toEqual([
+      "user", "reasoning", "function_call", "function_call_output", "assistant", "user",
+    ]);
+  });
+
+  test("includeReasoningItems=false（第三方端点）剥除 reasoning 项，其余项不受影响", () => {
+    const input = responseApiMessagesFromUiMessages(twoRoundMessages, undefined, false) as Array<Record<string, unknown>>;
+    expect(input.map((item) => String(item.type ?? item.role))).toEqual([
+      "user", "function_call", "function_call_output", "assistant", "user",
+    ]);
+    // 火山报障核心断言：任何项都不缺 role/type 判别字段，序列化无 null
+    expect(JSON.parse(JSON.stringify(input)).every((item: unknown) => item !== null)).toBe(true);
   });
 });

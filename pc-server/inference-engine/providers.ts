@@ -1679,7 +1679,10 @@ export function mergeToolCallDeltas(existing: any[], deltaCalls: any[], mode: "d
     const inferredName = !currentName && !incomingName ? extractToolNameFromArguments(nextArguments) : "";
     existing[index] = {
       ...current,
-      id: delta.id ?? current.id,
+      // 真值判定而非 ??：Responses 流的 arguments.delta/done 帧 id 取自 item_id/call_id，
+      // 帧上两者皆缺时为 ""——?? 会让空串覆盖 output_item.added 已写入的真 call_id，
+      // 续传的 function_call/function_call_output 配对 id 全变空（火山等严格端点 400）。
+      id: delta.id || current.id,
       type: delta.type ?? current.type,
       function: {
         name: incomingName || currentName || inferredName,
@@ -1813,8 +1816,12 @@ export async function fetchOpenAiTextStreaming(
       for (const toolCall of r.toolCalls) {
         if (!toolCall || typeof toolCall !== "object") continue;
         if (!toolCall.function?.name) continue;
+        // 兜底须覆盖空串（?? 只接 null/undefined）：流帧的 id 恒经 String(… ?? "")
+        // 归一，缺失时是 "" 而非 undefined，旧写法会把空串原样放行，续传配对
+        // call_id 全空（严格端点 400）。
+        const rawId = String(toolCall.id ?? "").trim();
         normalized.push({
-          id: String(toolCall.id ?? id()),
+          id: rawId || id(),
           name: String(toolCall.function?.name ?? ""),
           arguments: String(toolCall.function?.arguments ?? "{}"),
         });

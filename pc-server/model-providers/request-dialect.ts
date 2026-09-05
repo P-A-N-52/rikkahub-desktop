@@ -41,6 +41,19 @@ export function openAiMaxTokensField(host: string): "max_tokens" | "max_completi
   return isOfficialOpenAiHost(host) ? "max_completion_tokens" : "max_tokens";
 }
 
+/** 方言事实：Responses API 的历史 reasoning 项（{type:"reasoning", summary:[…]}）
+ *  仅对官方 OpenAI 主机回传。summary[]/encrypted_content 是 OpenAI 私有形态（思考
+ *  模型多轮衔接用）；第三方 Responses 兼容端点的 reasoning 输入项结构各异——火山
+ *  方舟要求 content[]（reasoning_text）+status 结构，对 OpenAI summary 形态按普通
+ *  消息解析，直接 400 MissingParameter input.role（2026-09-05 内测实证：
+ *  GLM-5.3-flash@plan /responses 端点，第二轮对话历史带思考项必炸；首轮 input 无
+ *  历史思考项、续传也不回放 reasoning 项，故首轮从不触发——与报障"第一轮怎么发都
+ *  好、第二问必炸"完全吻合）。剥除历史思考项是各家默认语义（模型本就不回看思考），
+ *  合法且安全。 */
+export function responsesHistoryReasoningAllowed(host: string): boolean {
+  return isOfficialOpenAiHost(host);
+}
+
 // ===== Kimi（Moonshot）代际事实 =====
 // K3 发布后官方逐代收紧请求约束（platform.kimi.com「思考模型/模型参数参考」）。
 // 代际判定是模型级事实、跨渠道成立（官方 api.moonshot.cn、硅基流动、透传型中转
