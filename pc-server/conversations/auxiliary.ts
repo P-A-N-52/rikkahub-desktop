@@ -397,6 +397,12 @@ export function markCompactionBoundary(conversation: Conversation): void {
 export async function compressConversation(conversation: Conversation, additionalPrompt = "", targetTokens = 2000, keepRecentMessages = 32, signal?: AbortSignal) {
   const allMessages = selectedConversationMessages(conversation);
   if (allMessages.length === 0) throw new Error("当前会话没有可压缩的消息");
+  // 审计防线快照:压缩是"按开头快照整体覆盖 messages"的破坏性替换,期间任何写入
+  // (发消息/重新生成/删除节点等)都会在覆盖时被静默吞掉。API 三写入口已 409 互斥,
+  // 这里再记引用+长度,落库前比对——防住未来新增的绕过入口的写路径(fail-safe:
+  // 宁可压缩作废重来,不可丢用户数据)。
+  const messagesRefBefore = conversation.messages;
+  const messagesLengthBefore = conversation.messages.length;
 
   // 内测反馈(310K 会话 /compact 报"消息数量不足"):按条数保留的语义对"少而长"的会话
   // 不成立——20 条超长消息的会话 token 巨大,却因条数 ≤ 默认保留 32 条被整体划进保留区,
@@ -465,6 +471,10 @@ export async function compressConversation(conversation: Conversation, additiona
   // 批6复审 G1:会话在压缩期间被删除/被导入替换时结果同样作废——下方 persistConversation
   // 是无条件 upsert,会把已删会话复活成"只剩摘要"的僵尸。
   if (getConversation(conversation.id) !== conversation) throw new Error("会话已被删除,压缩结果作废");
+  // 审计防线:期间有写入(push 改长度 / delete-filter 换引用)则整体作废,绝不覆盖。
+  if (conversation.messages !== messagesRefBefore || conversation.messages.length !== messagesLengthBefore) {
+    throw new Error("会话在压缩期间发生变更,压缩结果作废,请重试");
+  }
 
   conversation.messages = [
     ...summaries.filter(Boolean).map((summary) => ({ id: id(), messages: [message("USER", [{ type: "text", text: summary }])], selectIndex: 0 })),

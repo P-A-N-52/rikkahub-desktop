@@ -187,6 +187,13 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       return json(page);
     }
     if (sub === "messages" && request.method === "POST") {
+      // 压缩互斥(审计修复):compressConversation 完成时用"压缩开始时的消息快照"整体
+      // 覆盖 conversation.messages——压缩窗口(LLM 摘要可达数十秒)内写入的新消息会被
+      // 静默吞掉。send/regenerate/edit 三写入口一律 409,复用 compress_in_progress
+      // 业务码(前端按码查 i18n,message 兜底)。auxiliary 落库防线是第二道保险。
+      if (compressing.has(conversation.id)) {
+        return error("已有压缩正在进行，请稍候", 409, "compress_in_progress");
+      }
       const body = messagesBody ?? {};
       const assistant = findAssistant(conversation.assistantId);
       const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
@@ -324,6 +331,10 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       return json({ status: "updated", title: conversation.title });
     }
     if (sub === "regenerate" && request.method === "POST") {
+      // 压缩互斥:理由见 send 入口(压缩落库覆盖期间写入)。
+      if (compressing.has(conversation.id)) {
+        return error("已有压缩正在进行，请稍候", 409, "compress_in_progress");
+      }
       const body = await readJson<{ messageId?: string }>(request);
       // 2-1:对齐 send 入口——先中止进行中的旧流。否则 generateAnswer 的 generating.set
       // 直接顶掉旧 controller,旧流成为无主流:与新流同写一个节点,或对已摘除节点持续
@@ -409,6 +420,10 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
     }
     const messageEdit = sub.match(/^messages\/([^/]+)\/edit$/);
     if (messageEdit && request.method === "POST") {
+      // 压缩互斥:理由见 send 入口(压缩落库覆盖期间写入)。
+      if (compressing.has(conversation.id)) {
+        return error("已有压缩正在进行，请稍候", 409, "compress_in_progress");
+      }
       const body = await readJson<{ parts?: JsonValue[] }>(request);
       // 2-1:对齐 send 入口——先中止进行中的旧流。否则 generateAnswer 的 generating.set
       // 直接顶掉旧 controller,旧流成为无主流:与新流同写一个节点,或对已摘除节点持续

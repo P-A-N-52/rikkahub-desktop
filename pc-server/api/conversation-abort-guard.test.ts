@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import type { Conversation, State } from "../foundation/types";
-import { generating } from "../conversations/generation-state";
+import { compressing, generating } from "../conversations/generation-state";
 import { configureWorkingSet, registerConversation } from "../conversations/working-set";
 import { setState, state } from "../persistence/json-store";
 import { handleConversationRoutes } from "./handlers/conversations";
@@ -92,4 +92,45 @@ describe("三入口 abort 守卫(2-1)", () => {
     expect(response!.status).toBe(400);
     expect(generating.has(conv.id)).toBe(false);
   });
+});
+
+// 审计修复:压缩落库是"按开头快照整体覆盖 messages"的破坏性替换,压缩窗口内经
+// send/regenerate/edit 写入的消息会在覆盖时被静默吞掉(数据丢失)。三写入口在压缩
+// 进行中(compressing 注册表)一律 409 + compress_in_progress 业务码,不触碰会话。
+describe("压缩窗口写互斥", () => {
+  async function postJson(conversationId: string, subPath: string, body: object): Promise<Response | null> {
+    const url = new URL(`http://127.0.0.1/api/conversations/${conversationId}/${subPath}`);
+    const request = new Request(url, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+    });
+    return handleConversationRoutes(request, url, `conversations/${conversationId}/${subPath}`);
+  }
+
+  const entries: Array<[label: string, subPath: (conv: Conversation) => string, body: object]> = [
+    ["send", () => "messages", { parts: [{ type: "text", text: "压缩中溜进来的消息" }] }],
+    ["regenerate", () => "regenerate", { messageId: "whatever" }],
+    ["edit", (conv) => `messages/${conv.id}-m1/edit`, { parts: [{ type: "text", text: "改" }] }],
+  ];
+
+  for (const [label, subPathOf, body] of entries) {
+    test(`压缩进行中 ${label} 返回 409 + 业务码,会话未被触碰`, async () => {
+      const conv = makeConversation(`c-mutex-${label}`);
+      registerConversation(conv);
+      compressing.set(conv.id, Date.now());
+      try {
+        const response = await postJson(conv.id, subPathOf(conv), body);
+        expect(response).not.toBeNull();
+        expect(response!.status).toBe(409);
+        const payload = (await response!.json()) as { errorCode?: string };
+        expect(payload.errorCode).toBe("compress_in_progress");
+        // 会话结构原样:未写入新节点,也未启动生成。
+        expect(conv.messages.length).toBe(1);
+        expect(generating.has(conv.id)).toBe(false);
+      } finally {
+        compressing.delete(conv.id);
+      }
+    });
+  }
 });

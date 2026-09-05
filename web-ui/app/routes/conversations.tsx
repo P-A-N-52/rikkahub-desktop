@@ -1506,12 +1506,22 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   const handleRegenerate = React.useCallback(
     async (messageId: string) => {
       if (!activeId) return;
-      await api.post<{ status: string }>(`conversations/${activeId}/regenerate`, {
-        messageId,
-      });
-      refreshList();
+      try {
+        await api.post<{ status: string }>(`conversations/${activeId}/regenerate`, {
+          messageId,
+        });
+        refreshList();
+      } catch (error) {
+        // 审计修复配套:压缩窗口内 regenerate 被服务端 409 挡下(写互斥,防压缩落库
+        // 覆盖吞消息)。按业务码查 i18n,后端 message 兜底——否则用户点了没反应。
+        const coded =
+          error instanceof ApiError && error.errorCode
+            ? t(`conversations.compress.error.${error.errorCode}`, { defaultValue: error.message })
+            : undefined;
+        toast.error(coded ?? (error instanceof Error ? error.message : String(error)));
+      }
     },
-    [activeId, refreshList],
+    [activeId, refreshList, t],
   );
 
   const handleSelectBranch = React.useCallback(

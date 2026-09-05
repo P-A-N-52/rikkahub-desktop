@@ -20,6 +20,9 @@ export interface FakeSseTurn {
   /** 本轮工具调用(P3:驱动 pi 执行 customTools;finish_reason 自动为 tool_calls)。 */
   toolCalls?: FakeSseToolCall[];
   usage?: { prompt_tokens: number; completion_tokens: number };
+  /** 收到请求后、写响应前执行:确定性模拟"LLM 调用进行中"发生的并发事件
+   *  (如压缩落库防线测试在摘要生成期间注入新消息)。 */
+  beforeRespond?: () => void | Promise<void>;
 }
 
 export interface FakeOpenAiSseServer {
@@ -47,6 +50,7 @@ export async function startFakeOpenAiSse(turns: FakeSseTurn[]): Promise<FakeOpen
       res.end(JSON.stringify({ error: { message: "fake sse script exhausted" } }));
       return;
     }
+    if (turn.beforeRespond) await turn.beforeRespond();
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const frame = (payload: object) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
     if (turn.content !== undefined) {

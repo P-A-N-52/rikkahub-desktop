@@ -448,6 +448,36 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
   }, 30_000);
 
 
+  test("落库防线:摘要生成期间有新消息写入 → 压缩作废,消息一条不丢", async () => {
+    // 审计修复回归:压缩落库是"按开头快照覆盖 messages"——期间写入若不作废压缩,
+    // 会被覆盖吞掉。API 三入口已 409 互斥,此处验证第二道防线(绕过入口的直接写入)。
+    let conversation!: Conversation;
+    await installUpstream([{
+      content: "早期历史的压缩摘要。",
+      // fake server 收到摘要请求后、响应前注入:确定性模拟压缩窗口内的并发写入。
+      beforeRespond: () => {
+        appendUserNode(conversation, "压缩期间溜进来的消息");
+      },
+    }]);
+    conversation = seedConversation(null);
+    for (let round = 0; round < 5; round++) {
+      appendUserNode(conversation, `第${round}轮历史。`.repeat(200));
+    }
+    const lengthBefore = conversation.messages.length;
+
+    const response = await postCompress(conversation.id);
+    expect(response?.status).toBe(400);
+    const body = (await response?.json()) as { error: string };
+    expect(body.error).toContain("压缩期间发生变更");
+    // 会话未被覆盖:原历史 + 溜入的消息全部健在,没有摘要节点。
+    expect(conversation.messages.length).toBe(lengthBefore + 1);
+    const tail = conversation.messages.at(-1)!.messages[0];
+    expect(JSON.stringify(tail.parts)).toContain("压缩期间溜进来的消息");
+    expect(JSON.stringify(conversation.messages[0].messages[0].parts)).not.toContain("压缩摘要");
+    // finally 清理:压缩态归零,后续可重新发起。
+    expect(compressing.has(conversation.id)).toBe(false);
+  }, 30_000);
+
   test("侧边栏绿灯:列表 isGenerating 在压缩中为 true(生成或压缩都算忙碌)", async () => {
     await installUpstream([{ content: "未使用" }]);
     const conversation = seedConversation(null);
