@@ -101,6 +101,9 @@ function piCompatOverridesFor(provider: Provider, api: KnownApi) {
   return {
     supportsDeveloperRole: OPENAI_DEVELOPER_ROLE_ALLOWED,
     maxTokensField: openAiMaxTokensField(hostOfProvider(provider)),
+    // 聊天引擎从不发 store 字段(官方 chat completions 默认即 store:false,无隐私退化;
+    // 第三方严格端点对未知字段有拒收风险)——压制 pi 默认的 store:false 输出,两引擎对齐。
+    supportsStore: false,
   };
 }
 
@@ -176,7 +179,12 @@ function piThinkingOverridesFor(
     // K2.7-code(始终思考,开关拒收):压制全部思考字段,模型走默认行为。
     return { compat: { supportsReasoningEffort: false } };
   }
-  return undefined; // reasoning-effort:pi openai format 默认已对(官方/混元/阶跃/中转)。
+  // reasoning-effort 协议(官方/混元/阶跃/未知中转):字段与格式 pi 默认已对,但 pi 对
+  // xhigh/max 两档默认不放行(getSupportedThinkingLevels 仅 thinkingLevelMap 显式登记
+  // 才支持),MAX 档会被 clamp 到 high——与聊天引擎默认分支"档位原样透传(含 xhigh/max,
+  // 安卓对齐)"分歧(engine-request-diff 实证:chat=max/pi=high)。登记同名映射放行,
+  // 两引擎逐字收敛;其余四档 pi 天然放行且不映射,勿画蛇添足。
+  return { thinkingLevelMap: { xhigh: "xhigh", max: "max" } };
 }
 
 /** 映射不到时给用户看的原因（模型选择器过滤面与错误提示共用，方案"诚实披露，不硬塞"）。 */

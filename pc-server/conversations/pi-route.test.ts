@@ -54,7 +54,7 @@ afterAll(async () => {
  *  reasoningModel:给模型标 REASONING 能力(pi 侧映射 reasoning=true)——请求口径
  *  回归用(推理模型才触发 pi 的 developer 角色分支,见 model-bridge compat 覆盖)。
  *  maxTokens/systemPrompt:写进助手配置,跨引擎方言平价用例用(两引擎读同一配置)。 */
-async function installUpstream(turns: FakeSseTurn[], opts?: { reasoningModel?: boolean; maxTokens?: number; systemPrompt?: string }) {
+async function installUpstream(turns: FakeSseTurn[], opts?: { reasoningModel?: boolean; maxTokens?: number; systemPrompt?: string; reasoningLevel?: string }) {
   const server = await startFakeOpenAiSse(turns);
   servers.push(server);
   const ourModel = model("fake-model", "Route Test Model");
@@ -75,6 +75,7 @@ async function installUpstream(turns: FakeSseTurn[], opts?: { reasoningModel?: b
     name: "route-e2e",
     ...(opts?.maxTokens != null ? { maxTokens: opts.maxTokens } : {}),
     ...(opts?.systemPrompt != null ? { systemPrompt: opts.systemPrompt } : {}),
+    ...(opts?.reasoningLevel != null ? { reasoningLevel: opts.reasoningLevel } : {}),
   }];
   next.settings.providers = [ourProvider];
   next.settings.chatModelId = ourModel.id;
@@ -221,7 +222,7 @@ describe("generateAnswer P3 路由", () => {
     // 两条翻译路径必须收敛到同一字节。任一引擎将来漂移(如 pi 升级改探测默认),此测试先红。
     const server = await installUpstream(
       [{ content: "chat 侧回答" }, { content: "pi 侧回答" }],
-      { reasoningModel: true, maxTokens: 1024, systemPrompt: "平价测试系统提示词" },
+      { reasoningModel: true, maxTokens: 1024, systemPrompt: "平价测试系统提示词", reasoningLevel: "MAX" },
     );
     const chatConversation = seedConversation(null);
     await generateAnswer(chatConversation);
@@ -236,12 +237,19 @@ describe("generateAnswer P3 路由", () => {
       messages?: Array<{ role?: string }>;
       max_tokens?: number;
       max_completion_tokens?: number;
+      reasoning_effort?: string;
+      store?: boolean;
     }>) {
       const roles = (request.messages ?? []).map((item) => item.role ?? "");
       expect(roles).toContain("system");
       expect(roles).not.toContain("developer");
       expect(request.max_completion_tokens).toBeUndefined();
       expect(request.max_tokens).toBe(1024);
+      // 档位平价:MAX 两引擎逐字同值(pi 对 xhigh/max 默认 clamp 到 high,
+      // model-bridge 登记同名映射放行;engine-request-diff 实证修复)。
+      expect(request.reasoning_effort).toBe("max");
+      // store 平价:聊天引擎从不发,pi 经 supportsStore:false 压制。
+      expect(request.store).toBeUndefined();
     }
   }, 30_000);
 

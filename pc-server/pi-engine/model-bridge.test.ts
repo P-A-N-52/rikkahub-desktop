@@ -196,6 +196,7 @@ describe("mapProviderModelToPi", () => {
     ).toEqual({
       supportsDeveloperRole: false,
       maxTokensField: "max_tokens",
+      supportsStore: false,
       thinkingFormat: "deepseek",
       supportsReasoningEffort: false,
     });
@@ -207,13 +208,13 @@ describe("mapProviderModelToPi", () => {
         makeProvider({ id: "p2", name: "OpenAI", baseUrl: "https://api.openai.com/v1" }),
         model("o3"),
       )),
-    ).toEqual({ supportsDeveloperRole: false, maxTokensField: "max_completion_tokens" });
+    ).toEqual({ supportsDeveloperRole: false, maxTokensField: "max_completion_tokens", supportsStore: false });
     expect(
       compatOf(mapProviderModelToPi(
         makeProvider({ id: "p3", name: "Azure", baseUrl: "https://my-rg.openai.azure.com/openai/v1" }),
         model("o3"),
       )),
-    ).toEqual({ supportsDeveloperRole: false, maxTokensField: "max_completion_tokens" });
+    ).toEqual({ supportsDeveloperRole: false, maxTokensField: "max_completion_tokens", supportsStore: false });
 
     // Responses 协议:原生 max_output_tokens,只需角色覆盖。
     expect(
@@ -275,6 +276,30 @@ describe("createPiModelRuntime 内存注册闭环", () => {
 
     // 零落盘:客房目录整个不存在(auth 用内存存储,models 用内存 store,方案 §3.5 红线)。
     expect(existsSync(piAgentDir)).toBe(false);
+  });
+});
+
+describe("xhigh/max 档位放行(与聊天引擎原样透传收敛)", () => {
+  it("通用 reasoning-effort 协议登记 xhigh/max 同名映射(pi 默认 clamp 到 high,登记后原样出线)", () => {
+    const reasoner = model("some-reasoner", "Reasoner");
+    reasoner.abilities.push("REASONING");
+    const result = mapProviderModelToPi(
+      makeProvider({ id: "p-effort", name: "中转", baseUrl: "https://relay.example/v1" }),
+      reasoner,
+    );
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.mapping.config.models?.[0]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+  });
+
+  it("厂商专属协议不登记(effort 压制或另有收拢表,勿覆盖)", () => {
+    const arkModel = model("deepseek-r1", "DS");
+    arkModel.abilities.push("REASONING");
+    const ark = mapProviderModelToPi(
+      makeProvider({ id: "p-ark", name: "Ark", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" }),
+      arkModel,
+    );
+    if (!ark.ok) throw new Error(ark.reason);
+    expect(ark.mapping.config.models?.[0]?.thinkingLevelMap).toBeUndefined();
   });
 });
 
