@@ -110,17 +110,19 @@ function piCompatOverridesFor(provider: Provider, api: KnownApi) {
 }
 
 /** pi 受控 settings 的思考预算表——聊天引擎预算表(方言 THINKING_BUDGET_BY_LEVEL,
- *  安卓对齐)的 pi 四键投影(pi ThinkingBudgets 仅 minimal/low/medium/high)。推导而非
- *  抄写:方言表改数值,此处自动跟随。消费面:Google 2.x 预算通道(gemini 2.5 flash 类,
- *  此前 pi 默认表 medium=8192 vs 聊天 2000,同档位预算差 4 倍)。结构性残余(诚实披露):
- *  xhigh/max 经 pi clamp 收拢 high 档→8000,聊天为 16000/32000——pi 预算键仅四个,
- *  待上游扩键再对齐;minimal 取聊天兜底值 8000(安卓无 minimal 档,兜底分支同值)。
- *  DashScope 类 thinking_budget 精调 pi 无字段通道,维持既有披露。 */
-export const PI_THINKING_BUDGETS: Readonly<Record<"minimal" | "low" | "medium" | "high", number>> = {
+ *  安卓对齐)的 pi 投影。推导而非抄写:方言表改数值,此处自动跟随。消费面:Google 2.x
+ *  预算通道(gemini 2.5 flash 类,此前 pi 默认表 medium=8192 vs 聊天 2000,同档位预算
+ *  差 4 倍)。xhigh/max 独立键依赖 vendor 扩键补丁(pi ThinkingBudgets 原生仅四键,
+ *  已在 pi/packages/ai 打 [RIKKAHUB PATCH: budget-xhigh-max],全档位与聊天引擎逐值
+ *  对齐:xhigh 16000/max 32000);minimal 取聊天兜底值 8000(安卓无 minimal 档,兜底
+ *  分支同值)。 */
+export const PI_THINKING_BUDGETS: Readonly<Record<"minimal" | "low" | "medium" | "high" | "xhigh" | "max", number>> = {
   minimal: budgetTokensFor("minimal"),
   low: budgetTokensFor("low"),
   medium: budgetTokensFor("medium"),
   high: budgetTokensFor("high"),
+  xhigh: budgetTokensFor("xhigh"),
+  max: budgetTokensFor("max"),
 };
 
 /** Anthropic 格式思考方言(镜像聊天引擎 claudeThinkingPayload——安卓对齐的 adaptive
@@ -145,10 +147,9 @@ function piAnthropicThinkingOverrides(): { compat: Record<string, unknown>; thin
  *  - off/none→off:openai 生态不发强度字段(thinking-type 厂商发 disabled);anthropic
  *    尊重 thinkingLevelMap.off=null(K3 思考关不掉→不发字段),与聊天引擎语义一致。
  *  - 六档→同名直传:openai 生态经 thinkingLevelMap 收拢(K3/DeepSeek 三档表)或原样
- *    effort;anthropic 折预算(pi 表 minimal:1024/low:2048/medium:8192/high:16384,
- *    xhigh/max 结构性收拢 high 16384——pi ThinkingBudgets 仅四键,聊天引擎 Claude
- *    格式 max=32000,此差异属上游类型限制,待 pi 扩键后经受控 settings 对齐);
- *    google 走 pi 原生映射。
+ *    effort;anthropic 走 adaptive+effort 方言(见 piAnthropicThinkingOverrides);
+ *    google 走预算通道,查受控 settings 注入的 PI_THINKING_BUDGETS(vendor 扩键后
+ *    六档精确命中,与聊天引擎逐值一致)。
  *  - auto/未知→medium:pi 无"不发字段用厂商默认"的 auto 语义,取编码 agent 生态通行
  *    默认(与接线前的固定档位一致,未显式选档的用户零行为变化)。 */
 export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -239,13 +240,15 @@ export function mapProviderModelToPi(provider: Provider, model: Model, limits?: 
   const compatOverrides = piCompatOverridesFor(provider, api);
   // 思考开关翻译按协议分派:openai-completions 走厂商方言矩阵(K3 判定在函数内,
   // 模型级跨渠道);anthropic-messages 镜像聊天引擎 adaptive 方言(见函数头注);
-  // google/responses 走 pi 原生思考协议(与聊天引擎同为协议原生字段,无方言分歧)。
+  // google/responses 字段与格式 pi 原生已对,但 xhigh/max 两档须同名登记放行(pi
+  // getSupportedThinkingLevels 缺映射会钳 high),聊天引擎两处均原样透传:responses
+  // 发 reasoning.effort=档位,google 折预算(vendor 扩键后 xhigh/max 精确命中注入表)。
   const thinkingOverrides =
     api === "openai-completions"
       ? piThinkingOverridesFor(provider, model)
       : api === "anthropic-messages"
         ? piAnthropicThinkingOverrides()
-        : undefined;
+        : { thinkingLevelMap: { xhigh: "xhigh", max: "max" } };
 
   const contextWindow =
     typeof limits?.contextWindow === "number" && limits.contextWindow > 0

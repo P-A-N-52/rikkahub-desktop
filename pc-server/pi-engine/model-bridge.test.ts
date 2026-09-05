@@ -311,6 +311,29 @@ describe("xhigh/max 档位放行(与聊天引擎原样透传收敛)", () => {
     if (!ark.ok) throw new Error(ark.reason);
     expect(ark.mapping.config.models?.[0]?.thinkingLevelMap).toBeUndefined();
   });
+
+  it("google 协议登记 xhigh/max(vendor 扩键后预算通道精确命中注入表,compat 保持不设)", () => {
+    const gm = model("gemini-2.5-flash", "GF");
+    gm.abilities.push("REASONING");
+    const google = mapProviderModelToPi(
+      makeProvider({ id: "p-g", name: "G", baseUrl: "https://generativelanguage.googleapis.com/v1beta", type: "google" }),
+      gm,
+    );
+    if (!google.ok) throw new Error(google.reason);
+    expect(google.mapping.config.models?.[0]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+    expect(google.mapping.config.models?.[0]?.compat).toBeUndefined();
+  });
+
+  it("openai-responses 协议登记 xhigh/max(聊天引擎 reasoning.effort 原样透传,pi 侧同步放行)", () => {
+    const rm = model("gpt-5.2", "G5");
+    rm.abilities.push("REASONING");
+    const responses = mapProviderModelToPi(
+      makeProvider({ id: "p-r", name: "R", baseUrl: "https://api.openai.com/v1", useResponseApi: true }),
+      rm,
+    );
+    if (!responses.ok) throw new Error(responses.reason);
+    expect(responses.mapping.config.models?.[0]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+  });
 });
 
 describe("piThinkingLevelFor 档位翻译(助手设置→pi 会话档位)", () => {
@@ -339,7 +362,16 @@ describe("piThinkingLevelFor 档位翻译(助手设置→pi 会话档位)", () =
 });
 
 describe("PI_THINKING_BUDGETS 预算投影(Google 2.x 通道与聊天引擎同数值)", () => {
-  it("四键推导自方言预算表(low:1000/medium:2000/high:8000;minimal 取聊天兜底 8000)", () => {
-    expect(PI_THINKING_BUDGETS).toEqual({ minimal: 8000, low: 1000, medium: 2000, high: 8000 });
+  it("六键推导自方言预算表(vendor 扩键后 xhigh/max 独立命中,与聊天引擎逐值一致)", () => {
+    expect(PI_THINKING_BUDGETS).toEqual({ minimal: 8000, low: 1000, medium: 2000, high: 8000, xhigh: 16000, max: 32000 });
+  });
+
+  it("vendor 补丁行为锁定:预算查表精确键优先,无注入回退 clamp(升级 pi 丢补丁时此测试变红)", async () => {
+    // [RIKKAHUB PATCH: budget-xhigh-max] 的语义锚点——直接测 vendored pi 的查表函数。
+    const { thinkingBudgetForLevel } = await import("../../pi/packages/ai/src/api/simple-options.ts");
+    expect(thinkingBudgetForLevel("max", PI_THINKING_BUDGETS)).toBe(32000);
+    expect(thinkingBudgetForLevel("xhigh", PI_THINKING_BUDGETS)).toBe(16000);
+    // 无注入:回退 pi 默认表并 clamp(xhigh/max→high 16384),与上游原版行为一致。
+    expect(thinkingBudgetForLevel("max")).toBe(16384);
   });
 });
