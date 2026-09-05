@@ -7,7 +7,7 @@ import { state } from "../persistence/json-store";
 import { broadcastConversation } from "../api/sse";
 import { DEFAULT_AUTO_MODEL_ID, applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
+import { DEFAULT_OUTPUT_TOKENS, openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
 import {
   auxiliaryReasoningPayloadForProvider,
   claudeThinkingPayload,
@@ -164,7 +164,7 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
     headers["anthropic-version"] = "2023-06-01";
     body = {
       model: selectedModel,
-      max_tokens: maxTokens ?? 64_000,
+      max_tokens: maxTokens ?? DEFAULT_OUTPUT_TOKENS,
       messages: [{ role: "user", content: prompt }],
       stream,
       ...(options.temperature != null && (!reasoningLevel || !reasoningEnabled(reasoningLevel)) ? { temperature: options.temperature } : {}),

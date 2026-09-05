@@ -12,7 +12,7 @@ import { addLog } from "../api/logs";
 import { broadcastConversation, broadcastEngineStatus, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
 import { applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
+import { DEFAULT_OUTPUT_TOKENS, openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
 import {
   claudeCacheControlEphemeral,
   claudeMessagesFromApiMessages,
@@ -152,7 +152,9 @@ export async function callProvider(
     const canStream = hooks?.message != null;
     body = {
       model: selectedModel,
-      max_tokens: assistant.maxTokens ?? 64_000,
+      // 上限三级兜底:助手设置>模型目录输出上限>方言兜底(与工作区 piModelLimitsFor
+      // 同源;此前写死 64000,对输出上限更小的模型是潜在 400,对 K3 类则截短一半)。
+      max_tokens: assistant.maxTokens ?? lookupOutputLimit(modelsDevCache, providerItem.type, picked.model.modelId) ?? DEFAULT_OUTPUT_TOKENS,
       stream: canStream,
       system: claudeSystemContent(systemContent, providerItem),
       messages: claudeMessagesFromApiMessages(messages, providerItem),

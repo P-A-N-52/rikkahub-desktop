@@ -81,6 +81,11 @@ export function isKimiReasoningModel(modelId: string): boolean {
   return KIMI_SAMPLING_LOCKED_RE.test(modelId);
 }
 
+/** 方言事实：输出上限的最终兜底(助手未设且模型目录无输出上限时)。Anthropic 协议
+ *  max_tokens 必填,安卓对齐取 64000;聊天引擎 Claude 分支、辅助任务、工作区引擎
+ *  model-bridge 共用,禁止各处魔数。 */
+export const DEFAULT_OUTPUT_TOKENS = 64_000;
+
 /** 档位归一化（方言事实：用户档位值域的入口收拢）——安卓对齐的大写枚举（AUTO/OFF/
  *  MINIMAL/…/MAX）统一小写，off/none 归并为 off。聊天引擎全部拼装分支、auxiliary、
  *  工作区引擎（model-bridge 的 pi 档位翻译）共用本函数，禁止各处自行 lowercase。 */

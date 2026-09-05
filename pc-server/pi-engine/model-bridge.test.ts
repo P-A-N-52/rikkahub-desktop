@@ -224,13 +224,23 @@ describe("mapProviderModelToPi", () => {
       )),
     ).toEqual({ supportsDeveloperRole: false });
 
-    // claude/google 协议无以上概念,compat 保持不设(各自 compat 类型契约不同)。
-    expect(
-      compatOf(mapProviderModelToPi(
-        makeProvider({ id: "p5", name: "C", baseUrl: "https://api.anthropic.com/v1", type: "claude" }),
-        model("claude-sonnet-4-5"),
-      )),
-    ).toBeUndefined();
+    // claude 协议:镜像聊天引擎 adaptive 方言(claudeThinkingPayload——thinking:adaptive
+    // + output_config.effort 档位原样;pi 默认预算方言会把 xhigh/max 钳 high 且形状分歧)。
+    const claudeMapping = mapProviderModelToPi(
+      makeProvider({ id: "p5", name: "C", baseUrl: "https://api.anthropic.com/v1", type: "claude" }),
+      model("claude-sonnet-4-5"),
+    );
+    if (!claudeMapping.ok) throw new Error(claudeMapping.reason);
+    expect(claudeMapping.mapping.config.models?.[0]?.compat).toEqual({ forceAdaptiveThinking: true });
+    expect(claudeMapping.mapping.config.models?.[0]?.thinkingLevelMap).toEqual({
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
+    // google 协议:思考为协议原生字段(thinkingConfig),无方言分歧,compat 保持不设。
     expect(
       compatOf(mapProviderModelToPi(
         makeProvider({ id: "p6", name: "G", baseUrl: "https://generativelanguage.googleapis.com/v1beta", type: "google" }),

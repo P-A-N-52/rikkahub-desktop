@@ -14,6 +14,7 @@ import type { Model, Provider } from "../foundation/types";
 import { hostOfProvider } from "../inference-engine/message-builder";
 import { applyModelRequestHeaders } from "../model-providers";
 import {
+  DEFAULT_OUTPUT_TOKENS,
   EFFORT_LOW_HIGH_MAX_BY_LEVEL,
   isKimiK3Model,
   OPENAI_DEVELOPER_ROLE_ALLOWED,
@@ -38,7 +39,7 @@ const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 // models.dev 真实值（影响 pi 自动压缩阈值 contextWindow-reserveTokens 与请求 max_tokens），
 // 查不到时用保守通用默认——128k 窗口宁可让大窗口模型早压缩，也不给小窗口模型虚报。
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8_192;
+// 输出上限兜底与聊天引擎同源(DEFAULT_OUTPUT_TOKENS,方言单源);目录命中时用真实上限。
 
 /** 调用方可注入的模型极限(orchestrator 从 models.dev/助手配置取值,本模块保持纯映射)。 */
 export interface PiModelLimits {
@@ -104,6 +105,22 @@ function piCompatOverridesFor(provider: Provider, api: KnownApi) {
     // 聊天引擎从不发 store 字段(官方 chat completions 默认即 store:false,无隐私退化;
     // 第三方严格端点对未知字段有拒收风险)——压制 pi 默认的 store:false 输出,两引擎对齐。
     supportsStore: false,
+  };
+}
+
+/** Anthropic 格式思考方言(镜像聊天引擎 claudeThinkingPayload——安卓对齐的 adaptive
+ *  方言:全部思考模型 thinking:{type:"adaptive"}+output_config.effort,档位原样透传):
+ *  pi 默认走老预算方言(thinking:{type:"enabled"}+budget_tokens,xhigh/max 结构性钳
+ *  high;用户日志实证同一 K3 端点 chat=effort"max"/pi=budget 8192,形状与值双分歧)。
+ *  forceAdaptiveThinking 切 effort 通道;thinkingLevelMap 六档同名登记(pi
+ *  mapThinkingLevelToEffort 有映射即原样,缺省会把 xhigh/max 钳 high);off 不标
+ *  null——off 时 pi 发 thinking:{type:"disabled"},与聊天引擎 off 分支逐字一致。
+ *  已知观感差异:聊天对 DeepSeek 系 display:"raw"(原始思维链),pi 无 thinkingDisplay
+ *  透传通道,恒 summarized——仅展示形态,不影响思考行为。 */
+function piAnthropicThinkingOverrides(): { compat: Record<string, unknown>; thinkingLevelMap: Record<string, string> } {
+  return {
+    compat: { forceAdaptiveThinking: true },
+    thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
   };
 }
 
@@ -205,9 +222,15 @@ export function mapProviderModelToPi(provider: Provider, model: Model, limits?: 
   const headers: Record<string, string> = {};
   applyModelRequestHeaders(headers, provider, model);
   const compatOverrides = piCompatOverridesFor(provider, api);
-  // 思考开关翻译仅适用 openai-completions 生态(anthropic/google/responses 各有原生
-  // 思考协议,pi 原生处理);K3 判定在函数内(模型级,跨渠道)。
-  const thinkingOverrides = api === "openai-completions" ? piThinkingOverridesFor(provider, model) : undefined;
+  // 思考开关翻译按协议分派:openai-completions 走厂商方言矩阵(K3 判定在函数内,
+  // 模型级跨渠道);anthropic-messages 镜像聊天引擎 adaptive 方言(见函数头注);
+  // google/responses 走 pi 原生思考协议(与聊天引擎同为协议原生字段,无方言分歧)。
+  const thinkingOverrides =
+    api === "openai-completions"
+      ? piThinkingOverridesFor(provider, model)
+      : api === "anthropic-messages"
+        ? piAnthropicThinkingOverrides()
+        : undefined;
 
   const contextWindow =
     typeof limits?.contextWindow === "number" && limits.contextWindow > 0
@@ -215,7 +238,7 @@ export function mapProviderModelToPi(provider: Provider, model: Model, limits?: 
       : DEFAULT_CONTEXT_WINDOW;
   // max_tokens 不越过窗口(异常目录数据防御:output ≥ context 时请求会被上游拒绝)。
   const maxTokens = Math.min(
-    typeof limits?.maxTokens === "number" && limits.maxTokens > 0 ? limits.maxTokens : DEFAULT_MAX_TOKENS,
+    typeof limits?.maxTokens === "number" && limits.maxTokens > 0 ? limits.maxTokens : DEFAULT_OUTPUT_TOKENS,
     contextWindow,
   );
 
