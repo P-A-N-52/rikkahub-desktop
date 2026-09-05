@@ -99,4 +99,21 @@ describe("ensureUsage 估算兜底与纯时长载荷的交互", () => {
     expect(msg.usage).toMatchObject({ promptTokens: 10, completionTokens: 20, generationMs: 800 });
     expect((msg.usage as Record<string, unknown>).estimated).toBeUndefined();
   });
+
+  test("思考模型估算:正文与思维链都计入输出(内测反馈 Kimi TPS 异常小的回归)", async () => {
+    // 旧写法 estimateTokens(text || reasoning) 是短路——正文非空时思维链一个 token
+    // 不计,思考型模型(思维链几千 token+正文几百)的输出被低估一个数量级。
+    const { ensureUsage } = await import("../conversations/helpers");
+    const { estimateTokens } = await import("../foundation/utils");
+    const reasoning = "推理过程逐步展开,包含大量中间演算与自我检查。".repeat(80);
+    const text = "简短结论。";
+    const msg = message("ASSISTANT", [
+      { type: "reasoning", reasoning },
+      { type: "text", text },
+    ]);
+    ensureUsage(msg);
+    const completionTokens = Number((msg.usage as Record<string, unknown>).completionTokens);
+    expect(completionTokens).toBe(estimateTokens(text) + estimateTokens(reasoning));
+    expect(completionTokens).toBeGreaterThan(estimateTokens(text));
+  });
 });

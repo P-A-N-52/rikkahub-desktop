@@ -84,7 +84,8 @@
       "compacting_progress": "Compacting context ({{current}}/{{total}})",
       "retrying": "Upstream error, retrying automatically ({{attempt}}/{{max}})…",
       "elapsed_seconds": "Elapsed {{seconds}}s",
-      "elapsed_minutes": "Elapsed {{minutes}}m {{seconds}}s"
+      "elapsed_minutes": "Elapsed {{minutes}}m {{seconds}}s",
+      "interrupt": "Interrupt (Esc)"
     },
     "translate": {
       "dialog_title": "Select translation language",

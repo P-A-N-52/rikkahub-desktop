@@ -1124,7 +1124,8 @@ export function completionMessageText(raw: any): string {
 
 export function parseSseChunks(text: string) {
   return text
-    .split(/\n\n+/)
+    // 事件分隔认 CRLF(与各家 reader 的读循环分帧一致),理由见 readOpenAiStream 注释。
+    .split(/\r?\n\r?\n/)
     .flatMap((block) => {
       const data = block
         .split(/\r?\n/)
@@ -1285,7 +1286,10 @@ export async function readOpenAiStream(
     const { done, value } = await readWithIdleTimeout(() => reader.read(), STREAM_IDLE_TIMEOUT_MS);
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split(/\n\n+/);
+    // 内测反馈(Kimi 流式卡顿排查):事件分隔统一认 CRLF——HTTP/SSE 规范允许 \r\n,上游或
+    // 中间层用 \r\n\r\n 分隔时,旧 /\n\n+/ 整流切不开,全程攒 buffer 直到流结束才兜底
+    // 解析(表现为一个字不出→最后哗啦全出)。与 readClaudeStreamingRound/Google reader 对齐。
+    const parts = buffer.split(/\r?\n\r?\n/);
     buffer = parts.pop() ?? "";
     for (const part of parts) {
       for (const payload of parseSseChunks(part)) {
@@ -1408,7 +1412,7 @@ export async function fetchOpenAiAuxiliaryStream(
   onDelta: (text: string) => void,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
   let text = "";
   if (response.ok) {
     text = await readOpenAiStream(response, (delta) => {
@@ -1446,7 +1450,7 @@ export async function fetchClaudeAuxiliaryStream(
   onDelta: (text: string) => void,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
   if (!response.ok) {
     const text = await response.text();
     addLog({
@@ -1512,7 +1516,8 @@ export async function readClaudeStream(response: Response, onDelta: (text: strin
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split(/\n\n+/);
+    // 事件分隔认 CRLF,理由见 readOpenAiStream 同位置注释。
+    const parts = buffer.split(/\r?\n\r?\n/);
     buffer = parts.pop() ?? "";
     for (const part of parts) {
       for (const payload of parseSseChunks(part)) {
@@ -1550,7 +1555,7 @@ export async function fetchGoogleAuxiliaryStream(
   onDelta: (text: string) => void,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
   const rawText = await response.text();
   addLog({
     providerId: providerItem.id,

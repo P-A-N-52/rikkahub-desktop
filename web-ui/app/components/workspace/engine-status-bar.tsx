@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FoldVertical, Loader2 } from "lucide-react";
 
 import { useConversationEngineStatus } from "~/stores/conversation-store";
+import { useCompressStore, useConversationCompressing } from "~/stores/compress-store";
 
 /** 每秒重渲染的已过秒数(startedAt 无值时返回 null,不显示耗时)。 */
 function useElapsedSeconds(startedAt: number | undefined): number | null {
@@ -25,6 +26,26 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
   const status = useConversationEngineStatus(conversationId);
   // 耗时计时只在压缩相生效(重试相是短暂交替态,计时无意义)。hook 须在条件返回之前调用。
   const elapsed = useElapsedSeconds(status?.phase === "compacting" ? status.startedAt : undefined);
+  // 可中止 = 压缩相 && 本端持有取消句柄(手动 /compact 或压缩框发起,compress-store 有
+  // AbortController)。pi 自动压缩(threshold/overflow)发生在生成流内、无本端句柄,
+  // 天然不显示中止钮也不响应 Esc——自动维护动作不该被误按打断。
+  const cancellable = useConversationCompressing(conversationId);
+  const canInterrupt = status?.phase === "compacting" && cancellable;
+
+  // Esc 中止(Codex 语义:Esc to interrupt):bubble 阶段监听 + defaultPrevented 检查,
+  // 对话框/斜杠菜单等已消费的 Esc(radix dismissable layer 会 preventDefault)不抢。
+  // 服务端保证取消不污染:signal 中止 → 压缩作废,原上下文原样保留(R7-4 硬保证)。
+  React.useEffect(() => {
+    if (!canInterrupt || !conversationId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      useCompressStore.getState().cancel(conversationId);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canInterrupt, conversationId]);
+
   if (!status) return null;
 
   const text =
@@ -64,6 +85,15 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
       )}
       <span className="animate-pulse">{text}</span>
       {elapsedText ? <span className="shrink-0">· {elapsedText}</span> : null}
+      {canInterrupt && conversationId ? (
+        <button
+          type="button"
+          onClick={() => useCompressStore.getState().cancel(conversationId)}
+          className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {t("conversations.engine_status.interrupt")}
+        </button>
+      ) : null}
     </div>
   );
 }

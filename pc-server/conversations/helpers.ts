@@ -172,7 +172,10 @@ export function ensureUsage(msg: Message, conversation?: Conversation) {
     usable &&
     (Number(existing.promptTokens ?? 0) > 0 || Number(existing.completionTokens ?? 0) > 0 || Number(existing.totalTokens ?? 0) > 0);
   if (hasRealTokens) return;
-  const completionTokens = estimateTokens(textFromParts(msg.parts) || reasoningFromParts(msg.parts));
+  // 内测反馈(Kimi 思考模型 TPS 异常小):旧写法 text || reasoning 是短路——正文非空时
+  // 思维链一个 token 都不计,思考型模型(思维链几千 token+正文几百)的输出被低估一个
+  // 数量级,速度=被低估的 token/真实时长,显示值失真。输出=正文+思维链,两段都计。
+  const completionTokens = estimateTokens(textFromParts(msg.parts)) + estimateTokens(reasoningFromParts(msg.parts));
   const promptTokens = conversation ? estimatePromptTokensForConversation(conversation) : 0;
   msg.usage = {
     promptTokens,

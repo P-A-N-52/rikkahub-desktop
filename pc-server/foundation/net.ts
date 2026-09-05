@@ -312,9 +312,25 @@ export function installProxyFetchInterceptor(getProxyConfig: () => ProxyConfig):
     //      内部的,叠加 timeout:0 可能相互影响,跳过不注入。
     const explicitTimeout = (init as (RequestInit & { timeout?: number | boolean }) | undefined)?.timeout;
     const shouldDisableIdle = !(input instanceof Request) && explicitTimeout === undefined;
-    const effectiveInit = shouldDisableIdle
+    let effectiveInit = shouldDisableIdle
       ? ({ ...(init as RequestInit), timeout: 0 } as RequestInit & { timeout: number })
       : init;
+
+    // ── SSE 请求统一禁用压缩(accept-encoding: identity)──────────────────────────
+    // 内测反馈(Kimi 流式"停住数秒→哗啦一大段"):Bun fetch 默认协商 gzip/br,上游或
+    // 中间层若对 SSE 响应启用块压缩,解压端必须攒满一个压缩块才能吐出明文——逐事件
+    // flush 的流被切成一段段批量到达。SSE 语义上就不该压缩,对声明 Accept:
+    // text/event-stream 的请求显式要求 identity,禁止压缩协商。
+    // 收口哲学同上方 timeout:0:凡走 globalThis.fetch 的流式请求(pi 引擎在内)自动
+    // 免疫,新引擎零负担。护栏:调用方已显式传 accept-encoding 则尊重;Request 对象
+    // 输入跳过(理由同护栏 2)。
+    if (!(input instanceof Request) && effectiveInit?.headers) {
+      const headers = new Headers(effectiveInit.headers as HeadersInit);
+      if ((headers.get("accept") ?? "").includes("text/event-stream") && !headers.has("accept-encoding")) {
+        headers.set("accept-encoding", "identity");
+        effectiveInit = { ...(effectiveInit as RequestInit), headers } as typeof effectiveInit;
+      }
+    }
 
     let target = "";
     if (typeof input === "string") target = input;

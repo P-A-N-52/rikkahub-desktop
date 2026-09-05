@@ -45,7 +45,11 @@ const iconRules: Array<[RegExp, string]> = [
   [/minimax/i, "minimax-color.svg"],
   [/xai/i, "xai.svg"],
   [/juhenext/i, "juhenext.png"],
-  [/kimi/i, "kimi-color.svg"],
+  // 裸 K 系列(词边界):Moonshot K3 起的短格式模型 id(如 "k3"/"k3.5",聚合商列表常见)
+  // 不带 kimi 前缀,旧规则漏匹配落灰底字母兜底。\b 保证不误伤 grok-3/deepseek3 等
+  // (k 前是字母无词边界)。k2 故意不收:裸 "k2" 与 LLM360 K2 撞名,且 Kimi k2 系列
+  // 官方 id 均带 kimi 前缀。
+  [/kimi|\bk[3-9](?:\.\d+)?\b/i, "kimi-color.svg"],
   [/moonshot|月之暗面/i, "moonshot.svg"],
   [/302/i, "302ai.svg"],
   [/step|阶跃/i, "stepfun-color.svg"],
@@ -74,7 +78,7 @@ const iconRules: Array<[RegExp, string]> = [
   [/naapi|钠/i, "naapi.jpg"],
 ];
 
-function iconForName(name: string) {
+export function iconForName(name: string) {
   return iconRules.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 }
 
