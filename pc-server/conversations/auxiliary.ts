@@ -33,6 +33,7 @@ import {
   SUGGESTION_CHARACTER_LIMIT,
   TITLE_CHARACTER_LIMIT,
 } from "../app-config/prompts";
+import { compressing } from "./generation-state";
 import { getConversation, persistConversation, selectedConversationMessages } from "./index";
 import { findAssistant, summaryAsText } from "./helpers";
 import { agentSummaryAsText, buildAgentCompactionContext, extractAgentActivity } from "../workspace/compaction";
@@ -434,13 +435,15 @@ export async function compressConversation(conversation: Conversation, additiona
   for (const chunk of chunks) {
     // R7-4:每个分块前查取消——用户中途取消不再烧后续分块的 LLM 轮次。
     if (signal?.aborted) throw new DOMException("Compression cancelled", "AbortError");
-    // 分块进度走 engine-status 帧(状态条统一渲染"正在压缩上下文… (n/m)")。
+    // 分块进度走 engine-status 帧(状态条统一渲染"正在压缩上下文 (n/m) · 已处理 xx秒")。
     // 原实现借 chatSuggestions 建议条展示进度文本——挪用了建议区的语义位,且文案
     // 无法 i18n;进度本就是引擎状态的一部分,并入 engine-status 后该 hack 退役。
+    // startedAt 从 compressing 注册表回读(compress 端点开始时写入),进度帧不重置计时。
     broadcastEngineStatus(conversation.id, {
       busy: true,
       phase: "compacting",
       progress: { current: summaries.length + 1, total: chunks.length },
+      ...(compressing.has(conversation.id) ? { startedAt: compressing.get(conversation.id) } : {}),
     });
     const contextSections = [
       additionalPrompt.trim() ? `Additional instructions from user: ${additionalPrompt.trim()}` : "",

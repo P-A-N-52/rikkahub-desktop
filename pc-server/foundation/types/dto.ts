@@ -299,4 +299,7 @@ export type EngineStatusEventDto =
       maxAttempts?: number;
       /** compacting(UI 历史压缩):分块进度。状态条渲染"(current/total)"。 */
       progress?: { current: number; total: number };
+      /** 压缩开始时刻(epoch ms,服务端权威)。状态条据此渲染"已处理 xx秒",SSE 重连
+       *  快照带回真实起点,切页回来计时连续。缺省时前端以首见 busy 帧时刻兜底。 */
+      startedAt?: number;
     };

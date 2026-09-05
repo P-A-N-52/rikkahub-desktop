@@ -280,7 +280,10 @@ export function setConversationError(id: string, error: string | null): void {
   });
 }
 
-/** pi 引擎瞬态状态落地(SSE engine-status 帧 / 断流清理)。busy:false 删键,幂等。 */
+/** pi 引擎瞬态状态落地(SSE engine-status 帧 / 断流清理)。busy:false 删键,幂等。
+ *  startedAt 起点保持:服务端帧带的真实起点优先;中间帧(pi 事件桥/进度帧)不带时
+ *  继承已有起点,不重置"已处理 xx秒"计时;首见 busy 帧无起点则以到达时刻兜底
+ *  (pi 自动压缩无 compress 端点起点,首帧即压缩开始,误差可忽略)。 */
 export function setConversationEngineStatus(id: string, status: EngineStatusEventDto): void {
   useConversationStore.setState((state) => {
     if (!status.busy) {
@@ -289,7 +292,8 @@ export function setConversationEngineStatus(id: string, status: EngineStatusEven
       delete next[id];
       return { engineStatus: next };
     }
-    return { engineStatus: { ...state.engineStatus, [id]: status } };
+    const startedAt = status.startedAt ?? state.engineStatus[id]?.startedAt ?? Date.now();
+    return { engineStatus: { ...state.engineStatus, [id]: { ...status, startedAt } } };
   });
 }
 

@@ -117,9 +117,11 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         ? ["snapshot_meta", { type: "snapshot_meta", seq: Date.now(), conversationId: conversation.id, updateAt: conversation.updateAt, isGenerating: generating.has(conversation.id), negotiationToken: currentToken, serverTime: Date.now() } satisfies ConversationSnapshotMetaEventDto]
         : ["snapshot", { type: "snapshot", seq: Date.now(), conversation: toSnapshotConversationDto(conversation, generating.has(conversation.id)), serverTime: Date.now(), negotiationToken: currentToken } satisfies ConversationSnapshotEventDto];
     // engine-status 帧是瞬态语义(重连即重置),压缩跨页/重连存活靠这份连接期快照:
-    // 压缩进行中(compressing 集合,服务端权威)则补发状态条帧,切页回来即恢复显示。
-    const initialFrames: [string, JsonValue | object][] = compressing.has(conversation.id)
-      ? [initialFrame, ["engine-status", { busy: true, phase: "compacting" } satisfies EngineStatusEventDto]]
+    // 压缩进行中(compressing 注册表,服务端权威)则补发状态条帧(含 startedAt,
+    // "已处理 xx秒"计时跨重连连续),切页回来即恢复显示。
+    const compressStartedAt = compressing.get(conversation.id);
+    const initialFrames: [string, JsonValue | object][] = compressStartedAt
+      ? [initialFrame, ["engine-status", { busy: true, phase: "compacting", startedAt: compressStartedAt } satisfies EngineStatusEventDto]]
       : [initialFrame];
     return openSse(
       () => initialFrames,
@@ -544,8 +546,9 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       // 压缩状态服务端权威(内测反馈:切页回来"过程条消失",误以为压缩被取消):
       // 开始/结束广播 engine-status(对话模式 UI 压缩从此与工作区引擎压缩同一状态条),
       // compressing 集合供 SSE 连接期补发快照(engine-status 帧瞬态,重连即重置)。
-      compressing.add(conversation.id);
-      broadcastEngineStatus(conversation.id, { busy: true, phase: "compacting" });
+      const compressStartedAt = Date.now();
+      compressing.set(conversation.id, compressStartedAt);
+      broadcastEngineStatus(conversation.id, { busy: true, phase: "compacting", startedAt: compressStartedAt });
       broadcastList(); // 侧边栏绿灯即时点亮(列表 isGenerating 含压缩中)
       try {
         // P5:手动压缩优先走引擎原生 compaction——压引擎记忆(它才决定发给上游的

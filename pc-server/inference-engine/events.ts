@@ -75,6 +75,8 @@ export type EngineStatus =
       maxAttempts?: number;
       /** compacting(UI 历史压缩):分块进度。状态条渲染"(current/total)"。 */
       progress?: { current: number; total: number };
+      /** 压缩开始时刻(epoch ms,服务端权威),状态条"已处理 xx秒"计时起点。 */
+      startedAt?: number;
     };
 
 /** 事件接收器。Provider 流式函数在解析到增量时调用它。 */

@@ -451,7 +451,7 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
   test("侧边栏绿灯:列表 isGenerating 在压缩中为 true(生成或压缩都算忙碌)", async () => {
     await installUpstream([{ content: "未使用" }]);
     const conversation = seedConversation(null);
-    compressing.add(conversation.id);
+    compressing.set(conversation.id, Date.now());
     try {
       const url = new URL("http://localhost/api/conversations");
       const response = await handleConversationRoutes(new Request(url), url, "conversations");
@@ -466,7 +466,7 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
   test("并发防线:压缩进行中再次 compress 返回 409 + 业务码", async () => {
     await installUpstream([{ content: "未使用" }]);
     const conversation = seedConversation(null);
-    compressing.add(conversation.id);
+    compressing.set(conversation.id, Date.now());
     try {
       const response = await postCompress(conversation.id);
       expect(response?.status).toBe(409);
@@ -480,7 +480,7 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
   test("SSE 连接期快照:压缩进行中建立会话流,补发 engine-status busy 帧(切页回来状态恢复)", async () => {
     await installUpstream([{ content: "未使用" }]);
     const conversation = seedConversation(null);
-    compressing.add(conversation.id);
+    compressing.set(conversation.id, Date.now());
     try {
       const url = new URL(`http://localhost/api/conversations/${conversation.id}/stream`);
       const response = await handleConversationRoutes(
@@ -502,6 +502,8 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
       expect(received).toContain("event: engine-status");
       expect(received).toContain('"busy":true');
       expect(received).toContain('"phase":"compacting"');
+      // 快照帧带服务端权威起点,"已处理 xx秒"计时跨重连连续。
+      expect(received).toContain('"startedAt":');
     } finally {
       compressing.delete(conversation.id);
     }

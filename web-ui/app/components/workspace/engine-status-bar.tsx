@@ -1,7 +1,20 @@
+import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { FoldVertical, Loader2 } from "lucide-react";
 
 import { useConversationEngineStatus } from "~/stores/conversation-store";
+
+/** 每秒重渲染的已过秒数(startedAt 无值时返回 null,不显示耗时)。 */
+function useElapsedSeconds(startedAt: number | undefined): number | null {
+  const [, forceTick] = React.useReducer((n: number) => n + 1, 0);
+  React.useEffect(() => {
+    if (startedAt === undefined) return;
+    const timer = setInterval(forceTick, 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+  if (startedAt === undefined) return null;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
 
 // 会话瞬态状态条:压缩中/自动重试中。数据源是会话 SSE 的 engine-status 帧——
 // 工作区会话由 pi 事件桥推送(P5),对话/工作区手动压缩由 compress 端点统一推送并在
@@ -10,6 +23,8 @@ import { useConversationEngineStatus } from "~/stores/conversation-store";
 export function EngineStatusBar({ conversationId }: { conversationId: string | null }) {
   const { t } = useTranslation("page");
   const status = useConversationEngineStatus(conversationId);
+  // 耗时计时只在压缩相生效(重试相是短暂交替态,计时无意义)。hook 须在条件返回之前调用。
+  const elapsed = useElapsedSeconds(status?.phase === "compacting" ? status.startedAt : undefined);
   if (!status) return null;
 
   const text =
@@ -27,6 +42,17 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
             })
           : t("conversations.engine_status.compacting");
 
+  // "已处理 xx秒"(Codex 截图):秒级实时递增,起点服务端权威(切页/重连计时连续)。
+  const elapsedText =
+    elapsed === null
+      ? null
+      : elapsed >= 60
+        ? t("conversations.engine_status.elapsed_minutes", {
+            minutes: Math.floor(elapsed / 60),
+            seconds: elapsed % 60,
+          })
+        : t("conversations.engine_status.elapsed_seconds", { seconds: elapsed });
+
   // Codex 式行内状态(内测拍板):左对齐、无边框背景、小图标+灰字,与消息列同宽对齐;
   // 压缩相用折叠图标+文字呼吸(pulse),重试相保留 spinner(旋转更贴"重试中"语义)。
   return (
@@ -37,6 +63,7 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
         <FoldVertical className="size-3.5 shrink-0" />
       )}
       <span className="animate-pulse">{text}</span>
+      {elapsedText ? <span className="shrink-0">· {elapsedText}</span> : null}
     </div>
   );
 }
