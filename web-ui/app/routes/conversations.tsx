@@ -38,9 +38,11 @@ import {
 } from "~/components/ui/select";
 import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "~/components/ui/sidebar";
 import { useIsMobile } from "~/hooks/use-mobile";
+import { useAvailableCommands } from "~/hooks/use-available-commands";
 import { useConversationList } from "~/hooks/use-conversation-list";
 import { onHotkeyAction, type HotkeyBusAction } from "~/lib/hotkey-events";
 import { useCurrentAssistant } from "~/hooks/use-current-assistant";
+import type { SlashCommandDto } from "~/lib/slash-commands";
 import {
   convertConversationToMarkdown,
   downloadMarkdown,
@@ -534,6 +536,8 @@ interface ChatInputAreaProps {
   onStop?: () => Promise<void> | void;
   onExportConversation?: (includeReasoning: boolean) => void;
   onCompressConversation?: () => void;
+  slashCommands?: SlashCommandDto[];
+  onSlashCommand?: (name: string, argument: string) => Promise<void> | void;
   getOptimizeContext?: () => string;
 }
 
@@ -550,6 +554,8 @@ const ChatInputArea = React.memo(function ChatInputArea({
   onStop,
   onExportConversation,
   onCompressConversation,
+  slashCommands,
+  onSlashCommand,
   getOptimizeContext,
 }: ChatInputAreaProps) {
   const setText = useChatInputStore((state) => state.setText);
@@ -602,6 +608,8 @@ const ChatInputArea = React.memo(function ChatInputArea({
       onStop={onStop}
       onExportConversation={onExportConversation}
       onCompressConversation={onCompressConversation}
+      slashCommands={slashCommands}
+      onSlashCommand={onSlashCommand}
       getOptimizeContext={getOptimizeContext}
     />
   );
@@ -1650,39 +1658,83 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     return lines.join("\n\n").slice(0, 4000);
   }, [activeId]);
 
-  const handleConfirmCompressConversation = React.useCallback(async () => {
-    if (!activeId) return;
-    setCompressing(true);
-    const controller = new AbortController();
-    compressAbortRef.current = controller;
-    try {
-      await api.post<{ status: string }>(
-        `conversations/${activeId}/compress`,
-        {
-          targetTokens: compressTargetTokens,
-          additionalPrompt: compressAdditionalPrompt,
-          keepRecentMessages: compressKeepRecent,
-        },
-        { timeout: false, signal: controller.signal },
-      );
-      setCompressDialogOpen(false);
-      refreshConversation(activeId);
-      refreshList();
-      toast.success(
-        isWorkspaceConversation
-          ? t("conversations.compress.workspace_success")
-          : t("conversations.compress.success"),
-      );
-    } catch (error) {
-      // R7-4:用户主动取消不报错(取消不是失败)。
-      if (!controller.signal.aborted) {
-        toast.error(error instanceof Error ? error.message : t("conversations.compress.failed"));
+  // 压缩执行共享通道:压缩框与 /compact 指令两个入口走同一函数、同一状态与反馈
+  // (方案 §5.1,无平行逻辑)。指令路径不传 UI 历史压缩参数(走服务端默认),失败提示
+  // 带指令名前缀(方案 §4.4)。
+  const performCompress = React.useCallback(
+    async (
+      params: { additionalPrompt: string; targetTokens?: number; keepRecentMessages?: number },
+      errorPrefix = "",
+    ) => {
+      if (!activeId) return;
+      setCompressing(true);
+      const controller = new AbortController();
+      compressAbortRef.current = controller;
+      try {
+        await api.post<{ status: string }>(`conversations/${activeId}/compress`, params, {
+          timeout: false,
+          signal: controller.signal,
+        });
+        setCompressDialogOpen(false);
+        refreshConversation(activeId);
+        refreshList();
+        toast.success(
+          isWorkspaceConversation
+            ? t("conversations.compress.workspace_success")
+            : t("conversations.compress.success"),
+        );
+      } catch (error) {
+        // R7-4:用户主动取消不报错(取消不是失败)。
+        if (!controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : t("conversations.compress.failed");
+          toast.error(`${errorPrefix}${message}`);
+        }
+      } finally {
+        compressAbortRef.current = null;
+        setCompressing(false);
       }
-    } finally {
-      compressAbortRef.current = null;
-      setCompressing(false);
+    },
+    [activeId, isWorkspaceConversation, refreshList],
+  );
+
+  const handleConfirmCompressConversation = React.useCallback(async () => {
+    await performCompress({
+      targetTokens: compressTargetTokens,
+      additionalPrompt: compressAdditionalPrompt,
+      keepRecentMessages: compressKeepRecent,
+    });
+  }, [compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, performCompress]);
+
+  // ── 斜杠指令:清单(服务端权威)+ 执行分发表(实现池前端部分;方案 §3.4) ──────
+  const availableSlashCommands = useAvailableCommands(activeId);
+  const slashExecutors = React.useMemo<Record<string, (argument: string) => Promise<void> | void>>(
+    () => ({
+      // /compact [额外指示] → 既有压缩链路;进行中再触发提示占用(复用现有互斥)。
+      compact: async (argument) => {
+        if (compressing) {
+          toast.error(t("conversations.compress.busy"));
+          return;
+        }
+        await performCompress({ additionalPrompt: argument }, "/compact ");
+      },
+    }),
+    [compressing, performCompress, t],
+  );
+  // 防两表漂移(方案 §3.1):服务端说可用但前端无执行器的指令不展示,并留痕便于排查。
+  const slashCommands = React.useMemo(() => {
+    const known = availableSlashCommands.filter((command) => command.name in slashExecutors);
+    if (known.length !== availableSlashCommands.length) {
+      const missing = availableSlashCommands.filter((c) => !(c.name in slashExecutors)).map((c) => c.name);
+      console.warn("[slash-commands] 服务端清单存在前端未实现的指令,已隐藏:", missing);
     }
-  }, [activeId, compressAdditionalPrompt, compressKeepRecent, compressTargetTokens, isWorkspaceConversation, refreshList]);
+    return known;
+  }, [availableSlashCommands, slashExecutors]);
+  const handleSlashCommand = React.useCallback(
+    async (name: string, argument: string) => {
+      await slashExecutors[name]?.(argument);
+    },
+    [slashExecutors],
+  );
 
   const handleStop = React.useCallback(async () => {
     if (!activeId) return;
@@ -1827,6 +1879,8 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
           <EngineStatusBar conversationId={activeId} />
           <ChatInputArea
             draftKey={draftKey}
+            slashCommands={slashCommands}
+            onSlashCommand={handleSlashCommand}
             isGenerating={conversationIsGenerating}
             disabled={detailLoading || Boolean(detailError)}
             isEditing={Boolean(editingSession)}

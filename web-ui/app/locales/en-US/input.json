@@ -1,4 +1,11 @@
 {
+  "commands": {
+    "menu_label": "Slash commands",
+    "compact": {
+      "description": "Compact the conversation context",
+      "argument_hint": "[instructions]"
+    }
+  },
   "mcp": {
     "title": "MCP",
     "description": "Select MCP servers available to this assistant",

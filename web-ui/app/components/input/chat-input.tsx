@@ -9,8 +9,11 @@ import { ModelList } from "~/components/input/model-list";
 import { SearchPickerButton } from "~/components/input/search-picker";
 import { MemoryBadge } from "~/components/memory/memory-badge";
 import { ExtensionPickerButton } from "~/components/input/extension-picker";
+import { CommandHighlightOverlay, SlashCommandMenu, TEXTAREA_METRICS } from "~/components/input/slash-command-menu";
 import { WorkspacePermissionPicker } from "~/components/input/workspace-permission-picker";
 import { WorkspaceFilesButton } from "~/components/input/workspace-files-button";
+import { useSlashCommand } from "~/hooks/use-slash-command";
+import { parseSlashCommand, type SlashCommandDto } from "~/lib/slash-commands";
 import { useChatInputStore, useSettingsStore } from "~/stores";
 import { Button } from "~/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -40,6 +43,12 @@ export interface ChatInputProps {
   onSuggestionClick?: (suggestion: string) => void;
   onExportConversation?: (includeReasoning: boolean) => void;
   onCompressConversation?: () => void;
+  /** 斜杠指令:当前环境可用清单(服务端 GET /api/commands 权威判定;缺省/空 =
+   *  指令面整体关闭,推荐列表/染色/拦截均不生效)。 */
+  slashCommands?: SlashCommandDto[];
+  /** 斜杠指令拦截执行(完整指令提交时调用;输入框随即清空,不发消息)。执行中的
+   *  状态与结果反馈由执行器自理(压缩中提示/toast),不占用发送按钮。 */
+  onSlashCommand?: (name: string, argument: string) => Promise<void> | void;
   /** 产品决策①:安卓"清除上下文"对齐(切换语义,再点一次撤销)。 */
   // 提示词优化时,返回最近几轮对话的纯文本作为上下文(让优化模型理解模糊指代)。
   // 无对话(首条消息)时返回空串。只在用户点击"优化提示词"时调用。
@@ -48,6 +57,9 @@ export interface ChatInputProps {
 }
 
 const IMAGE_UPLOAD_ACCEPT = "image/*";
+
+const SLASH_MENU_ID = "chat-slash-command-menu";
+const EMPTY_SLASH_COMMANDS: SlashCommandDto[] = [];
 
 const ASR_FRAME_SIZE = 4096;
 
@@ -254,6 +266,8 @@ function ChatInputInner({
   onSuggestionClick,
   onExportConversation,
   onCompressConversation,
+  slashCommands,
+  onSlashCommand,
   getOptimizeContext,
   className,
 }: ChatInputProps) {
@@ -353,6 +367,34 @@ function ChatInputInner({
 
   const isEmpty = value.trim().length === 0 && attachments.length === 0;
 
+  // ── 斜杠指令(方案 tmp_doc/指令体系方案-2026-09-05.md §4/§5) ──────────────
+  // 指令面开关:带附件不拦截(附件+文本=用户想发消息);编辑历史消息不触发;
+  // 生成中禁用(与压缩互斥同语义)。清单为空 = 指令在此环境不存在(禁用不可见)。
+  const [imeComposing, setImeComposing] = React.useState(false);
+  const commandOverlayRef = React.useRef<HTMLDivElement | null>(null);
+  const slashEnabled =
+    ready && !disabled && !isGenerating && !isEditing && attachments.length === 0 && Boolean(onSlashCommand);
+  const availableSlashCommands = slashEnabled ? (slashCommands ?? EMPTY_SLASH_COMMANDS) : EMPTY_SLASH_COMMANDS;
+  const slash = useSlashCommand({
+    text: value,
+    commands: availableSlashCommands,
+    enabled: slashEnabled,
+    onCompleteText: onValueChange,
+  });
+  // 完整指令判定(拦截与染色共用同一判据);IME 组合中暂停染色——组合串只存在于
+  // textarea 层,文字透明会让组合过程不可见。
+  const parsedCommand = React.useMemo(
+    () => (slashEnabled ? parseSlashCommand(value, availableSlashCommands) : null),
+    [availableSlashCommands, slashEnabled, value],
+  );
+  const commandPainted = parsedCommand !== null && !imeComposing;
+  // 镜像挂载/文本变化时同步滚动位置(textarea 打字会自滚动)。
+  React.useEffect(() => {
+    const overlay = commandOverlayRef.current;
+    const textarea = textareaRef.current;
+    if (commandPainted && overlay && textarea) overlay.scrollTop = textarea.scrollTop;
+  }, [commandPainted, value]);
+
   const canStop = ready && Boolean(onStop) && isGenerating && !disabled;
   const canSend = ready && !isGenerating && !disabled && !isEmpty;
   // 生成中允许上传:用户常在模型输出时准备下一轮的 prompt 和附件,加文件到草稿和打字
@@ -397,6 +439,14 @@ function ChatInputInner({
       }
 
       if (canSend) {
+        // 斜杠指令拦截:完整指令不作为消息发送,清空输入框交执行器(方案 §3.5)。
+        // 不 await:执行反馈由执行器自理,发送按钮立即释放,不阻塞下一条输入。
+        if (parsedCommand && onSlashCommand) {
+          const { command, argument } = parsedCommand;
+          onValueChange("");
+          void onSlashCommand(command.name, argument);
+          return;
+        }
         setOriginalBeforeOptimize(null);
         await onSend();
       }
@@ -406,7 +456,7 @@ function ChatInputInner({
     } finally {
       setSubmitting(false);
     }
-  }, [actionDisabled, canSend, canStop, onSend, onStop, t]);
+  }, [actionDisabled, canSend, canStop, onSend, onSlashCommand, onStop, onValueChange, parsedCommand, t]);
 
   const handleOptimize = React.useCallback(async () => {
     const original = value.trim();
@@ -635,6 +685,8 @@ function ChatInputInner({
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // 斜杠推荐菜单优先消费(↑↓/Tab/Enter/Esc;菜单打开时 Enter=补全,绝不发送)。
+      if (slash.handleMenuKeyDown(event)) return;
       if (event.key !== "Enter") return;
       if (isGenerating) return;
       if (event.nativeEvent.isComposing) return;
@@ -648,7 +700,7 @@ function ChatInputInner({
       event.preventDefault();
       void handlePrimaryAction();
     },
-    [handlePrimaryAction, isGenerating, sendOnEnter],
+    [handlePrimaryAction, isGenerating, sendOnEnter, slash.handleMenuKeyDown],
   );
 
   const handleUploadInputChange = React.useCallback(
@@ -718,6 +770,17 @@ function ChatInputInner({
           <div className="h-1 w-10 rounded-full bg-border/70 transition-colors hover:bg-primary/50" />
         </div>
         <div className="chat-input-box relative flex flex-col gap-2 rounded-[var(--ds-chat-composer-radius)] bg-[var(--ds-surface-input)] p-3">
+          {/* 斜杠指令推荐列表:锚定输入卡片上方,随输入实时过滤(方案 §4.2)。 */}
+          {slash.menuOpen ? (
+            <SlashCommandMenu
+              id={SLASH_MENU_ID}
+              commands={slash.matches}
+              selectedIndex={slash.selectedIndex}
+              query={slash.query}
+              onHover={slash.setSelectedIndex}
+              onPick={slash.pick}
+            />
+          ) : null}
           {/* 待确认记忆提醒角标:浮在输入框右上角外沿,像消息提醒。仅有待确认项时渲染。 */}
           <div className="absolute -top-4 right-2 z-10">
             <MemoryBadge />
@@ -798,20 +861,47 @@ function ChatInputInner({
             </div>
           ) : null}
 
-          <Textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleTextChange}
-            onKeyDown={handleKeyDown}
-            onPaste={(event) => {
-              void handlePaste(event);
-            }}
-            placeholder={placeholder}
-            disabled={!ready || disabled}
-            className="resize-none border-0 bg-transparent dark:bg-transparent p-2 text-sm shadow-none hover:shadow-none focus-visible:shadow-none focus-visible:ring-0"
-            rows={2}
-            style={{ minHeight: `${inputMinHeight}px`, maxHeight: `${inputMaxHeight}px` }}
-          />
+          <div className="relative">
+            {/* 指令染色镜像层:命中完整指令时 textarea 文字透明化(光标保留),
+                由镜像以完全相同的度量渲染文本并把指令段染 --command 蓝。 */}
+            {commandPainted && parsedCommand ? (
+              <CommandHighlightOverlay
+                ref={commandOverlayRef}
+                text={value}
+                tokenLength={parsedCommand.tokenLength}
+              />
+            ) : null}
+            <Textarea
+              ref={textareaRef}
+              value={value}
+              onChange={handleTextChange}
+              onKeyDown={handleKeyDown}
+              onPaste={(event) => {
+                void handlePaste(event);
+              }}
+              onScroll={(event) => {
+                const overlay = commandOverlayRef.current;
+                if (overlay) overlay.scrollTop = event.currentTarget.scrollTop;
+              }}
+              onCompositionStart={() => setImeComposing(true)}
+              onCompositionEnd={() => setImeComposing(false)}
+              placeholder={placeholder}
+              disabled={!ready || disabled}
+              aria-controls={slash.menuOpen ? SLASH_MENU_ID : undefined}
+              aria-activedescendant={
+                slash.menuOpen && slash.matches[slash.selectedIndex]
+                  ? `${SLASH_MENU_ID}-option-${slash.matches[slash.selectedIndex].name}`
+                  : undefined
+              }
+              className={cn(
+                TEXTAREA_METRICS,
+                "resize-none border-0 bg-transparent dark:bg-transparent shadow-none hover:shadow-none focus-visible:shadow-none focus-visible:ring-0",
+                commandPainted && "text-transparent caret-[var(--ds-text-primary)]",
+              )}
+              rows={2}
+              style={{ minHeight: `${inputMinHeight}px`, maxHeight: `${inputMaxHeight}px` }}
+            />
+          </div>
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
               <DropdownMenu open={uploadMenuOpen} onOpenChange={setUploadMenuOpen}>

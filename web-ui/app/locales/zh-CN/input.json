@@ -1,4 +1,11 @@
 {
+  "commands": {
+    "menu_label": "斜杠指令",
+    "compact": {
+      "description": "压缩当前会话上下文",
+      "argument_hint": "[额外指示]"
+    }
+  },
   "mcp": {
     "title": "MCP",
     "description": "选择当前助手可用的 MCP 服务器",
