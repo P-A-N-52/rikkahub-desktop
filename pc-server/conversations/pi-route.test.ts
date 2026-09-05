@@ -448,6 +448,21 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
   }, 30_000);
 
 
+  test("侧边栏绿灯:列表 isGenerating 在压缩中为 true(生成或压缩都算忙碌)", async () => {
+    await installUpstream([{ content: "未使用" }]);
+    const conversation = seedConversation(null);
+    compressing.add(conversation.id);
+    try {
+      const url = new URL("http://localhost/api/conversations");
+      const response = await handleConversationRoutes(new Request(url), url, "conversations");
+      expect(response?.status).toBe(200);
+      const list = (await response?.json()) as { id: string; isGenerating: boolean }[];
+      expect(list.find((item) => item.id === conversation.id)?.isGenerating).toBe(true);
+    } finally {
+      compressing.delete(conversation.id);
+    }
+  });
+
   test("并发防线:压缩进行中再次 compress 返回 409 + 业务码", async () => {
     await installUpstream([{ content: "未使用" }]);
     const conversation = seedConversation(null);
