@@ -88,7 +88,7 @@ import {
   hasResumableToolParts,
   toolApprovalType,
 } from "./helpers";
-import { generateSuggestionsForConversation, generateTitleForConversation, limitAuxiliaryText, modelExists, shouldAutoGenerateTitle } from "./auxiliary";
+import { generateSuggestionsForConversation, generateTitleForConversation, limitAuxiliaryText, markCompactionBoundary, modelExists, shouldAutoGenerateTitle } from "./auxiliary";
 
 /** 生成入口一次性解析的配置快照（P1-4）。流式生成横跨多个 await 点，用户中途改配置
  *  （换模型/改工具集/删助手）时，updateSettings 会整体替换 state.settings——持有入口
@@ -519,6 +519,8 @@ function applyCapturedEngineCompactions(conversation: Conversation, captured: Ca
     });
   }
   conversation.engineCompactions = records as unknown as JsonValue[];
+  // 压缩发生点外显:分割线锚定"压缩时刻的最新消息"(自动/手动压缩同点生效)。
+  markCompactionBoundary(conversation);
   markConversationRowDirty(conversation.id);
   scheduleThrottledConvFlush();
 }

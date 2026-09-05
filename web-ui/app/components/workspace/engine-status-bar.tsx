@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { FoldVertical, Loader2 } from "lucide-react";
 
 import { useConversationEngineStatus } from "~/stores/conversation-store";
 
@@ -27,10 +27,16 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
             })
           : t("conversations.engine_status.compacting");
 
+  // Codex 式行内状态(内测拍板):左对齐、无边框背景、小图标+灰字,与消息列同宽对齐;
+  // 压缩相用折叠图标+文字呼吸(pulse),重试相保留 spinner(旋转更贴"重试中"语义)。
   return (
-    <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full border border-border/60 bg-muted/60 px-3 py-1 text-muted-foreground text-xs">
-      <Loader2 className="size-3 shrink-0 animate-spin" />
-      {text}
+    <div className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 px-4 text-muted-foreground text-xs">
+      {status.phase === "retrying" ? (
+        <Loader2 className="size-3.5 shrink-0 animate-spin" />
+      ) : (
+        <FoldVertical className="size-3.5 shrink-0" />
+      )}
+      <span className="animate-pulse">{text}</span>
     </div>
   );
 }

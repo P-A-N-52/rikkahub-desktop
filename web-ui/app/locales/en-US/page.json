@@ -79,9 +79,9 @@
       "failed": "Compression failed"
     },
     "engine_status": {
-      "compacting": "Compacting engine context…",
+      "compacting": "Compacting context",
       "compacting_auto": "Context near limit, auto-compacting…",
-      "compacting_progress": "Compacting context… ({{current}}/{{total}})",
+      "compacting_progress": "Compacting context ({{current}}/{{total}})",
       "retrying": "Upstream error, retrying automatically ({{attempt}}/{{max}})…"
     },
     "translate": {

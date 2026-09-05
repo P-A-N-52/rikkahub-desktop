@@ -381,6 +381,18 @@ export async function generateSuggestionsForConversation(conversation: Conversat
   ).slice(0, 10);
 }
 
+/** 压缩发生点标记(两模式共享):压缩完成时打在"当时的最新一条消息"上,前端据此在该
+ *  消息下方渲染"上下文已压缩"分割线——锚定用户发起压缩的位置。刻意不锚定切点/摘要
+ *  的技术形态(pi 保留窗口的切点在时间线中段,线画在那里用户会疑惑"我在底部发的
+ *  /compact,线怎么跑上面去了")。幂等:同一条消息不重复打。 */
+export function markCompactionBoundary(conversation: Conversation): void {
+  const tail = selectedConversationMessages(conversation).at(-1);
+  if (!tail) return;
+  tail.annotations ??= [];
+  if (tail.annotations.some((item) => isRecord(item) && item.type === "compaction_boundary")) return;
+  tail.annotations.push({ type: "compaction_boundary" });
+}
+
 export async function compressConversation(conversation: Conversation, additionalPrompt = "", targetTokens = 2000, keepRecentMessages = 32, signal?: AbortSignal) {
   const allMessages = selectedConversationMessages(conversation);
   if (allMessages.length === 0) throw new Error("当前会话没有可压缩的消息");
@@ -452,15 +464,10 @@ export async function compressConversation(conversation: Conversation, additiona
   if (getConversation(conversation.id) !== conversation) throw new Error("会话已被删除,压缩结果作废");
 
   conversation.messages = [
-    // 摘要消息带压缩边界注解:前端据此在最后一条摘要下方画"上下文已压缩"分割线,
-    // 把模型的记忆边界外显(线上=已摘要化,线下=模型仍逐字可见的原文)。
-    ...summaries.filter(Boolean).map((summary) => {
-      const summaryMessage = message("USER", [{ type: "text", text: summary }]);
-      summaryMessage.annotations.push({ type: "compression_summary" });
-      return { id: id(), messages: [summaryMessage], selectIndex: 0 };
-    }),
+    ...summaries.filter(Boolean).map((summary) => ({ id: id(), messages: [message("USER", [{ type: "text", text: summary }])], selectIndex: 0 })),
     ...messagesToKeep.map((msg) => ({ id: id(), messages: [JSON.parse(JSON.stringify(msg))], selectIndex: 0 })),
   ];
+  markCompactionBoundary(conversation);
   conversation.chatSuggestions = [];
   conversation.updateAt = Date.now();
   persistConversation(conversation);

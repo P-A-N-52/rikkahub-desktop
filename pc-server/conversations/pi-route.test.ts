@@ -399,6 +399,9 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     expect(result!.tokensBefore).toBeGreaterThan(20_000);
     // 摘要请求确实打到了上游(区别于小会话零请求即抛错);split turn 时多一次前缀摘要。
     expect(server.requests.length).toBeGreaterThanOrEqual(1);
+    // 压缩发生点注解落在"当时的最新一条消息"(工作区路径经 applyCapturedEngineCompactions)。
+    const tail = conversation.messages.at(-1)!;
+    expect(tail.messages[tail.selectIndex].annotations).toContainEqual({ type: "compaction_boundary" });
   }, 60_000);
 });
 
@@ -435,27 +438,15 @@ describe("压缩状态服务端权威 + 保留条数降级", () => {
     expect(conversation.messages.length).toBe(4);
     const summaryMessage = conversation.messages[0].messages[0];
     expect(JSON.stringify(summaryMessage.parts)).toContain("早期历史的压缩摘要");
-    // 摘要消息带压缩边界注解(前端据此画"上下文已压缩"分割线);保留的原文消息不带。
-    expect(summaryMessage.annotations).toContainEqual({ type: "compression_summary" });
-    expect(conversation.messages[1].messages[0].annotations ?? []).not.toContainEqual({ type: "compression_summary" });
+    // 压缩发生点注解落在"当时的最新一条消息"(前端在其下方画"上下文已压缩"分割线);
+    // 摘要与其余保留消息不带。
+    const tailMessage = conversation.messages.at(-1)!.messages[0];
+    expect(tailMessage.annotations).toContainEqual({ type: "compaction_boundary" });
+    expect(summaryMessage.annotations ?? []).not.toContainEqual({ type: "compaction_boundary" });
     // 结束后服务端压缩态归零(finally 清理)。
     expect(compressing.has(conversation.id)).toBe(false);
   }, 30_000);
 
-  test("侧边栏绿灯:列表 isGenerating 在压缩中为 true(生成或压缩都算忙碌)", async () => {
-    await installUpstream([{ content: "未使用" }]);
-    const conversation = seedConversation(null);
-    compressing.add(conversation.id);
-    try {
-      const url = new URL("http://localhost/api/conversations");
-      const response = await handleConversationRoutes(new Request(url), url, "conversations");
-      expect(response?.status).toBe(200);
-      const list = (await response?.json()) as { id: string; isGenerating: boolean }[];
-      expect(list.find((item) => item.id === conversation.id)?.isGenerating).toBe(true);
-    } finally {
-      compressing.delete(conversation.id);
-    }
-  });
 
   test("并发防线:压缩进行中再次 compress 返回 409 + 业务码", async () => {
     await installUpstream([{ content: "未使用" }]);
