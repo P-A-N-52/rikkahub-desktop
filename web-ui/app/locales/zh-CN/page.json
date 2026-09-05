@@ -57,6 +57,7 @@
       "to_light": "切换到浅色模式",
       "to_dark": "切换到深色模式"
     },
+    "compaction_divider": "上下文已压缩",
     "compress": {
       "busy": "已有压缩正在进行，请稍候",
       "error": {
@@ -80,6 +81,7 @@
     "engine_status": {
       "compacting": "正在压缩引擎上下文…",
       "compacting_auto": "上下文接近上限，正在自动压缩…",
+      "compacting_progress": "正在压缩上下文…（{{current}}/{{total}}）",
       "retrying": "上游响应异常，正在自动重试（第 {{attempt}}/{{max}} 次）…"
     },
     "translate": {

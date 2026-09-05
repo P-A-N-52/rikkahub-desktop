@@ -73,6 +73,8 @@ export type EngineStatus =
       /** retrying:第几次/共几次。 */
       attempt?: number;
       maxAttempts?: number;
+      /** compacting(UI 历史压缩):分块进度。状态条渲染"(current/total)"。 */
+      progress?: { current: number; total: number };
     };
 
 /** 事件接收器。Provider 流式函数在解析到增量时调用它。 */

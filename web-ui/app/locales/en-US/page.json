@@ -57,6 +57,7 @@
       "to_light": "Switch to light mode",
       "to_dark": "Switch to dark mode"
     },
+    "compaction_divider": "Context compacted",
     "compress": {
       "busy": "A compression is already in progress, please wait",
       "error": {
@@ -80,6 +81,7 @@
     "engine_status": {
       "compacting": "Compacting engine context…",
       "compacting_auto": "Context near limit, auto-compacting…",
+      "compacting_progress": "Compacting context… ({{current}}/{{total}})",
       "retrying": "Upstream error, retrying automatically ({{attempt}}/{{max}})…"
     },
     "translate": {

@@ -13,6 +13,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChatInput } from "~/components/input/chat-input";
 import { GlobalDropZone } from "~/components/global-drop-zone";
 import { ChatMessage } from "~/components/message/chat-message";
+import { CompactionDivider } from "~/components/message/compaction-divider";
 import { ShareExportDialog } from "~/components/message/share-export-dialog";
 import { RenameConversationDialog } from "~/components/rename-conversation-dialog";
 import { Button } from "~/components/ui/button";
@@ -50,6 +51,7 @@ import {
 } from "~/lib/export-markdown";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
+import { effectiveCompactionCutId, isCompressionSummaryMessage } from "~/lib/compaction";
 import api, { ApiError } from "~/services/api";
 import { useChatInputStore } from "~/stores";
 import {
@@ -738,6 +740,17 @@ const ConversationTimeline = React.memo(
         message: node.messages[node.selectIndex] ?? node.messages[0],
       }));
     }, [detail]);
+    // 压缩边界外显(分割线):工作区引擎压缩不重写消息,切点在 engineCompactions 记录里,
+    // 线画在切点消息上方——线上的历史对模型只剩摘要。窗口化快照下切点可能尚未加载,
+    // 向上翻页补齐后本 memo 随 detail 重算,线随之出现。
+    const compactionCutId = React.useMemo(
+      () =>
+        effectiveCompactionCutId(
+          detail?.engineCompactions,
+          new Set(selectedNodeMessages.map((item) => item.message.id)),
+        ),
+      [detail, selectedNodeMessages],
+    );
     const canQuickJump =
       Boolean(activeId) && !detailLoading && !detailError && selectedNodeMessages.length > 1;
     const assistant = React.useMemo(() => {
@@ -1170,7 +1183,16 @@ const ConversationTimeline = React.memo(
                 ? (modelById.get(message.modelId) ?? fallbackModel)
                 : fallbackModel;
               // I-2:index 携带 firstItemIndex 全局偏移,换算回已加载数组的本地下标
-              const isLastLoaded = index - nodesOffset === selectedNodeMessages.length - 1;
+              const localIndex = index - nodesOffset;
+              const isLastLoaded = localIndex === selectedNodeMessages.length - 1;
+              // 压缩边界分割线:工作区切点消息上方 / 对话模式最后一条摘要消息下方
+              // (摘要连续成段,只在段尾画一条)。两判定天然互斥:工作区不走 UI 历史
+              // 压缩(引擎压缩优先),chat 会话没有 engineCompactions。
+              const dividerAbove = compactionCutId !== null && message.id === compactionCutId;
+              const nextMessage = selectedNodeMessages[localIndex + 1]?.message;
+              const dividerBelow =
+                isCompressionSummaryMessage(message) &&
+                (!nextMessage || !isCompressionSummaryMessage(nextMessage));
               return (
                 <div
                   id={getConversationMessageAnchorId(message.id)}
@@ -1180,6 +1202,7 @@ const ConversationTimeline = React.memo(
                     !knownMessageIds.has(message.id) && "rikkahub-animate-fade-in-up",
                   )}
                 >
+                  {dividerAbove ? <CompactionDivider /> : null}
                   <ChatMessage
                     node={node}
                     message={message}
@@ -1199,6 +1222,7 @@ const ConversationTimeline = React.memo(
                     onToggleSelect={handleToggleSelect}
                     onShare={handleShare}
                   />
+                  {dividerBelow ? <CompactionDivider /> : null}
                 </div>
               );
             }}

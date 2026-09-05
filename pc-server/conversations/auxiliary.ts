@@ -4,7 +4,7 @@
 import type { Assistant, AuxiliaryTextOptions, Conversation, Message, MessagePart, Model } from "../foundation/types";
 import { applyPlaceholders, id, isRecord, localeDisplayName, message, textFromParts, uniqueStrings } from "../foundation/utils";
 import { state } from "../persistence/json-store";
-import { broadcastConversation } from "../api/sse";
+import { broadcastConversation, broadcastEngineStatus } from "../api/sse";
 import { DEFAULT_AUTO_MODEL_ID, applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
 import { DEFAULT_OUTPUT_TOKENS, openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
@@ -417,47 +417,48 @@ export async function compressConversation(conversation: Conversation, additiona
   const summarize = isAgent ? (msg: Message) => agentSummaryAsText(msg, summaryAsText(msg)) : summaryAsText;
   const chunks = splitMessages(messagesToCompress);
   const summaries: string[] = [];
-  try {
-    for (const chunk of chunks) {
-      // R7-4:每个分块前查取消——用户中途取消不再烧后续分块的 LLM 轮次。
-      if (signal?.aborted) throw new DOMException("Compression cancelled", "AbortError");
-      // 2-3:进度标签只随 chunk 变化,chunk 级更新+广播一次;原先在 onDelta 里每个 token
-      // 都 persistConversation+saveState+broadcastConversation(长会话流式压缩=每秒几十次
-      // 全表重写)。标签是瞬态进度不落库,压缩结果在循环后统一 persist。
-      conversation.chatSuggestions = [`正在压缩对话历史... ${summaries.length + 1}/${chunks.length}`];
-      conversation.updateAt = Date.now();
-      broadcastConversation(conversation);
-      const contextSections = [
-        additionalPrompt.trim() ? `Additional instructions from user: ${additionalPrompt.trim()}` : "",
-        isAgent ? buildAgentCompactionContext(extractAgentActivity(chunk)) : "",
-      ].filter(Boolean);
-      const prompt = applyPlaceholders(state.settings.compressPrompt || DEFAULT_COMPRESS_PROMPT, {
-        content: chunk.map(summarize).join("\n\n"),
-        target_tokens: String(targetTokens),
-        additional_context: contextSections.join("\n\n"),
-        locale: localeDisplayName(),
-      });
-      summaries.push(cleanAuxiliaryText(await fetchAuxiliaryText(state.settings.compressModelId || state.settings.chatModelId, prompt, "compression", {
-        stream: true,
-      })));
-    }
-    // R7-4:落库前最后一道闸——取消后 LLM 结果作废,绝不改写会话(压缩是破坏性替换,
-    // 取消语义必须硬保证)。
+  // 失败/取消的 UI 收尾无需在此处理:进度在 engine-status 帧里(compress 端点 finally
+  // 统一广播 busy:false),不再有落在会话对象上的瞬态标签需要清理。
+  for (const chunk of chunks) {
+    // R7-4:每个分块前查取消——用户中途取消不再烧后续分块的 LLM 轮次。
     if (signal?.aborted) throw new DOMException("Compression cancelled", "AbortError");
-    // 批6复审 G1:会话在压缩期间被删除/被导入替换时结果同样作废——下方 persistConversation
-    // 是无条件 upsert,会把已删会话复活成"只剩摘要"的僵尸。
-    if (getConversation(conversation.id) !== conversation) throw new Error("会话已被删除,压缩结果作废");
-  } catch (err) {
-    // 失败/取消统一清掉瞬态进度标签并广播,不给 UI 留"正在压缩..."僵尸提示
-    // (顺带修复原有缺陷:LLM 失败时标签同样残留)。
-    conversation.chatSuggestions = [];
-    conversation.updateAt = Date.now();
-    broadcastConversation(conversation);
-    throw err;
+    // 分块进度走 engine-status 帧(状态条统一渲染"正在压缩上下文… (n/m)")。
+    // 原实现借 chatSuggestions 建议条展示进度文本——挪用了建议区的语义位,且文案
+    // 无法 i18n;进度本就是引擎状态的一部分,并入 engine-status 后该 hack 退役。
+    broadcastEngineStatus(conversation.id, {
+      busy: true,
+      phase: "compacting",
+      progress: { current: summaries.length + 1, total: chunks.length },
+    });
+    const contextSections = [
+      additionalPrompt.trim() ? `Additional instructions from user: ${additionalPrompt.trim()}` : "",
+      isAgent ? buildAgentCompactionContext(extractAgentActivity(chunk)) : "",
+    ].filter(Boolean);
+    const prompt = applyPlaceholders(state.settings.compressPrompt || DEFAULT_COMPRESS_PROMPT, {
+      content: chunk.map(summarize).join("\n\n"),
+      target_tokens: String(targetTokens),
+      additional_context: contextSections.join("\n\n"),
+      locale: localeDisplayName(),
+    });
+    summaries.push(cleanAuxiliaryText(await fetchAuxiliaryText(state.settings.compressModelId || state.settings.chatModelId, prompt, "compression", {
+      stream: true,
+    })));
   }
+  // R7-4:落库前最后一道闸——取消后 LLM 结果作废,绝不改写会话(压缩是破坏性替换,
+  // 取消语义必须硬保证)。
+  if (signal?.aborted) throw new DOMException("Compression cancelled", "AbortError");
+  // 批6复审 G1:会话在压缩期间被删除/被导入替换时结果同样作废——下方 persistConversation
+  // 是无条件 upsert,会把已删会话复活成"只剩摘要"的僵尸。
+  if (getConversation(conversation.id) !== conversation) throw new Error("会话已被删除,压缩结果作废");
 
   conversation.messages = [
-    ...summaries.filter(Boolean).map((summary) => ({ id: id(), messages: [message("USER", [{ type: "text", text: summary }])], selectIndex: 0 })),
+    // 摘要消息带压缩边界注解:前端据此在最后一条摘要下方画"上下文已压缩"分割线,
+    // 把模型的记忆边界外显(线上=已摘要化,线下=模型仍逐字可见的原文)。
+    ...summaries.filter(Boolean).map((summary) => {
+      const summaryMessage = message("USER", [{ type: "text", text: summary }]);
+      summaryMessage.annotations.push({ type: "compression_summary" });
+      return { id: id(), messages: [summaryMessage], selectIndex: 0 };
+    }),
     ...messagesToKeep.map((msg) => ({ id: id(), messages: [JSON.parse(JSON.stringify(msg))], selectIndex: 0 })),
   ];
   conversation.chatSuggestions = [];

@@ -20,7 +20,12 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
         })
       : status.reason === "threshold" || status.reason === "overflow"
         ? t("conversations.engine_status.compacting_auto")
-        : t("conversations.engine_status.compacting");
+        : status.progress
+          ? t("conversations.engine_status.compacting_progress", {
+              current: status.progress.current,
+              total: status.progress.total,
+            })
+          : t("conversations.engine_status.compacting");
 
   return (
     <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full border border-border/60 bg-muted/60 px-3 py-1 text-muted-foreground text-xs">

@@ -57,7 +57,10 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
   if (path === "conversations" && request.method === "GET") {
     const db = getConversationsDb();
     const metas = db ? listConversationMetas(db, state.settings.assistantId) : [];
-    return json(metas.map((item) => toListDto(item, generating.has(item.id))));
+    // 列表绿灯语义 = 会话忙碌中(生成或压缩):压缩也是长任务,侧边栏是用户的全局
+    // 视野,忙碌状态必须一致可见。detail/快照面的 isGenerating 不掺压缩(那是"停止
+    // 生成"按钮的语义,压缩的取消走压缩框自己的通道)。
+    return json(metas.map((item) => toListDto(item, generating.has(item.id) || compressing.has(item.id))));
   }
   // J 族(专题2):排序+分页全在 SQL 侧(复合索引扫描,O(页大小)),不再把该助手全部
   // 元数据读入 JS——数千会话时列表刷新与 invalidate 风暴的单次成本与总量解耦。
@@ -74,7 +77,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       ? pagedConversationMetas(db, state.settings.assistantId, offset, limit)
       : { items: [], total: 0 };
     const paged: PagedResult<ConversationListDto> = {
-      items: items.map((item) => toListDto(item, generating.has(item.id))),
+      items: items.map((item) => toListDto(item, generating.has(item.id) || compressing.has(item.id))),
       nextOffset: offset + limit < total ? offset + limit : null,
       hasMore: offset + limit < total,
     };
@@ -543,6 +546,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       // compressing 集合供 SSE 连接期补发快照(engine-status 帧瞬态,重连即重置)。
       compressing.add(conversation.id);
       broadcastEngineStatus(conversation.id, { busy: true, phase: "compacting" });
+      broadcastList(); // 侧边栏绿灯即时点亮(列表 isGenerating 含压缩中)
       try {
         // P5:手动压缩优先走引擎原生 compaction——压引擎记忆(它才决定发给上游的
         // 上下文),UI 历史不动。targetTokens/keepRecentMessages 是 UI 历史压缩的参数,
@@ -572,6 +576,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         compressing.delete(conversation.id);
         // 与工作区路径 orchestrator 的 finally busy:false 重复广播,幂等无害。
         broadcastEngineStatus(conversation.id, { busy: false });
+        broadcastList(); // 绿灯熄灭
       }
     }
     if (sub === "fork" && request.method === "POST") {
