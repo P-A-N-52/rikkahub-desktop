@@ -78,13 +78,33 @@ export function McpExtensionsSection({
   }, []);
   const [tab, setTab] = React.useState<Tab>(tabFromQuery);
   const [selectedAssistantId, setSelectedAssistantId] = React.useState(settings.assistantId);
+  // issue #49(1.5.0):本分区是设置页唯一按助手配置的分区,顶部选择器与五个子编辑器全依赖
+  // selectedAssistant。正常契约下 assistants 恒非空(normalize 播种+删除防线),但异常数据
+  // (Docker 卷手改 state、导入损坏备份、跨版本错配)会让渲染期裸解引用把整个分区放大成
+  // 错误边界白屏("Oops")。此处按 boundary 数据收口:空则渲染引导空态,恒不裸传 undefined。
+  const assistants = Array.isArray(settings.assistants) ? settings.assistants : [];
   const selectedAssistant =
-    settings.assistants.find((item) => item.id === selectedAssistantId) ?? settings.assistants[0];
+    assistants.find((item) => item.id === selectedAssistantId) ?? assistants[0];
 
   React.useEffect(() => {
-    if (!settings.assistants.some((item) => item.id === selectedAssistantId))
+    if (!assistants.some((item) => item.id === selectedAssistantId))
       setSelectedAssistantId(settings.assistantId);
-  }, [selectedAssistantId, settings.assistantId, settings.assistants]);
+  }, [selectedAssistantId, settings.assistantId, assistants]);
+
+  if (!selectedAssistant) {
+    return (
+      <>
+        <SectionHeader
+          icon={CopyPlus}
+          title={t("settings:mcp.title")}
+          subtitle={t("settings:mcp.subtitle")}
+        />
+        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+          {t("settings:mcp.no_assistants")}
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -121,7 +141,7 @@ export function McpExtensionsSection({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {settings.assistants.map((assistant) => (
+              {assistants.map((assistant) => (
                 <SelectItem key={assistant.id} value={assistant.id}>
                   {assistant.name || t("settings:assistants.default_name")}
                 </SelectItem>

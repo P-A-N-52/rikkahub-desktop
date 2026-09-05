@@ -127,8 +127,12 @@ export function AssistantsSection({
   };
 
   const addAssistant = async () => {
+    // issue #49 连带:assistants 意外为空时 clone(undefined) 会 throw(JSON.parse(undefined)),
+    // 把"新建助手"这条自愈路径堵死。模板缺省给最小合法体(tags 是唯一未被下方显式覆盖的
+    // 必填字段):后端 detail 接口以 defaultAssistant() 展开兜底,其余缺省由服务端补全。
+    const template = settings.assistants[0] as AssistantProfile | undefined;
     const created = {
-      ...clone(settings.assistants[0]),
+      ...(template ? clone(template) : { tags: [] }),
       id: crypto.randomUUID(),
       name: t("settings:assistants.new_assistant_name"),
       avatar: { type: "dummy" },

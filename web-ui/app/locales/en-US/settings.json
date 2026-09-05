@@ -539,6 +539,7 @@
   "mcp": {
     "title": "MCP & extensions",
     "subtitle": "Manage MCP servers, prompt injections, lorebooks, quick messages and Agent Skills.",
+    "no_assistants": "No assistants to configure yet. Create one in the Assistants section first, then come back here.",
     "tab": {
       "mode": "Prompt injection",
       "lorebook": "Lorebook",

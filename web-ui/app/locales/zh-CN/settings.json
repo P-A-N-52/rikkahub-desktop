@@ -539,6 +539,7 @@
   "mcp": {
     "title": "MCP 与拓展",
     "subtitle": "管理 MCP 服务器、提示词注入、世界书、快捷消息与 Agent Skills。",
+    "no_assistants": "暂无可配置的助手。请先在「助手」分区创建一个助手，再回到这里进行配置。",
     "tab": {
       "mode": "提示词注入",
       "lorebook": "世界书",
