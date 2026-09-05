@@ -137,7 +137,7 @@ export default function SettingsPage() {
   if (!settings) {
     return (
       <div className="flex h-svh flex-col overflow-hidden bg-background">
-        <WindowControlsBar />
+        <WindowControlsBar className="mt-1.5 mr-2" />
         <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />
           {t("settings:providers.loading")}
@@ -162,10 +162,11 @@ export default function SettingsPage() {
         )}
       >
         {/* border-divider:用比 --border 更淡的分界色,让区域分隔退到背景里。
-            问题7回访:品牌行(Logo+RikkaHub,SidebarBrandRow 三页同源)延续主界面设计;
-            下方动作行放返回键+分区副标题。两行都是拖拽区(drag props 放行交互元素,
-            返回键是 asChild Link 渲染的 <a>——放行选择器已覆盖)。 */}
-        <div className="border-b border-divider px-4 pb-3 pt-2">
+            问题7回访:品牌行(Logo+RikkaHub,SidebarBrandRow 三页同源)延续主界面设计,
+            pt-1 使品牌行距顶 4px——与主界面(SidebarHeader p-2 + -mt-1)同一几何;
+            下方动作行放返回键+分区标题(text-sm font-semibold,与旧版大标题同级,
+            勿降为小字)。两行都是拖拽区(放行选择器已覆盖 asChild Link 的 <a>)。 */}
+        <div className="border-b border-divider px-4 pb-3 pt-1">
           <SidebarBrandRow />
           <div className="mt-2 flex items-center gap-2" {...windowDragRegionProps()}>
             <Button asChild size="icon-sm" variant="ghost">
@@ -173,7 +174,7 @@ export default function SettingsPage() {
                 <ArrowLeft className="size-4" />
               </Link>
             </Button>
-            <div className="text-xs text-muted-foreground">{t("settings:nav.subtitle")}</div>
+            <div className="text-sm font-semibold">{t("settings:nav.subtitle")}</div>
           </div>
         </div>
         <nav className="space-y-1 p-2">
@@ -212,8 +213,9 @@ export default function SettingsPage() {
         </nav>
       </aside>
       <div className={cn("min-w-0 flex-1 flex-col", mobileContentOpen ? "flex" : "hidden md:flex")}>
-        {/* I1:无边框窗口拖拽区 + 窗控钮(仅内容列;侧栏顶部由品牌行承担) */}
-        <WindowControlsBar />
+        {/* I1:无边框窗口拖拽区 + 窗控钮(仅内容列;侧栏顶部由品牌行承担)。
+            mt-1.5/mr-2 对齐主界面 SidebarInset 的 pt-1.5/pr-2:窗控钮三页同一坐标。 */}
+        <WindowControlsBar className="mt-1.5 mr-2" />
         <main className="min-h-0 flex-1">
         <ScrollArea className="h-full">
           <div className="mx-auto w-full max-w-5xl px-6 py-6">
