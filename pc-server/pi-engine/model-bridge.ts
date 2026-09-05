@@ -19,6 +19,7 @@ import {
   OPENAI_DEVELOPER_ROLE_ALLOWED,
   openAiMaxTokensField,
   openAiThinkingSwitchProtocol,
+  reasoningLevelNormalized,
 } from "../model-providers/request-dialect";
 
 export interface PiModelMapping {
@@ -101,6 +102,26 @@ function piCompatOverridesFor(provider: Provider, api: KnownApi) {
     supportsDeveloperRole: OPENAI_DEVELOPER_ROLE_ALLOWED,
     maxTokensField: openAiMaxTokensField(hostOfProvider(provider)),
   };
+}
+
+/** pi 会话思考档位(pi 值域 off/minimal/low/medium/high/xhigh/max,sdk 按模型支持集
+ *  就近钳制,非思考模型自动收拢 off)。档位来源=助手设置 reasoningLevel(与聊天引擎
+ *  同源同归一化):
+ *  - off/none→off:openai 生态不发强度字段(thinking-type 厂商发 disabled);anthropic
+ *    尊重 thinkingLevelMap.off=null(K3 思考关不掉→不发字段),与聊天引擎语义一致。
+ *  - 六档→同名直传:openai 生态经 thinkingLevelMap 收拢(K3/DeepSeek 三档表)或原样
+ *    effort;anthropic 折预算(pi 表 minimal:1024/low:2048/medium:8192/high:16384,
+ *    xhigh/max 结构性收拢 high 16384——pi ThinkingBudgets 仅四键,聊天引擎 Claude
+ *    格式 max=32000,此差异属上游类型限制,待 pi 扩键后经受控 settings 对齐);
+ *    google 走 pi 原生映射。
+ *  - auto/未知→medium:pi 无"不发字段用厂商默认"的 auto 语义,取编码 agent 生态通行
+ *    默认(与接线前的固定档位一致,未显式选档的用户零行为变化)。 */
+export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+const PI_THINKING_LEVELS: readonly PiThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+export function piThinkingLevelFor(reasoningLevel: string | null | undefined): PiThinkingLevel {
+  const normalized = reasoningLevelNormalized(reasoningLevel);
+  return (PI_THINKING_LEVELS as readonly string[]).includes(normalized) ? (normalized as PiThinkingLevel) : "medium";
 }
 
 /** 厂商思考开关的 pi 侧翻译——方言 openAiThinkingSwitchProtocol 的消费者（全面审查 7）。

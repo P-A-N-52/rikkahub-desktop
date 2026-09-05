@@ -12,7 +12,7 @@ import { addLog } from "../api/logs";
 import { broadcastConversation, broadcastEngineStatus, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
 import { applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { openAiMaxTokensField } from "../model-providers/request-dialect";
+import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
 import {
   claudeCacheControlEphemeral,
   claudeMessagesFromApiMessages,
@@ -22,7 +22,6 @@ import {
   hostOfProvider,
   isModelAllowTemperature,
   openAiChatCompletionsModalities,
-  reasoningLevelNormalized,
   reasoningPayloadForProvider,
   responseApiBuiltInTools,
   responseApiIncludeForProvider,
@@ -597,6 +596,8 @@ async function runPiWorkspaceGeneration(
     provider: deps.providerItem,
     model: deps.selectedModel,
     modelLimits: piModelLimitsFor(deps.providerItem, deps.selectedModel, deps.assistant),
+    // 思考强度与聊天引擎同源(助手设置);pi 档位翻译见 model-bridge piThinkingLevelFor。
+    reasoningLevel: deps.assistant.reasoningLevel,
     conversationId: conversation.id,
     cwd: runtime.cwd,
     history: enriched.messages,
@@ -688,6 +689,7 @@ async function runPiWorkspaceCompaction(
     provider: ctx.provider,
     model: ctx.model,
     modelLimits: piModelLimitsFor(ctx.provider, ctx.model, assistant),
+    reasoningLevel: assistant.reasoningLevel,
     conversationId: conversation.id,
     cwd: runtime.cwd,
     history,

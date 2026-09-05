@@ -11,6 +11,7 @@ import {
   isKimiK27Model,
   isKimiK3Model,
   isSamplingLockedModel,
+  reasoningLevelNormalized,
   SILICONFLOW_THINKING_MODELS,
 } from "../model-providers/request-dialect";
 import { fallbackDocumentText, readExtractedTextSync } from "../files/index";
@@ -593,10 +594,7 @@ export function appendAssistantApiMessages(items: ApiMessage[], message: Message
 }
 
 
-export function reasoningLevelNormalized(level: string | null | undefined) {
-  const normalized = String(level ?? "").toLowerCase();
-  return normalized === "off" || normalized === "none" ? "off" : normalized;
-}
+// reasoningLevelNormalized 上提至 model-providers/request-dialect(方言单源,工作区引擎同用)。
 
 // Token budgets per level — mirrors Android's ReasoningLevel enum values (含 MAX=32000)。
 

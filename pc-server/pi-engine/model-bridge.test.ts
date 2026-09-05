@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 
 import { piAgentDir } from "../foundation/paths";
 import { model, provider } from "../model-providers";
-import { createPiModelRuntime, mapProviderModelToPi, piApiFor } from "./model-bridge";
+import { createPiModelRuntime, mapProviderModelToPi, piApiFor, piThinkingLevelFor } from "./model-bridge";
 
 function makeProvider(input: Parameters<typeof provider>[0]) {
   return provider({ apiKey: "sk-test", ...input });
@@ -275,5 +275,30 @@ describe("createPiModelRuntime 内存注册闭环", () => {
 
     // 零落盘:客房目录整个不存在(auth 用内存存储,models 用内存 store,方案 §3.5 红线)。
     expect(existsSync(piAgentDir)).toBe(false);
+  });
+});
+
+describe("piThinkingLevelFor 档位翻译(助手设置→pi 会话档位)", () => {
+  it("安卓大写六档直传为 pi 小写档位", () => {
+    expect(piThinkingLevelFor("MINIMAL")).toBe("minimal");
+    expect(piThinkingLevelFor("LOW")).toBe("low");
+    expect(piThinkingLevelFor("MEDIUM")).toBe("medium");
+    expect(piThinkingLevelFor("HIGH")).toBe("high");
+    expect(piThinkingLevelFor("XHIGH")).toBe("xhigh");
+    expect(piThinkingLevelFor("MAX")).toBe("max");
+  });
+
+  it("off/none 归并为 off(归一化与聊天引擎同函数)", () => {
+    expect(piThinkingLevelFor("OFF")).toBe("off");
+    expect(piThinkingLevelFor("NONE")).toBe("off");
+    expect(piThinkingLevelFor("none")).toBe("off");
+  });
+
+  it("auto/空/未知档兜底 medium(pi 无 auto 语义;未显式选档零行为变化)", () => {
+    expect(piThinkingLevelFor("AUTO")).toBe("medium");
+    expect(piThinkingLevelFor(null)).toBe("medium");
+    expect(piThinkingLevelFor(undefined)).toBe("medium");
+    expect(piThinkingLevelFor("")).toBe("medium");
+    expect(piThinkingLevelFor("超大杯")).toBe("medium");
   });
 });

@@ -7,7 +7,7 @@ import { state } from "../persistence/json-store";
 import { broadcastConversation } from "../api/sse";
 import { DEFAULT_AUTO_MODEL_ID, applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { openAiMaxTokensField } from "../model-providers/request-dialect";
+import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
 import {
   auxiliaryReasoningPayloadForProvider,
   claudeThinkingPayload,
@@ -15,7 +15,6 @@ import {
   hostOfProvider,
   isModelAllowTemperature,
   parseDataUrl,
-  reasoningLevelNormalized,
   supportsAbility,
   supportsInputModality,
 } from "../inference-engine/message-builder";

@@ -25,19 +25,12 @@
 
 import { createAgentSession } from "../../pi/packages/coding-agent/src/core/sdk.ts";
 
-/** 工作区思考档位（全面审查 7：接通厂商思考开关）。工作区暂无档位 UI，取 agent 场景
- *  的正确默认：思考模型开思考（编码 agent 推理即生产力，Claude Code/Codex 同为思考
- *  常开），medium 对开关型厂商（智谱/DashScope/火山/SiliconFlow）只表达"开"、对
- *  effort 型厂商是 OpenAI 官方默认档。非思考模型由 pi 的能力收拢自动落回 off
- *  （sdk.ts clampThinkingLevel：model.reasoning=false → 仅支持 off），无需在此判定。
- *  未来 UI 化时以用户所选档位替换本常量即可，翻译层（model-bridge/方言表）零改动。 */
-const WORKSPACE_THINKING_LEVEL = "medium" as const;
 import type { ToolDefinition } from "../../pi/packages/coding-agent/src/core/extensions/types.ts";
 import { SessionManager } from "../../pi/packages/coding-agent/src/core/session-manager.ts";
 import type { GenerationEventSink } from "../inference-engine/events";
 import type { Message, Model, Provider } from "../foundation/types";
 import { piAgentDir } from "../foundation/paths";
-import { createPiModelRuntime, mapProviderModelToPi, type PiModelLimits } from "./model-bridge";
+import { createPiModelRuntime, mapProviderModelToPi, piThinkingLevelFor, type PiModelLimits } from "./model-bridge";
 import { llmLogContextFor, runWithLlmRequestLog } from "./llm-request-log";
 import { createPiEventBridge } from "./event-bridge";
 import { clearToolApprovalWaiters } from "../inference-engine/approval-gate";
@@ -52,6 +45,9 @@ export interface PiGenerationContext {
   /** 模型极限(P5:orchestrator 从 models.dev/助手配置取值;不传用 model-bridge 保守默认)。
    *  contextWindow 决定 pi 自动压缩阈值(contextWindow - reserveTokens),必须尽量真实。 */
   modelLimits?: PiModelLimits;
+  /** 助手思考强度(assistant.reasoningLevel 原值;经 piThinkingLevelFor 译成 pi 档位:
+   *  off→off、六档直传、auto/未知→medium)。不传=medium(纯测试/冒烟场景)。 */
+  reasoningLevel?: string | null;
   /** 会话身份(审批等待者清扫的归属键;引擎上下文与身份无关,纯由 history 决定)。 */
   conversationId: string;
   /** 会话工作目录(工作区边界内的绝对路径)。 */
@@ -149,7 +145,7 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
     modelRuntime: runtime,
     model,
     sessionManager: manager,
-    thinkingLevel: WORKSPACE_THINKING_LEVEL,
+    thinkingLevel: piThinkingLevelFor(ctx.reasoningLevel),
     // "builtin" 只关内建工具;customTools 经 includeAllExtensionTools 全部激活
     // (sdk.ts:246-251 + agent-session._refreshToolRegistry,§七-3 实证)。
     noTools: "builtin",
@@ -211,6 +207,8 @@ export async function runPiGeneration(ctx: PiGenerationContext): Promise<PiGener
 export interface PiCompactionContext {
   provider: Provider;
   model: Model;
+  /** 助手思考强度(同 PiGenerationContext.reasoningLevel;压缩摘要与主会话同档,勿分叉)。 */
+  reasoningLevel?: string | null;
   modelLimits?: PiModelLimits;
   conversationId: string;
   cwd: string;
@@ -270,7 +268,7 @@ export async function runPiCompaction(ctx: PiCompactionContext): Promise<PiCompa
     model,
     sessionManager: manager,
     // 压缩会话同档位:摘要质量受益于推理,且与主会话口径一致(勿分叉)。
-    thinkingLevel: WORKSPACE_THINKING_LEVEL,
+    thinkingLevel: piThinkingLevelFor(ctx.reasoningLevel),
     noTools: "builtin",
     customTools: [],
     ...(ctx.resources

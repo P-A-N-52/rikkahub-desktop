@@ -81,6 +81,14 @@ export function isKimiReasoningModel(modelId: string): boolean {
   return KIMI_SAMPLING_LOCKED_RE.test(modelId);
 }
 
+/** 档位归一化（方言事实：用户档位值域的入口收拢）——安卓对齐的大写枚举（AUTO/OFF/
+ *  MINIMAL/…/MAX）统一小写，off/none 归并为 off。聊天引擎全部拼装分支、auxiliary、
+ *  工作区引擎（model-bridge 的 pi 档位翻译）共用本函数，禁止各处自行 lowercase。 */
+export function reasoningLevelNormalized(level: string | null | undefined) {
+  const normalized = String(level ?? "").toLowerCase();
+  return normalized === "off" || normalized === "none" ? "off" : normalized;
+}
+
 /** 方言事实：reasoning_effort 只认 low/high/max 三档的厂商收拢表——Kimi K3（官方移除
  *  thinking，effort 是唯一强度入口，默认 max，非法值 400）与 DeepSeek 官方（thinking
  *  开关之外的 effort 档同值域）共用。聊天引擎拼入请求体、pi 经 model-bridge 喂给
