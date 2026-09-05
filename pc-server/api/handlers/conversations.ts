@@ -1,7 +1,7 @@
 // api/handlers/conversations.ts — 会话路由（stream、batch-delete、列表/分页/搜索、单会话子路由）
 // 纪律：纯搬迁自 server.ts routeApi()；生成编排（generateAnswer 等）仍在 server.ts，经导入使用。
 
-import type { Conversation, ConversationSnapshotEventDto, ConversationSnapshotMetaEventDto, JsonValue, MessageNode, MessagePart } from "../../foundation/types";
+import type { Conversation, ConversationSnapshotEventDto, ConversationSnapshotMetaEventDto, EngineStatusEventDto, JsonValue, MessageNode, MessagePart } from "../../foundation/types";
 import type { ConversationListDto, ConversationNodesPageDto, MessageSearchResultDto, PagedResult } from "../../foundation/types";
 import { applyPlaceholders, id, message, textFromParts } from "../../foundation/utils";
 import { CodedError } from "../../foundation/errors";
@@ -24,6 +24,7 @@ import { conversationNegotiationToken } from "../snapshot-negotiation";
 import { nodeStamp, SNAPSHOT_NODE_WINDOW, toSnapshotConversationDto } from "../snapshot-window";
 import {
   broadcastConversation,
+  broadcastEngineStatus,
   broadcastList,
   broadcastNodeUpdate,
   conversationClients,
@@ -34,7 +35,7 @@ import { DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
 import { attachOcrToImageParts, compressConversation, englishLanguageName, fetchAuxiliaryText, generateTitleForConversation, isQwenMtModel, markOcrPendingParts } from "../../conversations/auxiliary";
 import { compactEngineConversation, generateAnswer, resolveEngineForConversation } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
-import { generating } from "../../conversations/generation-state";
+import { compressing, generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
 import { resolveToolApproval } from "../../inference-engine/approval-gate";
 
@@ -112,8 +113,13 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       clientToken && clientToken === currentToken
         ? ["snapshot_meta", { type: "snapshot_meta", seq: Date.now(), conversationId: conversation.id, updateAt: conversation.updateAt, isGenerating: generating.has(conversation.id), negotiationToken: currentToken, serverTime: Date.now() } satisfies ConversationSnapshotMetaEventDto]
         : ["snapshot", { type: "snapshot", seq: Date.now(), conversation: toSnapshotConversationDto(conversation, generating.has(conversation.id)), serverTime: Date.now(), negotiationToken: currentToken } satisfies ConversationSnapshotEventDto];
+    // engine-status 帧是瞬态语义(重连即重置),压缩跨页/重连存活靠这份连接期快照:
+    // 压缩进行中(compressing 集合,服务端权威)则补发状态条帧,切页回来即恢复显示。
+    const initialFrames: [string, JsonValue | object][] = compressing.has(conversation.id)
+      ? [initialFrame, ["engine-status", { busy: true, phase: "compacting" } satisfies EngineStatusEventDto]]
+      : [initialFrame];
     return openSse(
-      () => [initialFrame],
+      () => initialFrames,
       (controller) => {
         const set = conversationClients.get(conversation.id) ?? new Set<ReadableStreamDefaultController<Uint8Array>>();
         set.add(controller);
@@ -521,12 +527,22 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
     }
     if (sub === "compress" && request.method === "POST") {
       const body = await readJson<{ additionalPrompt?: string; targetTokens?: number; keepRecentMessages?: number }>(request);
+      // 并发防线:前端 busy 互斥是组件态(切页即失忆),服务端必须自带守卫——两个压缩
+      // 并发改写同一会话是数据竞争。
+      if (compressing.has(conversation.id)) {
+        return error("已有压缩正在进行，请稍候", 409, "compress_in_progress");
+      }
       // 2-1:对齐 send 入口——先中止进行中的旧流。否则 generateAnswer 的 generating.set
       // 直接顶掉旧 controller,旧流成为无主流:与新流同写一个节点,或对已摘除节点持续
       // touchStream 广播幽灵帧。UI 虽屏蔽流式中的按钮,但 API 层必须自带守卫。
       generating.get(conversation.id)?.abort();
       generating.delete(conversation.id);
       finishInterruptedPendingToolsInConversation(conversation);
+      // 压缩状态服务端权威(内测反馈:切页回来"过程条消失",误以为压缩被取消):
+      // 开始/结束广播 engine-status(对话模式 UI 压缩从此与工作区引擎压缩同一状态条),
+      // compressing 集合供 SSE 连接期补发快照(engine-status 帧瞬态,重连即重置)。
+      compressing.add(conversation.id);
+      broadcastEngineStatus(conversation.id, { busy: true, phase: "compacting" });
       try {
         // P5:手动压缩优先走引擎原生 compaction——压引擎记忆(它才决定发给上游的
         // 上下文),UI 历史不动。targetTokens/keepRecentMessages 是 UI 历史压缩的参数,
@@ -552,6 +568,10 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         // CodedError 透传业务码,前端按码查 i18n 文案(message 兜底,通道见 foundation/errors)。
         const errorCode = err instanceof CodedError ? err.errorCode : undefined;
         return error(err instanceof Error ? err.message : String(err), 400, errorCode);
+      } finally {
+        compressing.delete(conversation.id);
+        // 与工作区路径 orchestrator 的 finally busy:false 重复广播,幂等无害。
+        broadcastEngineStatus(conversation.id, { busy: false });
       }
     }
     if (sub === "fork" && request.method === "POST") {

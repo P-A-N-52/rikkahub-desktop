@@ -70,6 +70,7 @@ import { WindowControlsBar } from "~/components/window-controls";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
 import { EngineStatusBar } from "~/components/workspace/engine-status-bar";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
+import { useCompressStore, useConversationCompressing } from "~/stores/compress-store";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import {
   CHAT_CONTAINER,
@@ -1369,9 +1370,9 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   const [compressTargetTokens, setCompressTargetTokens] = React.useState(2000);
   const [compressKeepRecent, setCompressKeepRecent] = React.useState(32);
   const [compressAdditionalPrompt, setCompressAdditionalPrompt] = React.useState("");
-  const [compressing, setCompressing] = React.useState(false);
-  // R7-4:压缩可中途取消——中止本次请求;后端在落库前检查 request.signal,取消后不改写会话。
-  const compressAbortRef = React.useRef<AbortController | null>(null);
+  // 压缩状态全局化(compress-store):压缩是长任务,状态不随本组件卸载而丢——切页回来
+  // busy 互斥/spinner/取消句柄照常;取消语义(R7-4)不变,后端落库前查 request.signal。
+  const compressing = useConversationCompressing(activeId);
   const [translationDialogMessageId, setTranslationDialogMessageId] = React.useState<string | null>(
     null,
   );
@@ -1667,16 +1668,17 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
       errorPrefix = "",
     ) => {
       if (!activeId) return;
-      setCompressing(true);
+      // 捕获发起时的会话 id:压缩期间用户可能切换会话,begin/end/刷新都要落在原会话上。
+      const conversationId = activeId;
       const controller = new AbortController();
-      compressAbortRef.current = controller;
+      useCompressStore.getState().begin(conversationId, controller);
       try {
-        await api.post<{ status: string }>(`conversations/${activeId}/compress`, params, {
+        await api.post<{ status: string }>(`conversations/${conversationId}/compress`, params, {
           timeout: false,
           signal: controller.signal,
         });
         setCompressDialogOpen(false);
-        refreshConversation(activeId);
+        refreshConversation(conversationId);
         refreshList();
         toast.success(
           isWorkspaceConversation
@@ -1696,8 +1698,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
           toast.error(`${errorPrefix}${message}`);
         }
       } finally {
-        compressAbortRef.current = null;
-        setCompressing(false);
+        useCompressStore.getState().end(conversationId);
       }
     },
     [activeId, isWorkspaceConversation, refreshList],
@@ -2025,8 +2026,8 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
               variant="outline"
               onClick={() => {
                 // R7-4:压缩中点取消 = 中止请求并关框(后端保证取消后不改写会话);
-                // 未压缩时就是普通关闭。
-                compressAbortRef.current?.abort();
+                // 未压缩时就是普通关闭。取消句柄在全局 store,切页回来仍可取消。
+                if (activeId) useCompressStore.getState().cancel(activeId);
                 setCompressDialogOpen(false);
               }}
             >

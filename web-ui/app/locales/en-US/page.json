@@ -61,7 +61,8 @@
       "busy": "A compression is already in progress, please wait",
       "error": {
         "compact_context_too_short": "The conversation is still short; no compaction needed yet",
-        "compact_already_compacted": "Just compacted; nothing new to compact yet"
+        "compact_already_compacted": "Just compacted; nothing new to compact yet",
+        "compress_in_progress": "A compression is already in progress, please wait"
       },
       "dialog_title": "Compress conversation history",
       "dialog_description": "Uses the context compression model from the default model and prompt settings to summarize earlier messages while keeping recent ones.",

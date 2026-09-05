@@ -385,13 +385,20 @@ export async function compressConversation(conversation: Conversation, additiona
   const allMessages = selectedConversationMessages(conversation);
   if (allMessages.length === 0) throw new Error("当前会话没有可压缩的消息");
 
+  // 内测反馈(310K 会话 /compact 报"消息数量不足"):按条数保留的语义对"少而长"的会话
+  // 不成立——20 条超长消息的会话 token 巨大,却因条数 ≤ 默认保留 32 条被整体划进保留区,
+  // 直接拒绝。压缩的目的是省上下文,"保留最近 N 条"是手段不是目的:条数不足时自动降级
+  // 为保留一半(至少压掉一半旧消息),恒可压。单条消息 floor(1/2)=0 → 全压成摘要,同样成立。
+  let effectiveKeepRecent = keepRecentMessages;
+  if (effectiveKeepRecent > 0 && allMessages.length <= effectiveKeepRecent) {
+    effectiveKeepRecent = Math.floor(allMessages.length / 2);
+  }
+
   let messagesToCompress: Message[];
   let messagesToKeep: Message[];
-  if (keepRecentMessages > 0 && allMessages.length > keepRecentMessages) {
-    messagesToCompress = allMessages.slice(0, -keepRecentMessages);
-    messagesToKeep = allMessages.slice(-keepRecentMessages);
-  } else if (keepRecentMessages > 0) {
-    throw new Error("消息数量不足，无法在保留最近消息的同时压缩历史");
+  if (effectiveKeepRecent > 0) {
+    messagesToCompress = allMessages.slice(0, -effectiveKeepRecent);
+    messagesToKeep = allMessages.slice(-effectiveKeepRecent);
   } else {
     messagesToCompress = allMessages;
     messagesToKeep = [];

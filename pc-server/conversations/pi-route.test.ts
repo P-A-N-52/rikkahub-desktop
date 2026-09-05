@@ -16,7 +16,7 @@ process.env.RIKKAHUB_PC_DATA_DIR = mkdtempSync(join(tmpdir(), "rkh-piroute-test-
 const conversations = await import("./index");
 const { configureWorkingSet, registerConversation } = await import("./working-set");
 const { getConversationMeta } = await import("./read-queries");
-const { generating } = await import("./generation-state");
+const { compressing, generating } = await import("./generation-state");
 const { compactEngineConversation, generateAnswer, resolveEngineForConversation } = await import("./orchestrator");
 const ws = await import("../workspace");
 const { defaultAssistant } = await import("../assistants");
@@ -400,4 +400,86 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     // 摘要请求确实打到了上游(区别于小会话零请求即抛错);split turn 时多一次前缀摘要。
     expect(server.requests.length).toBeGreaterThanOrEqual(1);
   }, 60_000);
+});
+
+// 内测反馈两连修:①310K"少而长"会话 /compact 报"消息数量不足"——按条数保留的语义
+// 对少而长会话不成立,改为条数不足时自动降级保留一半;②切页回来"过程条消失"且互斥
+// 失忆——压缩状态改服务端权威(compressing 集合 + engine-status 广播 + SSE 连接期快照),
+// 并发第二个压缩被 409 挡住。
+describe("压缩状态服务端权威 + 保留条数降级", () => {
+  async function postCompress(conversationId: string, body: object = {}) {
+    const url = new URL(`http://localhost/api/conversations/${conversationId}/compress`);
+    return handleConversationRoutes(
+      new Request(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      url,
+      `conversations/${conversationId}/compress`,
+    );
+  }
+
+  test("对话模式少而长会话:条数不足默认保留 32 时自动降级为压一半,不再报'消息数量不足'", async () => {
+    await installUpstream([{ content: "早期历史的压缩摘要。" }]);
+    const conversation = seedConversation(null);
+    // 共 6 条消息(远少于默认保留 32 条),每条都很长——修复前直接 400"消息数量不足"。
+    for (let round = 0; round < 5; round++) {
+      appendUserNode(conversation, `第${round}轮超长消息。`.repeat(500));
+    }
+    const response = await postCompress(conversation.id);
+    expect(response?.status).toBe(200);
+    const body = (await response?.json()) as { status: string };
+    expect(body.status).toBe("compressed");
+    // 降级语义:floor(6/2)=3 条保留原文,其余压成 1 条摘要 → 4 个消息节点。
+    expect(conversation.messages.length).toBe(4);
+    const summaryText = JSON.stringify(conversation.messages[0]);
+    expect(summaryText).toContain("早期历史的压缩摘要");
+    // 结束后服务端压缩态归零(finally 清理)。
+    expect(compressing.has(conversation.id)).toBe(false);
+  }, 30_000);
+
+  test("并发防线:压缩进行中再次 compress 返回 409 + 业务码", async () => {
+    await installUpstream([{ content: "未使用" }]);
+    const conversation = seedConversation(null);
+    compressing.add(conversation.id);
+    try {
+      const response = await postCompress(conversation.id);
+      expect(response?.status).toBe(409);
+      const body = (await response?.json()) as { errorCode?: string };
+      expect(body.errorCode).toBe("compress_in_progress");
+    } finally {
+      compressing.delete(conversation.id);
+    }
+  });
+
+  test("SSE 连接期快照:压缩进行中建立会话流,补发 engine-status busy 帧(切页回来状态恢复)", async () => {
+    await installUpstream([{ content: "未使用" }]);
+    const conversation = seedConversation(null);
+    compressing.add(conversation.id);
+    try {
+      const url = new URL(`http://localhost/api/conversations/${conversation.id}/stream`);
+      const response = await handleConversationRoutes(
+        new Request(url),
+        url,
+        `conversations/${conversation.id}/stream`,
+      );
+      expect(response?.status).toBe(200);
+      const reader = response!.body!.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      // initial 帧在 start 里同步 enqueue;读到 engine-status 即证——最多读 3 块防波动。
+      for (let i = 0; i < 3 && !received.includes("event: engine-status"); i++) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        received += decoder.decode(value, { stream: true });
+      }
+      await reader.cancel();
+      expect(received).toContain("event: engine-status");
+      expect(received).toContain('"busy":true');
+      expect(received).toContain('"phase":"compacting"');
+    } finally {
+      compressing.delete(conversation.id);
+    }
+  });
 });

@@ -3,8 +3,9 @@ import { Loader2 } from "lucide-react";
 
 import { useConversationEngineStatus } from "~/stores/conversation-store";
 
-// pi 引擎瞬态状态条(P5):压缩中/自动重试中。数据源是会话 SSE 的 engine-status 帧
-// (仅工作区会话会推送),无状态时不渲染——聊天会话零开销。窄选择器订阅:只有本会话
+// 会话瞬态状态条:压缩中/自动重试中。数据源是会话 SSE 的 engine-status 帧——
+// 工作区会话由 pi 事件桥推送(P5),对话/工作区手动压缩由 compress 端点统一推送并在
+// SSE 连接期补发快照(切页回来状态恢复)。无状态时不渲染,窄选择器订阅:只有本会话
 // 状态跳变才重渲染,流式增量不经过这里。
 export function EngineStatusBar({ conversationId }: { conversationId: string | null }) {
   const { t } = useTranslation("page");

@@ -61,7 +61,8 @@
       "busy": "已有压缩正在进行，请稍候",
       "error": {
         "compact_context_too_short": "当前会话上下文过短，暂不需要压缩",
-        "compact_already_compacted": "刚完成压缩，无需再次压缩"
+        "compact_already_compacted": "刚完成压缩，无需再次压缩",
+        "compress_in_progress": "已有压缩正在进行，请稍候"
       },
       "dialog_title": "压缩对话历史",
       "dialog_description": "使用默认模型与提示词中的上下文压缩模型，将较早消息压缩成摘要并保留最近消息。",
