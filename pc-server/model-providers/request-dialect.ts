@@ -81,6 +81,23 @@ export function isKimiReasoningModel(modelId: string): boolean {
   return KIMI_SAMPLING_LOCKED_RE.test(modelId);
 }
 
+/** 方言事实：思考预算表(token)——安卓 ReasoningLevel 枚举对齐(含 MAX=32000)。
+ *  消费面:聊天引擎 Google thinkingConfig.thinkingBudget、DashScope/火山 thinking_budget;
+ *  工作区引擎经 model-bridge PI_THINKING_BUDGETS(四键推导)喂 pi 受控 settings,
+ *  Google 2.x 预算通道两引擎同数值。未知档兜底 8000(安卓 else 分支同值)。 */
+export const THINKING_BUDGET_BY_LEVEL: Readonly<Record<string, number>> = {
+  off: 0,
+  low: 1_000,
+  medium: 2_000,
+  high: 8_000,
+  xhigh: 16_000,
+  max: 32_000,
+};
+
+export function budgetTokensFor(level: string): number {
+  return THINKING_BUDGET_BY_LEVEL[level] ?? 8_000;
+}
+
 /** 方言事实：输出上限的最终兜底(助手未设且模型目录无输出上限时)。Anthropic 协议
  *  max_tokens 必填,安卓对齐取 64000;聊天引擎 Claude 分支、辅助任务、工作区引擎
  *  model-bridge 共用,禁止各处魔数。 */

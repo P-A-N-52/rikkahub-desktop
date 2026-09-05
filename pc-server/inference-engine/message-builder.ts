@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ApiMessage, Assistant, JsonValue, Message, MessagePart, Model, Provider, ToolOutputEntry } from "../foundation/types";
 import { id, isRecord } from "../foundation/utils";
 import {
+  budgetTokensFor,
   effortLowHighMaxFor,
   isKimiK26Model,
   isKimiK27Model,
@@ -596,12 +597,7 @@ export function appendAssistantApiMessages(items: ApiMessage[], message: Message
 
 // reasoningLevelNormalized 上提至 model-providers/request-dialect(方言单源,工作区引擎同用)。
 
-// Token budgets per level — mirrors Android's ReasoningLevel enum values (含 MAX=32000)。
-
-export function budgetTokensFor(level: string): number {
-  const map: Record<string, number> = { off: 0, low: 1_000, medium: 2_000, high: 8_000, xhigh: 16_000, max: 32_000 };
-  return map[level] ?? 8_000;
-}
+// budgetTokensFor 上提至 model-providers/request-dialect(方言单源,工作区引擎同用)。
 
 // DeepSeek 系列模型的特色是展示原始思维链。当 DeepSeek 走 Anthropic(Claude) 格式时，
 // 用 display:"raw" 而非 "summarized"，让用户看到完整的思维链而非摘要。其它模型保持

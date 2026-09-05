@@ -14,6 +14,7 @@ import type { Model, Provider } from "../foundation/types";
 import { hostOfProvider } from "../inference-engine/message-builder";
 import { applyModelRequestHeaders } from "../model-providers";
 import {
+  budgetTokensFor,
   DEFAULT_OUTPUT_TOKENS,
   EFFORT_LOW_HIGH_MAX_BY_LEVEL,
   isKimiK3Model,
@@ -107,6 +108,20 @@ function piCompatOverridesFor(provider: Provider, api: KnownApi) {
     supportsStore: false,
   };
 }
+
+/** pi 受控 settings 的思考预算表——聊天引擎预算表(方言 THINKING_BUDGET_BY_LEVEL,
+ *  安卓对齐)的 pi 四键投影(pi ThinkingBudgets 仅 minimal/low/medium/high)。推导而非
+ *  抄写:方言表改数值,此处自动跟随。消费面:Google 2.x 预算通道(gemini 2.5 flash 类,
+ *  此前 pi 默认表 medium=8192 vs 聊天 2000,同档位预算差 4 倍)。结构性残余(诚实披露):
+ *  xhigh/max 经 pi clamp 收拢 high 档→8000,聊天为 16000/32000——pi 预算键仅四个,
+ *  待上游扩键再对齐;minimal 取聊天兜底值 8000(安卓无 minimal 档,兜底分支同值)。
+ *  DashScope 类 thinking_budget 精调 pi 无字段通道,维持既有披露。 */
+export const PI_THINKING_BUDGETS: Readonly<Record<"minimal" | "low" | "medium" | "high", number>> = {
+  minimal: budgetTokensFor("minimal"),
+  low: budgetTokensFor("low"),
+  medium: budgetTokensFor("medium"),
+  high: budgetTokensFor("high"),
+};
 
 /** Anthropic 格式思考方言(镜像聊天引擎 claudeThinkingPayload——安卓对齐的 adaptive
  *  方言:全部思考模型 thinking:{type:"adaptive"}+output_config.effort,档位原样透传):

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 
 import { piAgentDir } from "../foundation/paths";
 import { model, provider } from "../model-providers";
-import { createPiModelRuntime, mapProviderModelToPi, piApiFor, piThinkingLevelFor } from "./model-bridge";
+import { createPiModelRuntime, mapProviderModelToPi, piApiFor, PI_THINKING_BUDGETS, piThinkingLevelFor } from "./model-bridge";
 
 function makeProvider(input: Parameters<typeof provider>[0]) {
   return provider({ apiKey: "sk-test", ...input });
@@ -335,5 +335,11 @@ describe("piThinkingLevelFor 档位翻译(助手设置→pi 会话档位)", () =
     expect(piThinkingLevelFor(undefined)).toBe("medium");
     expect(piThinkingLevelFor("")).toBe("medium");
     expect(piThinkingLevelFor("超大杯")).toBe("medium");
+  });
+});
+
+describe("PI_THINKING_BUDGETS 预算投影(Google 2.x 通道与聊天引擎同数值)", () => {
+  it("四键推导自方言预算表(low:1000/medium:2000/high:8000;minimal 取聊天兜底 8000)", () => {
+    expect(PI_THINKING_BUDGETS).toEqual({ minimal: 8000, low: 1000, medium: 2000, high: 8000 });
   });
 });

@@ -30,6 +30,7 @@ import type { Assistant, Conversation, Model } from "../foundation/types";
 import { getStringArray, renderTemplate } from "../foundation/utils";
 import { piAgentDir, skillsDir } from "../foundation/paths";
 import { frozenContextBlocks } from "../inference-engine/context-snapshots";
+import { PI_THINKING_BUDGETS } from "./model-bridge";
 import { templateVariables } from "../inference-engine/message-enrichment";
 import { buildSearchContext } from "../search";
 import { reportError } from "../observability/app-errors";
@@ -152,7 +153,11 @@ export async function createPiSessionResources(options: {
   // resource-loader 的发现逻辑看的(.pi/SYSTEM.md 门控)。压缩面 P5 接管:threshold/
   // overflow 自动压缩显式开启(数值与 pi 默认一致,但不再依赖库默认值漂移),
   // reserveTokens/keepRecentTokens 取 pi 默认;重试等其余会话行为仍取 pi 默认值。
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true } }, { projectTrusted: false });
+  // thinkingBudgets:Google 2.x 预算通道与聊天引擎同数值(model-bridge 四键投影,方言单源)。
+  const settingsManager = SettingsManager.inMemory(
+    { compaction: { enabled: true }, thinkingBudgets: { ...PI_THINKING_BUDGETS } },
+    { projectTrusted: false },
+  );
   const enabledSkills = new Set(getStringArray(assistant.enabledSkills));
   // 技能库目录是我们的家,确保存在(与 tools/skills.listSkills 同款自愈)——否则冷启动
   // 未开过技能页时,pi 每轮 reload 都会对 additionalSkillPaths 报"path does not exist"。
