@@ -1622,18 +1622,31 @@ export function compactAssistantToolMessage(content: string, toolCalls: any[], r
   return payload;
 }
 
-/** Responses API 续传的 function_call 回放项。入参必须是归一化后的密集工具数组
- *  （RoundResult.toolCalls）：readRound 已过滤稀疏槽洞/无名条目并给缺失 id 兜底。
- *  此前误用 replay 原始数组——Responses 流按 output_index 建槽，reasoning/内置工具
- *  混发时 function_call 不从 0 号槽起，数组洞经 JSON.stringify 变成 input 里的
- *  null 项，火山等严格端点直接 400（MissingParameter input.role）；且原始条目缺
- *  id 时这里发 call_id:""，与 output 项的兜底 id 配对断裂。 */
+// ===== 流式续传回放纪律：只消费归一化密集数组（RoundResult.toolCalls）=====
+// 流式 toolCalls 按上游 index/output_index 建槽，是潜在稀疏数组：Responses API 的
+// output_index 语义是"输出序列位置"，reasoning/内置工具占号后 function_call 不从 0
+// 起（必然产洞）；chat-completions 的 index 语义是"tool_calls 数组内序号"（规范上
+// 从 0 连续，仅不规范中转会跳号）。洞经 JSON.stringify 变成续传体里的 null 项，
+// 火山等严格端点直接 400（MissingParameter input.role，2026-09-05 内测报障）；且
+// 原始条目缺 id 时与工具结果项的兜底 id 配对断裂。readRound 归一化已过滤洞/无名
+// 并兜底 id，续传两分支一律经下面两个投影函数消费它，原始 replay 数组不得进续传体。
+
+/** Responses API 续传的 function_call 回放项。 */
 export function responseApiToolCallItems(toolCalls: NormalizedToolCall[]) {
   return toolCalls.map((call) => ({
     type: "function_call",
     call_id: call.id,
     name: call.name,
     arguments: call.arguments,
+  }));
+}
+
+/** chat-completions 续传的 tool_calls 回放（OpenAI 嵌套形态）。 */
+export function chatToolCallsFromNormalized(toolCalls: NormalizedToolCall[]) {
+  return toolCalls.map((call) => ({
+    id: call.id,
+    type: "function",
+    function: { name: call.name, arguments: call.arguments },
   }));
 }
 
@@ -1831,7 +1844,9 @@ export async function fetchOpenAiTextStreaming(
       }
       messages = [
         ...messages,
-        compactAssistantToolMessage(r.content, r.toolCalls, r.reasoning || reasoningFromParts(hooks.message?.parts ?? [])),
+        // 同 responses 分支纪律:用归一化密集数组(见回放纪律节注),不规范中转跳号
+        // 建槽的洞不得进 tool_calls。
+        compactAssistantToolMessage(r.content, chatToolCallsFromNormalized(result.toolCalls), r.reasoning || reasoningFromParts(hooks.message?.parts ?? [])),
         ...toolMessages,
       ];
       return { ...body, messages, stream: true };

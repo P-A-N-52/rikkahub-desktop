@@ -1,8 +1,8 @@
-// Responses API 工具续传回归（2026-09-05 内测报障）：流按 output_index 建槽，思考
-// 模型（GLM-5.3@火山 plan 端点等）的 reasoning 项占 0 号槽，function_call 从 1 号
-// 起——replay 原始数组带洞，曾被直接拼进续传 input，洞经 JSON.stringify 变 null 项，
-// 火山严格校验 400（MissingParameter input.role）。encodeNextTurn 必须用归一化密集
-// 数组（readRound 已过滤洞/无名并给缺失 id 兜底，与 output 项 call_id 同源配对）。
+// 流式工具续传回放纪律回归（2026-09-05 内测报障 + 同类加固）：流式 toolCalls 按
+// index/output_index 建槽是潜在稀疏数组，encodeNextTurn 两分支（Responses input /
+// chat-completions messages）必须消费归一化密集数组——洞经 JSON.stringify 变 null
+// 项，火山等严格端点 400（MissingParameter input.role）。报障场景：GLM-5.3@火山
+// plan /responses 端点，reasoning 项占 0 号槽，function_call 从 1 号起。
 // mock.module 纪律同 tool-loop.test.ts：展开真实模块只覆盖目标导出。
 import { describe, expect, mock, test } from "bun:test";
 
@@ -75,5 +75,48 @@ describe("Responses API 工具续传（火山 input.role 400 回归）", () => {
     expect(responseApiToolCallItems([{ id: "c1", name: "t", arguments: "{}" }])).toEqual([
       { type: "function_call", call_id: "c1", name: "t", arguments: "{}" },
     ]);
+  });
+
+  test("chat-completions 续传同纪律：不规范中转 index 跳号建槽的洞不得进 tool_calls", async () => {
+    const captured: Array<Record<string, any>> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init: any) => {
+      captured.push(JSON.parse(String(init?.body ?? "{}")));
+      if (captured.length === 1) {
+        // 不规范上游：唯一一个工具调用的 index 从 1 起（规范应为 0）——建槽产 0 号洞。
+        return sse([
+          JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 1, id: "call_b", type: "function", function: { name: "lookup", arguments: "{}" } }] } }],
+          }),
+          "[DONE]",
+        ]);
+      }
+      return sse([JSON.stringify({ choices: [{ delta: { content: "done" } }] }), "[DONE]"]);
+    }) as never;
+    try {
+      const hooks = {
+        conversation: { id: "c2", title: "t" },
+        node: { id: "n1" },
+        message: { id: "m1", role: "ASSISTANT", parts: [] as unknown[], annotations: [], createdAt: 0, finishedAt: null },
+        sink: () => {},
+        executeTool: async () => ({ output: [{ type: "text", text: "ok" }] }),
+      } as never;
+      const text = await fetchOpenAiTextStreaming(
+        "https://relay.example/v1/chat/completions",
+        { "Content-Type": "application/json" },
+        { model: "any-model", stream: true, messages: [{ role: "user", content: "hi" }] },
+        { id: "p2", name: "中转", type: "openai" } as never,
+        { id: "a1", mcpServers: [] } as never,
+        hooks,
+      );
+      expect(text).toBe("done");
+      const assistantTurn = (captured[1].messages as Array<Record<string, any>>).find((m) => m.role === "assistant" && m.tool_calls);
+      const toolCalls = assistantTurn?.tool_calls as unknown[];
+      expect(toolCalls.some((call) => call == null)).toBe(false);
+      expect(toolCalls).toHaveLength(1);
+      expect((toolCalls[0] as Record<string, any>).id).toBe("call_b");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
