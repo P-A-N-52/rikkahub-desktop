@@ -100,10 +100,17 @@ describe("mapProviderModelToPi", () => {
       };
     };
 
-    // DashScope:qwen format 发 enable_thinking;effort 端点不认,压制。
+    // DashScope:qwen format 发 enable_thinking+thinking_budget(与聊天引擎同款两字段);
+    // effort 端点不认,压制。
     const dashscope = compatOf("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3-max");
     expect(dashscope.compat?.thinkingFormat).toBe("qwen");
     expect(dashscope.compat?.supportsReasoningEffort).toBe(false);
+    expect(dashscope.compat?.thinkingTokenBudgetField).toBe("thinking_budget");
+
+    // 百炼直供 kimi-k3:官方不支持 thinking_budget,不设字段(qwen format 仍走 enable_thinking)。
+    const dashscopeK3 = compatOf("https://dashscope.aliyuncs.com/compatible-mode/v1", "kimi-k3");
+    expect(dashscopeK3.compat?.thinkingFormat).toBe("qwen");
+    expect(dashscopeK3.compat?.thinkingTokenBudgetField).toBeUndefined();
 
     // SiliconFlow:白名单模型走 qwen format;白名单外压制(发 enable_thinking 会 400)。
     const sfListed = compatOf("https://api.siliconflow.cn/v1", "Qwen/Qwen3.5-397B-A17B");
@@ -113,16 +120,62 @@ describe("mapProviderModelToPi", () => {
     expect(sfUnlisted.compat?.thinkingFormat).toBeUndefined();
     expect(sfUnlisted.compat?.supportsReasoningEffort).toBe(false);
 
-    // 火山方舟:deepseek format 发 thinking:{type};effort 压制。
-    const ark = compatOf("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2.0");
-    expect(ark.compat?.thinkingFormat).toBe("deepseek");
-    expect(ark.compat?.supportsReasoningEffort).toBe(false);
+    // SiliconFlow V4 系托管版:effort 原样透传(服务端收拢)+budget 并发,xhigh/max 登记过 clamp。
+    const sfV4 = compatOf("https://api.siliconflow.cn/v1", "Pro/deepseek-ai/DeepSeek-V4-Pro");
+    expect(sfV4.compat?.thinkingFormat).toBe("qwen");
+    expect(sfV4.compat?.supportsReasoningEffort).toBe(true);
+    expect(sfV4.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
 
-    // 智谱:zai format 幂等锁定(与 pi 探测同值,口径由方言决定)。
+    // 火山方舟 Doubao Seed 2.x:deepseek format+effort 并发,查 seed2 表(minimal 档映 low,
+    // xhigh/max 收 high)。
+    const arkSeed2 = compatOf("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-0-pro-260215");
+    expect(arkSeed2.compat?.thinkingFormat).toBe("deepseek");
+    expect(arkSeed2.compat?.supportsReasoningEffort).toBe(true);
+    expect(arkSeed2.thinkingLevelMap).toEqual({
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+      max: "high",
+    });
+
+    // 火山老系(Seed 2 以前):thinking:{type} 开关,effort 压制(端点不认)。
+    const arkLegacy = compatOf("https://ark.cn-beijing.volces.com/api/v3", "doubao-1.5-thinking-pro");
+    expect(arkLegacy.compat?.thinkingFormat).toBe("deepseek");
+    expect(arkLegacy.compat?.supportsReasoningEffort).toBe(false);
+
+    // 智谱 GLM-5.1 及以下:zai format 幂等锁定(effort 探测保持关)。
     const zhipu = compatOf("https://open.bigmodel.cn/api/paas/v4", "glm-5");
     expect(zhipu.compat?.thinkingFormat).toBe("zai");
+    expect(zhipu.compat?.supportsReasoningEffort).toBeUndefined();
 
-    // DeepSeek 官方:deepseek format+档位收拢表(off 不标 null:可关思考走 thinking disabled)。
+    // 智谱 GLM-5.2:effort 开回原样透传(服务端收全七档),可关思考(off 不标 null)。
+    const zhipu52 = compatOf("https://open.bigmodel.cn/api/paas/v4", "glm-5.2");
+    expect(zhipu52.compat?.thinkingFormat).toBe("zai");
+    expect(zhipu52.compat?.supportsReasoningEffort).toBe(true);
+    expect(zhipu52.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+
+    // 智谱 GLM-5.3:强制思考(off 标 null,不发 disabled——官方 400)+窄表收拢。
+    const zhipu53 = compatOf("https://open.bigmodel.cn/api/paas/v4", "glm-5.3-flash");
+    expect(zhipu53.compat?.supportsReasoningEffort).toBe(true);
+    expect(zhipu53.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "high",
+      high: "high",
+      xhigh: "max",
+      max: "max",
+    });
+
+    // 智谱 GLM-4.7:强制思考但无 effort 能力——仅隐藏 off 档。
+    const zhipu47 = compatOf("https://open.bigmodel.cn/api/paas/v4", "glm-4.7");
+    expect(zhipu47.compat?.supportsReasoningEffort).toBeUndefined();
+    expect(zhipu47.thinkingLevelMap).toEqual({ off: null });
+
+    // DeepSeek 官方:deepseek format+v4 官方收拢表(2026-09:xhigh→high,与 K3 表口径
+    // 不同已拆分;off 不标 null:可关思考走 thinking disabled)。
     const deepseek = compatOf("https://api.deepseek.com/v1", "deepseek-reasoner");
     expect(deepseek.compat?.thinkingFormat).toBe("deepseek");
     expect(deepseek.thinkingLevelMap).toEqual({
@@ -130,7 +183,7 @@ describe("mapProviderModelToPi", () => {
       low: "low",
       medium: "high",
       high: "high",
-      xhigh: "max",
+      xhigh: "high",
       max: "max",
     });
 

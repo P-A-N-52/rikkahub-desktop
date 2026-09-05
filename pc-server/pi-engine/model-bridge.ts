@@ -14,14 +14,22 @@ import type { Model, Provider } from "../foundation/types";
 import { hostOfProvider } from "../inference-engine/message-builder";
 import { applyModelRequestHeaders } from "../model-providers";
 import {
+  ARK_SEED2_EFFORT_BY_LEVEL,
   budgetTokensFor,
+  DEEPSEEK_EFFORT_BY_LEVEL,
   DEFAULT_OUTPUT_TOKENS,
   EFFORT_LOW_HIGH_MAX_BY_LEVEL,
+  isArkSeed2Model,
   isKimiK3Model,
+  isSiliconFlowEffortModel,
+  isZhipuEffortModel,
+  isZhipuForcedThinkingModel,
+  isZhipuGlm53Model,
   OPENAI_DEVELOPER_ROLE_ALLOWED,
   openAiMaxTokensField,
   openAiThinkingSwitchProtocol,
   reasoningLevelNormalized,
+  ZHIPU_GLM53_EFFORT_BY_LEVEL,
 } from "../model-providers/request-dialect";
 
 export interface PiModelMapping {
@@ -178,9 +186,11 @@ function piThinkingOverridesFor(
 ): { compat?: Record<string, unknown>; thinkingLevelMap?: Record<string, string | null> } | undefined {
   const host = hostOfProvider(provider);
   if (host === "integrate.api.nvidia.com") return undefined;
-  if (isKimiK3Model(model.modelId)) {
-    // K3(模型级,跨渠道):pi 对官方 moonshot 探测 supportsReasoningEffort=false,须显式
-    // 开回才能发档位;收拢与 off 不可关(null 隐藏 off 项)由映射表表达,与聊天引擎同表。
+  if (isKimiK3Model(model.modelId) && host !== "dashscope.aliyuncs.com") {
+    // K3(模型级,跨渠道;百炼直供例外——那里包装成自家 enable_thinking 口径,与聊天
+    // 引擎 host 优先的分支顺序同语义,走下方 qwen format 分支):pi 对官方 moonshot
+    // 探测 supportsReasoningEffort=false,须显式开回才能发档位;收拢与 off 不可关
+    // (null 隐藏 off 项)由映射表表达,与聊天引擎同表。
     return {
       compat: { supportsReasoningEffort: true },
       thinkingLevelMap: { off: null, ...EFFORT_LOW_HIGH_MAX_BY_LEVEL },
@@ -188,23 +198,63 @@ function piThinkingOverridesFor(
   }
   const protocol = openAiThinkingSwitchProtocol(host, model.modelId);
   if (protocol === "enable-thinking-flag") {
-    // DashScope/SiliconFlow 白名单:qwen format 发 enable_thinking;这些端点不认
-    // reasoning_effort,压制(聊天引擎同样不发)。
-    return { compat: { thinkingFormat: "qwen", supportsReasoningEffort: false } };
+    // DashScope/SiliconFlow 白名单:qwen format 发 enable_thinking+thinking_budget
+    // (聊天引擎同款两字段;budget 查受控 settings 注入的 PI_THINKING_BUDGETS,与聊天
+    // 引擎 budgetTokensFor 同源同值,pi 侧另 clamp 在答案余量内)。百炼直供 kimi-k3
+    // 官方不支持 thinking_budget,不设字段(聊天引擎同防御)。
+    const budgetField = isKimiK3Model(model.modelId) ? {} : { thinkingTokenBudgetField: "thinking_budget" };
+    if (host === "api.siliconflow.cn" && isSiliconFlowEffortModel(model.modelId)) {
+      // V4 系/GLM-5.2 托管版另发 reasoning_effort(原样透传,服务端自行收拢;xhigh/max
+      // 登记过 session clamp),与聊天引擎并发口径一致。
+      return {
+        compat: { thinkingFormat: "qwen", supportsReasoningEffort: true, ...budgetField },
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      };
+    }
+    return { compat: { thinkingFormat: "qwen", supportsReasoningEffort: false, ...budgetField } };
   }
   if (protocol === "thinking-type-object") {
     if (host === "api.deepseek.com") {
       // DeepSeek 官方:pi 原生 deepseek format(thinking:{type}+reasoning_effort)幂等
-      // 锁定;effort 只认 low/high/max,收拢喂方言同表(off 不标 null:可关思考,off 时
-      // pi 发 thinking:{type:"disabled"},与聊天引擎一致)。
-      return { compat: { thinkingFormat: "deepseek" }, thinkingLevelMap: { ...EFFORT_LOW_HIGH_MAX_BY_LEVEL } };
+      // 锁定;effort 查 v4 官方收拢表(2026-09:xhigh→high,与 K3 表口径不同已拆分;
+      // off 不标 null:可关思考,off 时 pi 发 thinking:{type:"disabled"},与聊天引擎一致)。
+      return { compat: { thinkingFormat: "deepseek" }, thinkingLevelMap: { ...DEEPSEEK_EFFORT_BY_LEVEL } };
     }
     if (host === "open.bigmodel.cn") {
-      // 智谱:pi 原生 zai format(thinking:{type,clear_thinking};effort 探测已关)幂等锁定。
+      if (isZhipuEffortModel(model.modelId)) {
+        // GLM-5.2+:zai format 发 thinking:{type,clear_thinking}+reasoning_effort 并发
+        // (pi zai 分支原生支持,开回 effort 探测)。5.3 系查窄表(服务端仅收 max/high/low)
+        // 且强制思考——off 标 null 隐藏(session 钳到最低思考档,不发 disabled,官方 400);
+        // 5.2 原样透传(服务端收全七档),可关思考,off 走 disabled。
+        if (isZhipuGlm53Model(model.modelId)) {
+          return {
+            compat: { thinkingFormat: "zai", supportsReasoningEffort: true },
+            thinkingLevelMap: { off: null, ...ZHIPU_GLM53_EFFORT_BY_LEVEL },
+          };
+        }
+        return {
+          compat: { thinkingFormat: "zai", supportsReasoningEffort: true },
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        };
+      }
+      if (isZhipuForcedThinkingModel(model.modelId)) {
+        // GLM-4.7/4.5V:强制思考(disabled 会 400)但无 effort 能力——仅隐藏 off 档。
+        return { compat: { thinkingFormat: "zai" }, thinkingLevelMap: { off: null } };
+      }
+      // 智谱其余(GLM-4.6/5/5.1 等):pi 原生 zai format(effort 探测已关)幂等锁定。
       return { compat: { thinkingFormat: "zai" } };
     }
-    // 火山方舟/Moonshot K2.5/K2.6:deepseek format 发 thinking:{type},端点不认
-    // reasoning_effort,压制。
+    if (host === "ark.cn-beijing.volces.com" && isArkSeed2Model(model.modelId)) {
+      // Doubao Seed 2.x:deepseek format 原生支持 thinking:{type}+reasoning_effort 并发,
+      // 查 seed2 表(仅收 minimal/low/medium/high;用户 minimal 档映 low,off 才是关,
+      // 方言表同注);off 走 disabled(seed2 支持)。
+      return {
+        compat: { thinkingFormat: "deepseek", supportsReasoningEffort: true },
+        thinkingLevelMap: { ...ARK_SEED2_EFFORT_BY_LEVEL },
+      };
+    }
+    // 火山老系(Seed 2 以前)/Moonshot K2.5/K2.6:deepseek format 发 thinking:{type},
+    // 端点不认 reasoning_effort,压制。
     return { compat: { thinkingFormat: "deepseek", supportsReasoningEffort: false } };
   }
   if (protocol === "thinking-mode-flag" || protocol === "suppress") {

@@ -111,12 +111,12 @@ export function reasoningLevelNormalized(level: string | null | undefined) {
   return normalized === "off" || normalized === "none" ? "off" : normalized;
 }
 
-/** 方言事实：reasoning_effort 只认 low/high/max 三档的厂商收拢表——Kimi K3（官方移除
- *  thinking，effort 是唯一强度入口，默认 max，非法值 400）与 DeepSeek 官方（thinking
- *  开关之外的 effort 档同值域）共用。聊天引擎拼入请求体、pi 经 model-bridge 喂给
- *  thinkingLevelMap（pi 运行时查同一张表），未来引擎的桥接层同样消费本表。
- *  off 语义各引擎/各厂商自决（K3 无法关思考→聊天映 low、pi 标 null 隐藏 off 项；
- *  DeepSeek 可关→走 thinking:{type:"disabled"}，off 不进本表）。auto＝不发字段。 */
+/** 方言事实：Kimi K3 的 effort 收拢表（官方移除 thinking，effort 是唯一强度入口，
+ *  只认 low/high/max，默认 max，非法值 400）。聊天引擎拼入请求体、pi 经 model-bridge
+ *  喂给 thinkingLevelMap（pi 运行时查同一张表）。off 语义：K3 无法关思考→聊天映 low、
+ *  pi 标 null 隐藏 off 项。auto＝不发字段。
+ *  注意：DeepSeek 已拆出独立表（官方 2026-09 文档 xhigh→high，与 K3 的 xhigh→max
+ *  口径不同），勿再共用本表。 */
 export const EFFORT_LOW_HIGH_MAX_BY_LEVEL = {
   minimal: "low",
   low: "low",
@@ -129,6 +129,85 @@ export const EFFORT_LOW_HIGH_MAX_BY_LEVEL = {
 /** 六档收拢查表；未知档位返回 undefined，由调用方决定兜底。 */
 export function effortLowHighMaxFor(level: string): "low" | "high" | "max" | undefined {
   return (EFFORT_LOW_HIGH_MAX_BY_LEVEL as Record<string, "low" | "high" | "max">)[level];
+}
+
+/** 方言事实：DeepSeek v4 官方 effort 收拢表（2026-09 thinking_mode 文档明表：
+ *  low→low、medium→high、high→high、xhigh→high、max→max；v4-flash 与 v4-pro 同表）。
+ *  服务端自身也做同款收拢，客户端对齐官方口径以保证语义一致（此前与 K3 共用
+ *  xhigh→max 表，会让 xhigh 用户实际获得比官方语义强一档的 max）。 */
+export const DEEPSEEK_EFFORT_BY_LEVEL = {
+  minimal: "low",
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+  max: "max",
+} as const;
+
+export function deepseekEffortFor(level: string): "low" | "high" | "max" | undefined {
+  return (DEEPSEEK_EFFORT_BY_LEVEL as Record<string, "low" | "high" | "max">)[level];
+}
+
+/** 方言事实：智谱 GLM-5.3 的 effort 窄表（官方：仅收 max/high/low，其余值 400；
+ *  收拢建议 none/minimal/low→low、medium/high→high、xhigh/max→max）。
+ *  GLM-5.2 服务端收全七档并自行收拢（low/medium→high、xhigh→max），客户端原样
+ *  透传即可，不查本表。 */
+export const ZHIPU_GLM53_EFFORT_BY_LEVEL = {
+  minimal: "low",
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} as const;
+
+/** 方言事实：火山方舟 Doubao Seed 2.x 的 effort 表（官方：仅收 minimal/low/medium/
+ *  high，minimal＝关思考，默认 medium；xhigh/max 收拢 high）。用户的 minimal 档映
+ *  low 而非厂商 minimal：各家方言里 minimal＝"最少思考"而火山 minimal＝零思考，
+ *  关思考的入口是 off 档（thinking:{type:"disabled"}），语义不混流。 */
+export const ARK_SEED2_EFFORT_BY_LEVEL = {
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+} as const;
+
+// ===== 思考强度的模型级谓词（方言单源：聊天引擎与各引擎桥接层共同消费）=====
+
+/** 智谱 GLM-5.2 及以上支持 reasoning_effort（与 thinking.type 并发；5.1 及以下只认
+ *  thinking 开关）。按版本号判定而非枚举：未来 GLM-5.4/6 默认放行。 */
+export function isZhipuEffortModel(modelId: string): boolean {
+  const m = /glm-(\d+)(?:\.(\d+))?/i.exec(modelId);
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2] ?? 0);
+  return major > 5 || (major === 5 && minor >= 2);
+}
+
+/** GLM-5.3 系（含 -flash）：effort 值域窄（仅 max/high/low），需查窄表收拢。 */
+export function isZhipuGlm53Model(modelId: string): boolean {
+  return /glm-5\.3/i.test(modelId);
+}
+
+/** 智谱强制思考型号（官方：GLM-5.3 系、GLM-4.7、GLM-4.5V 思考不可关，传
+ *  thinking:{type:"disabled"} 直接 400）——off 档不得发 disabled。 */
+export function isZhipuForcedThinkingModel(modelId: string): boolean {
+  return /glm-5\.3/i.test(modelId) || /glm-4\.7/i.test(modelId) || /glm-4\.5v/i.test(modelId);
+}
+
+/** 火山方舟 Doubao Seed 2.x 及以上（doubao-seed-2-0-pro-260215 等）：支持
+ *  reasoning_effort；老 doubao 系只认 thinking.type。 */
+export function isArkSeed2Model(modelId: string): boolean {
+  return /doubao-seed-[2-9]/i.test(modelId);
+}
+
+/** SiliconFlow 上支持 reasoning_effort 的托管模型（官方：DeepSeek-V4 系与
+ *  Pro/zai-org/GLM-5.2；服务端自行收拢 low/medium→high、xhigh→max，客户端原样
+ *  透传）。这些模型同时在 enable_thinking 白名单内，两字段并发。 */
+export function isSiliconFlowEffortModel(modelId: string): boolean {
+  return /deepseek-v4/i.test(modelId) || /glm-5\.2/i.test(modelId);
 }
 
 // ===== OpenAI 兼容生态：厂商思考开关协议（host 级事实 + SiliconFlow 模型白名单）=====
@@ -158,8 +237,13 @@ export const SILICONFLOW_THINKING_MODELS: ReadonlySet<string> = new Set([
   "Qwen/Qwen3-14B",
   "Qwen/Qwen3-32B",
   "Qwen/Qwen3-30B-A3B",
+  "Qwen/Qwen3-235B-A22B",
   "tencent/Hunyuan-A13B-Instruct",
   "zai-org/GLM-4.5V",
+  "zai-org/GLM-4.6V",
+  "zai-org/GLM-5V-Turbo",
+  "deepseek-ai/DeepSeek-V3.1",
+  "deepseek-ai/DeepSeek-V3.2-Exp",
   "deepseek-ai/DeepSeek-V3.1-Terminus",
   "Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
   "deepseek-ai/DeepSeek-V4-Flash",

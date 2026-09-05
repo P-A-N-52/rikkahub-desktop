@@ -1,12 +1,19 @@
 // 统一请求方言单测:host → 口径事实的映射矩阵(依据见 request-dialect.ts 头注)。
 import { describe, expect, it } from "bun:test";
 import {
+  ARK_SEED2_EFFORT_BY_LEVEL,
+  deepseekEffortFor,
+  isArkSeed2Model,
   isKimiK26Model,
   isKimiK27Model,
   isKimiK3Model,
   isKimiReasoningModel,
   isKimiSamplingLockedModel,
   isSamplingLockedModel,
+  isSiliconFlowEffortModel,
+  isZhipuEffortModel,
+  isZhipuForcedThinkingModel,
+  isZhipuGlm53Model,
   EFFORT_LOW_HIGH_MAX_BY_LEVEL,
   effortLowHighMaxFor,
   OPENAI_DEVELOPER_ROLE_ALLOWED,
@@ -14,6 +21,7 @@ import {
   openAiMaxTokensField,
   openAiThinkingSwitchProtocol,
   SILICONFLOW_THINKING_MODELS,
+  ZHIPU_GLM53_EFFORT_BY_LEVEL,
 } from "./request-dialect";
 
 describe("request-dialect 统一请求方言", () => {
@@ -136,5 +144,77 @@ describe("request-dialect 厂商思考开关协议", () => {
     expect(openAiThinkingSwitchProtocol("api.moonshot.cn", "kimi-k2.6")).toBe("thinking-type-object");
     expect(openAiThinkingSwitchProtocol("api.moonshot.cn", "kimi-k2.5")).toBe("thinking-type-object");
     expect(openAiThinkingSwitchProtocol("api.moonshot.cn", "kimi-latest")).toBe("thinking-type-object");
+  });
+});
+
+// 2026-09 新格式方言:模型级谓词边界与新收拢表(官方文档口径,消费面=聊天引擎
+// reasoningPayloadForProvider + 工作区 model-bridge,两引擎同源)。
+describe("request-dialect 2026-09 新格式谓词与收拢表", () => {
+  it("智谱版本谓词:5.2 起支持 effort(未来版本默认放行);5.3 窄表;强制思考=5.3 系/4.7/4.5V", () => {
+    expect(isZhipuEffortModel("glm-5.1")).toBe(false);
+    expect(isZhipuEffortModel("glm-5.2")).toBe(true);
+    expect(isZhipuEffortModel("GLM-5.3-Flash")).toBe(true);
+    expect(isZhipuEffortModel("glm-6")).toBe(true);
+    expect(isZhipuEffortModel("glm-4.7")).toBe(false);
+    expect(isZhipuGlm53Model("glm-5.3")).toBe(true);
+    expect(isZhipuGlm53Model("glm-5.3-flash")).toBe(true);
+    expect(isZhipuGlm53Model("glm-5.2")).toBe(false);
+    expect(isZhipuForcedThinkingModel("glm-5.3")).toBe(true);
+    expect(isZhipuForcedThinkingModel("glm-4.7")).toBe(true);
+    expect(isZhipuForcedThinkingModel("glm-4.5v")).toBe(true);
+    expect(isZhipuForcedThinkingModel("glm-4.6")).toBe(false);
+    expect(isZhipuForcedThinkingModel("glm-5.2")).toBe(false);
+  });
+
+  it("火山 Seed 2.x 谓词与表:seed-2+ 命中(老 doubao 不);minimal 档映 low,xhigh/max 收 high", () => {
+    expect(isArkSeed2Model("doubao-seed-2-0-pro-260215")).toBe(true);
+    expect(isArkSeed2Model("doubao-seed-2.0")).toBe(true);
+    expect(isArkSeed2Model("doubao-seed-3-pro")).toBe(true);
+    expect(isArkSeed2Model("doubao-1.5-thinking-pro")).toBe(false);
+    expect(ARK_SEED2_EFFORT_BY_LEVEL).toEqual({
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+      max: "high",
+    });
+  });
+
+  it("DeepSeek v4 表与 K3 表口径分歧锁定:DS xhigh→high(官方 2026-09),K3 xhigh→max", () => {
+    expect(deepseekEffortFor("xhigh")).toBe("high");
+    expect(deepseekEffortFor("max")).toBe("max");
+    expect(deepseekEffortFor("medium")).toBe("high");
+    expect(effortLowHighMaxFor("xhigh")).toBe("max");
+  });
+
+  it("智谱 5.3 窄表:服务端仅收 max/high/low,收拢建议官方口径", () => {
+    expect(ZHIPU_GLM53_EFFORT_BY_LEVEL).toEqual({
+      minimal: "low",
+      low: "low",
+      medium: "high",
+      high: "high",
+      xhigh: "max",
+      max: "max",
+    });
+  });
+
+  it("硅基 effort 托管模型谓词:V4 系/GLM-5.2 命中,V3.2 不", () => {
+    expect(isSiliconFlowEffortModel("Pro/deepseek-ai/DeepSeek-V4-Pro")).toBe(true);
+    expect(isSiliconFlowEffortModel("deepseek-ai/DeepSeek-V4-Flash")).toBe(true);
+    expect(isSiliconFlowEffortModel("Pro/zai-org/GLM-5.2")).toBe(true);
+    expect(isSiliconFlowEffortModel("deepseek-ai/DeepSeek-V3.2")).toBe(false);
+  });
+
+  it("白名单增量:2026-09 官方 enable_thinking 支持列表新条目", () => {
+    for (const id of [
+      "Qwen/Qwen3-235B-A22B",
+      "zai-org/GLM-4.6V",
+      "zai-org/GLM-5V-Turbo",
+      "deepseek-ai/DeepSeek-V3.1",
+      "deepseek-ai/DeepSeek-V3.2-Exp",
+    ]) {
+      expect(SILICONFLOW_THINKING_MODELS.has(id)).toBe(true);
+    }
   });
 });

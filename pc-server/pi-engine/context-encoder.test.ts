@@ -286,7 +286,10 @@ describe("DB→pi 编码器:压缩与确定性", () => {
     const records: EngineCompactionRecord[] = [{ cutMessageId: user2.id, summary: "摘要", tokensBefore: 42 }];
     const first = seed(history, records).messages;
     const second = seed(history, records).messages;
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    // pi 的 appendCompaction 给条目打墙钟时间戳(new Date()),跨毫秒边界即字节漂移
+    // (曾致本测试偶发红)——时间戳不属于"内容一致"不变量,剔除后比较。
+    const stripClock = (messages: unknown) => JSON.stringify(messages, (key, value) => (key === "timestamp" ? undefined : value));
+    expect(stripClock(second)).toBe(stripClock(first));
   });
 });
 

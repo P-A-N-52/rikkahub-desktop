@@ -6,14 +6,22 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ApiMessage, Assistant, JsonValue, Message, MessagePart, Model, Provider, ToolOutputEntry } from "../foundation/types";
 import { id, isRecord } from "../foundation/utils";
 import {
+  ARK_SEED2_EFFORT_BY_LEVEL,
   budgetTokensFor,
+  deepseekEffortFor,
   effortLowHighMaxFor,
+  isArkSeed2Model,
   isKimiK26Model,
   isKimiK27Model,
   isKimiK3Model,
   isSamplingLockedModel,
+  isSiliconFlowEffortModel,
+  isZhipuEffortModel,
+  isZhipuForcedThinkingModel,
+  isZhipuGlm53Model,
   reasoningLevelNormalized,
   SILICONFLOW_THINKING_MODELS,
+  ZHIPU_GLM53_EFFORT_BY_LEVEL,
 } from "../model-providers/request-dialect";
 import { fallbackDocumentText, readExtractedTextSync } from "../files/index";
 import { ensureExtractedTextAsync } from "../files/extraction";
@@ -970,12 +978,17 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
   }
   if (host === "dashscope.aliyuncs.com") {
     const result: Record<string, any> = { enable_thinking: enabled };
-    if (normalized !== "auto") result.thinking_budget = budgetTokensFor(normalized);
+    // 百炼官方:thinking_budget 适用 Qwen3 系与直供 GLM/Kimi,唯 kimi-k3 不支持该参数。
+    if (normalized !== "auto" && !isKimiK3Model(modelItem.modelId)) result.thinking_budget = budgetTokensFor(normalized);
     return result;
   }
   if (host === "api.siliconflow.cn") {
     // 白名单单源在 request-dialect(工作区引擎经 model-bridge 消费同一份名单)。
-    return SILICONFLOW_THINKING_MODELS.has(modelItem.modelId) ? { enable_thinking: enabled } : {};
+    // V4 系/GLM-5.2 托管版另支持 reasoning_effort(服务端自行收拢 low/medium→high、
+    // xhigh→max),原样透传与 enable_thinking 并发。
+    if (!SILICONFLOW_THINKING_MODELS.has(modelItem.modelId)) return {};
+    const sfEffort = enabled && normalized !== "auto" && isSiliconFlowEffortModel(modelItem.modelId) ? normalized : undefined;
+    return { enable_thinking: enabled, ...(sfEffort ? { reasoning_effort: sfEffort } : {}) };
   }
   if (host === "api.moonshot.cn") {
     // Kimi 逐代 thinking 语义(官方"思考模型"文档;安卓仅覆盖到 K2.6 #1586,K3 为 PC 先行。
@@ -999,12 +1012,28 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
     return { thinking };
   }
   if (["ark.cn-beijing.volces.com", "open.bigmodel.cn", "api.deepseek.com"].includes(host)) {
-    // 对齐 Android ChatCompletionsAPI:367-379——DeepSeek 官方开思考且非 auto 时补
-    // reasoning_effort,只认 low/high/max 三档,收拢查方言同一张表(pi 引擎经
-    // thinkingLevelMap 消费,两引擎口径恒同)。
-    const deepseekEffort =
-      host === "api.deepseek.com" && enabled && normalized !== "auto" ? effortLowHighMaxFor(normalized) : undefined;
-    return { thinking: { type: enabled ? "enabled" : "disabled" }, ...(deepseekEffort ? { reasoning_effort: deepseekEffort } : {}) };
+    // thinking:{type} 生态的 effort 增强(模型级方言,2026-09 各厂官方口径,pi 引擎经
+    // thinkingLevelMap 消费同源表,两引擎口径恒同):
+    // - DeepSeek 官方:v4 收拢表(xhigh→high,与 K3 表口径不同,勿混用);
+    // - 智谱 GLM-5.2+:5.3 系查窄表(服务端仅收 max/high/low,其余 400),5.2 原样透传
+    //   (服务端收全七档自行收拢);5.1 及以下不发 effort;
+    // - 火山方舟 Doubao Seed 2.x:查 seed2 表(仅收 minimal/low/medium/high);老系不发。
+    let effort: string | undefined;
+    if (enabled && normalized !== "auto") {
+      if (host === "api.deepseek.com") {
+        effort = deepseekEffortFor(normalized);
+      } else if (host === "open.bigmodel.cn" && isZhipuEffortModel(modelItem.modelId)) {
+        effort = isZhipuGlm53Model(modelItem.modelId)
+          ? (ZHIPU_GLM53_EFFORT_BY_LEVEL as Record<string, string>)[normalized]
+          : normalized;
+      } else if (host === "ark.cn-beijing.volces.com" && isArkSeed2Model(modelItem.modelId)) {
+        effort = (ARK_SEED2_EFFORT_BY_LEVEL as Record<string, string>)[normalized];
+      }
+    }
+    // 智谱强制思考型号(GLM-5.3 系/4.7/4.5V):思考不可关,off 档发 disabled 直接 400——
+    // 省略 thinking 字段走模型默认(恒思考),与 K3"off 不可达"同语义。
+    if (host === "open.bigmodel.cn" && isZhipuForcedThinkingModel(modelItem.modelId) && !enabled) return {};
+    return { thinking: { type: enabled ? "enabled" : "disabled" }, ...(effort ? { reasoning_effort: effort } : {}) };
   }
   if (host === "integrate.api.nvidia.com") {
     if (normalized === "auto") return {};

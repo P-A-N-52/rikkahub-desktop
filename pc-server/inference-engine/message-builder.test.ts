@@ -272,3 +272,92 @@ describe("reasoningPayloadForProvider — Moonshot Kimi 代际", () => {
     expect(isModelAllowTemperature({ modelId: "gpt-5" } as unknown as Model)).toBe(false);
   });
 });
+
+// 2026-09 厂商新格式方言(官方文档口径):智谱 GLM-5.2+/火山 Seed 2.x 的 effort 增强、
+// 强制思考型号的 off 防御、DeepSeek v4 收拢表、硅基 V4 系 effort、百炼 K3 budget 防御。
+describe("reasoningPayloadForProvider — 2026-09 新格式方言", () => {
+  const mk = (baseUrl: string) => ({ type: "openai", baseUrl, apiKey: "k" }) as unknown as Provider;
+  const model = (modelId: string) => ({ modelId, abilities: ["REASONING"] }) as unknown as Model;
+  const zhipu = mk("https://open.bigmodel.cn/api/paas/v4");
+  const ark = mk("https://ark.cn-beijing.volces.com/api/v3");
+  const deepseek = mk("https://api.deepseek.com/v1");
+  const siliconflow = mk("https://api.siliconflow.cn/v1");
+  const dashscope = mk("https://dashscope.aliyuncs.com/compatible-mode/v1");
+
+  test("智谱 GLM-5.3:effort 查窄表并发;off 不发 disabled(强制思考,官方 400)", () => {
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5.3"), "MAX")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "max",
+    });
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5.3-flash"), "medium")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5.3"), "off")).toEqual({});
+    expect(reasoningPayloadForProvider(zhipu, model("glm-4.7"), "off")).toEqual({});
+  });
+
+  test("智谱 GLM-5.2:effort 原样透传(服务端收全七档);可关思考", () => {
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5.2"), "xhigh")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "xhigh",
+    });
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5.2"), "off")).toEqual({
+      thinking: { type: "disabled" },
+    });
+  });
+
+  test("智谱 GLM-5.1 及以下:仅 thinking 开关,不发 effort(现状保持)", () => {
+    expect(reasoningPayloadForProvider(zhipu, model("glm-5"), "max")).toEqual({
+      thinking: { type: "enabled" },
+    });
+  });
+
+  test("火山 Doubao Seed 2.x:effort 查 seed2 表(minimal 档映 low,xhigh/max 收 high);老系不发", () => {
+    expect(reasoningPayloadForProvider(ark, model("doubao-seed-2-0-pro-260215"), "max")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(reasoningPayloadForProvider(ark, model("doubao-seed-2-0-mini"), "minimal")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "low",
+    });
+    expect(reasoningPayloadForProvider(ark, model("doubao-seed-2-0-pro-260215"), "off")).toEqual({
+      thinking: { type: "disabled" },
+    });
+    expect(reasoningPayloadForProvider(ark, model("doubao-1.5-thinking-pro"), "max")).toEqual({
+      thinking: { type: "enabled" },
+    });
+  });
+
+  test("DeepSeek 官方:v4 收拢表 xhigh→high(2026-09 口径,与 K3 表拆分)", () => {
+    expect(reasoningPayloadForProvider(deepseek, model("deepseek-v4-pro"), "xhigh")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(reasoningPayloadForProvider(deepseek, model("deepseek-v4-pro"), "max")).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "max",
+    });
+  });
+
+  test("SiliconFlow V4 系:enable_thinking+effort 原样并发;白名单一般模型不发 effort", () => {
+    expect(reasoningPayloadForProvider(siliconflow, model("Pro/deepseek-ai/DeepSeek-V4-Pro"), "xhigh")).toEqual({
+      enable_thinking: true,
+      reasoning_effort: "xhigh",
+    });
+    expect(reasoningPayloadForProvider(siliconflow, model("Qwen/Qwen3.5-397B-A17B"), "high")).toEqual({
+      enable_thinking: true,
+    });
+  });
+
+  test("百炼:qwen 系发 thinking_budget;直供 kimi-k3 官方不支持该参数,只发开关", () => {
+    expect(reasoningPayloadForProvider(dashscope, model("qwen3-max"), "high")).toEqual({
+      enable_thinking: true,
+      thinking_budget: 8000,
+    });
+    expect(reasoningPayloadForProvider(dashscope, model("kimi-k3"), "high")).toEqual({
+      enable_thinking: true,
+    });
+  });
+});
