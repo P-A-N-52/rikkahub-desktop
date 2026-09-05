@@ -3,7 +3,9 @@ import { describe, expect, it } from "bun:test";
 import {
   ARK_SEED2_EFFORT_BY_LEVEL,
   deepseekEffortFor,
+  gemini3ThinkingLevelFor,
   isArkSeed2Model,
+  isGemini3ProModel,
   isKimiK26Model,
   isKimiK27Model,
   isKimiK3Model,
@@ -73,6 +75,20 @@ describe("request-dialect Kimi 代际", () => {
     expect(isKimiK26Model("kimi-k2.7-code")).toBe(false);
   });
 
+  it("裸名口径(官方新命名去 kimi 前缀,第三方常用):行首锚定接住全系;非行首无 kimi 上下文不误伤", () => {
+    expect(isKimiK3Model("k3.5")).toBe(true);
+    expect(isKimiK3Model("k3-turbo")).toBe(true);
+    expect(isKimiK27Model("k2.7-code")).toBe(true);
+    expect(isKimiK26Model("k2.6")).toBe(true);
+    expect(isKimiSamplingLockedModel("k2.5")).toBe(true);
+    expect(isKimiReasoningModel("k2.7-code-highspeed")).toBe(true);
+    // 误伤面:非行首且无 kimi 上下文的 k+数字、行首但数字连写。
+    expect(isKimiK3Model("grok-3")).toBe(false);
+    expect(isKimiK3Model("k30")).toBe(false);
+    expect(isKimiK27Model("mark2.7")).toBe(false);
+    expect(isKimiSamplingLockedModel("k2")).toBe(false);
+  });
+
   it("采样锁定:K2.5 起(含 K2.6/K2.7/K3/裸k3/第三方 id 形态)固定 temperature/top_p;旧代不锁", () => {
     for (const id of ["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "k3", "Pro/moonshotai/Kimi-K2.5"]) {
       expect(isKimiSamplingLockedModel(id)).toBe(true);
@@ -100,7 +116,7 @@ describe("request-dialect Kimi 代际", () => {
     }
   });
 
-  it("档位收拢表(K3/DeepSeek 官方共用):六档→low/high/max(非法值即 400 的正确性表);未知档位 undefined 由调用方兜底", () => {
+  it("K3 档位收拢表:六档→low/high/max(非法值即 400 的正确性表;DeepSeek 已拆至官方表);未知档位 undefined 由调用方兜底", () => {
     expect(effortLowHighMaxFor("minimal")).toBe("low");
     expect(effortLowHighMaxFor("low")).toBe("low");
     expect(effortLowHighMaxFor("medium")).toBe("high");
@@ -149,6 +165,26 @@ describe("request-dialect 厂商思考开关协议", () => {
 
 // 2026-09 新格式方言:模型级谓词边界与新收拢表(官方文档口径,消费面=聊天引擎
 // reasoningPayloadForProvider + 工作区 model-bridge,两引擎同源)。
+// Gemini 3 档位表:官方值域按型号分裂,口径逐值对齐 pi getThinkingLevel(两引擎恒同)。
+describe("request-dialect Gemini 3 thinkingLevel 档位表", () => {
+  it("Pro 判定:gemini-3-pro/3.5-pro 命中;flash 与 2.5-pro 不命中", () => {
+    expect(isGemini3ProModel("gemini-3-pro-preview")).toBe(true);
+    expect(isGemini3ProModel("gemini-3.5-pro")).toBe(true);
+    expect(isGemini3ProModel("gemini-3.5-flash")).toBe(false);
+    expect(isGemini3ProModel("gemini-2.5-pro")).toBe(false);
+  });
+
+  it("Pro 仅 low/high(minimal 收 low、medium 收 high);非 Pro 全值域;xhigh/max 全系收 high(对齐 vendor patch)", () => {
+    expect(gemini3ThinkingLevelFor("gemini-3-pro-preview", "minimal")).toBe("low");
+    expect(gemini3ThinkingLevelFor("gemini-3-pro-preview", "medium")).toBe("high");
+    expect(gemini3ThinkingLevelFor("gemini-3-pro-preview", "xhigh")).toBe("high");
+    expect(gemini3ThinkingLevelFor("gemini-3.5-flash", "minimal")).toBe("minimal");
+    expect(gemini3ThinkingLevelFor("gemini-3.5-flash", "medium")).toBe("medium");
+    expect(gemini3ThinkingLevelFor("gemini-3.5-flash", "max")).toBe("high");
+    expect(gemini3ThinkingLevelFor("gemini-3.5-flash", "unknown-future")).toBe("high");
+  });
+});
+
 describe("request-dialect 2026-09 新格式谓词与收拢表", () => {
   it("智谱版本谓词:5.2 起支持 effort(未来版本默认放行);5.3 窄表;强制思考=5.3 系/4.7/4.5V", () => {
     expect(isZhipuEffortModel("glm-5.1")).toBe(false);

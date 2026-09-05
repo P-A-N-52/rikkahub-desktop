@@ -48,16 +48,19 @@ export function openAiMaxTokensField(host: string): "max_tokens" | "max_completi
 // 正则对齐安卓 ModelRegistry 的 token 匹配语义（kimi,k,N 连续 token：kimi-k3 /
 // Kimi-K3-Turbo / moonshotai/Kimi-K3 都命中），(?![0-9]) 防 k30/k2.56 误伤，
 // k3.5 等同代小版本自动延续同规则。
+// 裸名口径(全系一致):官方新命名已去 kimi 前缀(K3 官方 id 就是 "k3",用户实证;
+// 第三方中转也常用裸名),行首锚定 ^k… 接住 k3/k3.5/k2.7-code 等;非行首无 kimi
+// 上下文的 "…k3" 不命中,防误伤别家带 k+数字的名字。
 
-/** K3 系（kimi-k3/k3.5…；裸 id "k3" 对齐安卓 KIMI_K3_ALIAS）。 */
-const KIMI_K3_RE = /(kimi[-._/]?k[-._]?3(?![0-9])|^k3$)/i;
+/** K3 系（kimi-k3/k3.5/裸 k3/k3-turbo…）。 */
+const KIMI_K3_RE = /(kimi[-._/]?|^)k[-._]?3(?![0-9])/i;
 /** K2.7-code(-highspeed)：始终思考，thinking 传 disabled 直接 400。 */
-const KIMI_K2_7_RE = /kimi[-._/]?k[-._]?2[-._]7(?![0-9])/i;
+const KIMI_K2_7_RE = /(kimi[-._/]?|^)k[-._]?2[-._]7(?![0-9])/i;
 /** K2.6：thinking 可开关；开思考需显式 keep:"all" 才保留历史思考（安卓 #1586）。 */
-const KIMI_K2_6_RE = /kimi[-._/]?k[-._]?2[-._]6(?![0-9])/i;
+const KIMI_K2_6_RE = /(kimi[-._/]?|^)k[-._]?2[-._]6(?![0-9])/i;
 /** K2.5 起（含 K2.6/K2.7/K3）temperature/top_p 等采样参数官方固定，明示"请勿显式
  *  传入"；安卓禁 K2.5/K2.6/K3/裸k3，按官方文档补 K2.7-code。 */
-const KIMI_SAMPLING_LOCKED_RE = /(kimi[-._/]?k[-._]?(3|2[-._][567])(?![0-9])|^k3$)/i;
+const KIMI_SAMPLING_LOCKED_RE = /(kimi[-._/]?|^)k[-._]?(3|2[-._][567])(?![0-9])/i;
 
 export function isKimiK3Model(modelId: string): boolean {
   return KIMI_K3_RE.test(modelId);
@@ -208,6 +211,42 @@ export function isArkSeed2Model(modelId: string): boolean {
  *  透传）。这些模型同时在 enable_thinking 白名单内，两字段并发。 */
 export function isSiliconFlowEffortModel(modelId: string): boolean {
   return /deepseek-v4/i.test(modelId) || /glm-5\.2/i.test(modelId);
+}
+
+// ===== Gemini 3.x thinkingLevel 档位事实 =====
+// 官方 thinking_level 值域按型号分裂（ai.google.dev「thinking」）：Pro 系仅认
+// low/high（minimal 收 low、medium 收 high），非 Pro（3.5 Flash 等）全值域
+// minimal/low/medium/high。口径逐值对齐 pi getThinkingLevel（含 [RIKKAHUB PATCH:
+// budget-xhigh-max] 的 xhigh/max→high），两引擎恒同。off 不在表内：Gemini 3 思考
+// 不可关，聊天引擎 off 时查 minimal 行取最少思考（pi 上游 off→high 为已知两引擎
+// 差异，改动需扩 patch，暂记录不动）。
+const GEMINI3_PRO_THINKING_LEVEL_BY_LEVEL = {
+  minimal: "low",
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+} as const;
+const GEMINI3_THINKING_LEVEL_BY_LEVEL = {
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+} as const;
+
+/** Gemini 3 Pro 系判定（正则对齐 pi isGemini3ProModel）。 */
+export function isGemini3ProModel(modelId: string): boolean {
+  return /gemini-3(?:\.\d+)?-pro/i.test(modelId);
+}
+
+/** 六档 → Gemini 3 thinking_level 官方值（按型号查对应表；未知档位保守收 high，
+ *  与 pi 对未映射高档位的行为一致）。 */
+export function gemini3ThinkingLevelFor(modelId: string, level: string): string {
+  const table = isGemini3ProModel(modelId) ? GEMINI3_PRO_THINKING_LEVEL_BY_LEVEL : GEMINI3_THINKING_LEVEL_BY_LEVEL;
+  return (table as Record<string, string>)[level] ?? "high";
 }
 
 // ===== OpenAI 兼容生态：厂商思考开关协议（host 级事实 + SiliconFlow 模型白名单）=====

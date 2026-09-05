@@ -184,6 +184,23 @@ describe("reasoningPayloadForProvider — Gemini via OpenAI 兼容层", () => {
     });
   });
 
+  test("gemini-3 档位按型号查表(对齐 pi getThinkingLevel):Pro 仅 low/high,非 Pro 全值域", () => {
+    const gemini35Flash = { modelId: "gemini-3.5-flash", abilities: ["REASONING"] } as unknown as Model;
+    const levelOf = (m: Model, level: string) =>
+      (reasoningPayloadForProvider(relay, m, level) as any).extra_body.google.thinking_config.thinking_level;
+    // Pro:minimal 收 low、medium 收 high(此前 minimal 倒挂映 high、medium 原样发出值域外)。
+    expect(levelOf(gemini3, "minimal")).toBe("low");
+    expect(levelOf(gemini3, "medium")).toBe("high");
+    expect(levelOf(gemini3, "max")).toBe("high");
+    // 非 Pro:官方全值域原样。
+    expect(levelOf(gemini35Flash, "minimal")).toBe("minimal");
+    expect(levelOf(gemini35Flash, "medium")).toBe("medium");
+    expect(levelOf(gemini35Flash, "xhigh")).toBe("high");
+    // off 思考不可关:取该型号最少档。
+    expect(levelOf(gemini3, "off")).toBe("low");
+    expect(levelOf(gemini35Flash, "off")).toBe("minimal");
+  });
+
   test("off:flash 关预算,pro 不可关(与原生路径 googleGenerationConfig 一致)", () => {
     expect(reasoningPayloadForProvider(relay, gemini25Flash, "off")).toEqual({
       extra_body: { google: { thinking_config: { include_thoughts: false, thinking_budget: 0 } } },

@@ -10,6 +10,7 @@ import {
   budgetTokensFor,
   deepseekEffortFor,
   effortLowHighMaxFor,
+  gemini3ThinkingLevelFor,
   isArkSeed2Model,
   isKimiK26Model,
   isKimiK27Model,
@@ -466,14 +467,15 @@ export function googleGenerationConfig(modelItem: Model, assistant: Assistant) {
     const thinkingConfig: Record<string, JsonValue> = { includeThoughts: true };
     if (normalized === "off") {
       if (isGemini3) {
-        thinkingConfig.thinkingLevel = "minimal";
+        // Gemini 3 思考不可关：off 取该型号的最少思考档（Pro 无 minimal，表内收 low）。
+        thinkingConfig.thinkingLevel = gemini3ThinkingLevelFor(modelItem.modelId, "minimal");
       } else if (!isGeminiPro) {
         thinkingConfig.thinkingBudget = 0;
         thinkingConfig.includeThoughts = false;
       }
     } else if (normalized !== "auto") {
       if (isGemini3) {
-        thinkingConfig.thinkingLevel = normalized === "low" ? "low" : normalized === "medium" ? "medium" : "high";
+        thinkingConfig.thinkingLevel = gemini3ThinkingLevelFor(modelItem.modelId, normalized);
       } else {
         thinkingConfig.thinkingBudget = budgetTokensFor(normalized);
       }
@@ -1058,14 +1060,15 @@ export function reasoningPayloadForProvider(providerItem: Provider, modelItem: M
     const thinkingConfig: Record<string, any> = { include_thoughts: true };
     if (normalized === "off") {
       if (isGemini3) {
-        thinkingConfig.thinking_level = "minimal";
+        // 同原生路径：off 取该型号最少思考档（档位表单源 request-dialect）。
+        thinkingConfig.thinking_level = gemini3ThinkingLevelFor(modelItem.modelId, "minimal");
       } else if (!isGeminiPro) {
         thinkingConfig.thinking_budget = 0;
         thinkingConfig.include_thoughts = false;
       }
     } else if (normalized !== "auto") {
       if (isGemini3) {
-        thinkingConfig.thinking_level = normalized === "low" ? "low" : normalized === "medium" ? "medium" : "high";
+        thinkingConfig.thinking_level = gemini3ThinkingLevelFor(modelItem.modelId, normalized);
       } else {
         thinkingConfig.thinking_budget = budgetTokensFor(normalized);
       }

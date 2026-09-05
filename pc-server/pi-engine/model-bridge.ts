@@ -254,7 +254,10 @@ function piThinkingOverridesFor(
       };
     }
     // 火山老系(Seed 2 以前)/Moonshot K2.5/K2.6:deepseek format 发 thinking:{type},
-    // 端点不认 reasoning_effort,压制。
+    // 端点不认 reasoning_effort,压制。已知差异:聊天引擎对 K2.6 开思考时额外发
+    // keep:"all"(保留历史思考,安卓 #1586),pi deepseek format 无此旋钮——工作区
+    // K2.6 的历史思考由服务端默认剥离,不报错,多轮推理连贯性小损;上游若增旋钮
+    // 按维护手册跟进。
     return { compat: { thinkingFormat: "deepseek", supportsReasoningEffort: false } };
   }
   if (protocol === "thinking-mode-flag" || protocol === "suppress") {
