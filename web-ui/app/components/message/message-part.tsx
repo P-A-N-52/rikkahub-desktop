@@ -1,108 +1,25 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ReasoningPart, ToolPart, UIMessagePart } from "~/types";
+import type { UIMessagePart } from "~/types";
 import type { AssistantProfile } from "~/types";
 
 import { ChainOfThought } from "./chain-of-thought";
 import { AudioPart } from "./parts/audio-part";
 import { DocumentPart } from "./parts/document-part";
 import { ImagePart } from "./parts/image-part";
-import { ReasoningPart as ReasoningFallbackPart } from "./parts/reasoning-part";
 import { ReasoningStepPart } from "./parts/reasoning-step-part";
 import { TextPart } from "./parts/text-part";
 import { ToolPart as ToolStepPart, PendingToolAttentionCard } from "./parts/tool-part";
-import { isWorkspaceActionTool, WorkspaceActionCard } from "./parts/workspace-tool-part";
+import { WorkspaceActionCard, WorkspaceActionStep } from "./parts/workspace-tool-part";
 import { VideoPart } from "./parts/video-part";
 import { TypingIndicator } from "~/components/ui/typing-indicator";
 import { applyAssistantRegexes } from "~/lib/assistant-regex";
-
-type ThinkingStep =
-  | {
-      type: "reasoning";
-      reasoning: ReasoningPart;
-    }
-  | {
-      type: "tool";
-      tool: ToolPart;
-    };
-
-type MessagePartBlock =
-  | {
-      type: "thinking";
-      steps: ThinkingStep[];
-    }
-  | {
-      type: "content";
-      part: UIMessagePart;
-      index: number;
-    }
-  | {
-      // 任何 pending 状态的工具调用都必须从思考链折叠中抽出，作为独立的
-      // attention 块渲染。否则 ChainOfThought 默认折叠态会把它藏在
-      // "展开 N 个步骤"按钮后面，用户根本意识不到 AI 正在等待审批，
-      // 误以为生成意外中止了。
-      type: "pendingTool";
-      tool: ToolPart;
-      index: number;
-    }
-  | {
-      // 工作区"改变世界"的动作(write/edit/bash,M2-3):从折叠组抽出为顶层动作卡。
-      // 可见性分层(方案 §4.3):read 与思维链同认知层级留折叠;修改动作用户会看,
-      // 必须是消息流一等公民。复用 pendingTool 的抽出机制,不新造流。
-      type: "workspaceAction";
-      tool: ToolPart;
-      index: number;
-    };
-
-function isPendingTool(tool: ToolPart): boolean {
-  return tool.approvalState?.type === "pending";
-}
-
-export function groupMessageParts(parts: UIMessagePart[]): MessagePartBlock[] {
-  const result: MessagePartBlock[] = [];
-  let currentThinkingSteps: ThinkingStep[] = [];
-
-  const flushThinkingSteps = () => {
-    if (currentThinkingSteps.length === 0) return;
-    result.push({ type: "thinking", steps: currentThinkingSteps });
-    currentThinkingSteps = [];
-  };
-
-  parts.forEach((part, index) => {
-    if (part.type === "loading") {
-      flushThinkingSteps();
-      result.push({ type: "content", part, index });
-      return;
-    }
-
-    if (part.type === "reasoning") {
-      currentThinkingSteps.push({ type: "reasoning", reasoning: part });
-      return;
-    }
-
-    if (part.type === "tool") {
-      if (isPendingTool(part)) {
-        flushThinkingSteps();
-        result.push({ type: "pendingTool", tool: part, index });
-        return;
-      }
-      if (isWorkspaceActionTool(part.toolName)) {
-        flushThinkingSteps();
-        result.push({ type: "workspaceAction", tool: part, index });
-        return;
-      }
-      currentThinkingSteps.push({ type: "tool", tool: part });
-      return;
-    }
-
-    flushThinkingSteps();
-    result.push({ type: "content", part, index });
-  });
-
-  flushThinkingSteps();
-  return result;
-}
+// 分组规则(抽屉合并方案,2026-09-05 拍板):连续 reasoning/工具调用合并进一张
+// 思维链大卡;抽出成独立卡的语义唯一=需要用户注意(pending 审批/失败的工作区动作)。
+// 纯函数与块类型定义在 lib/message-grouping.ts(可单测)。
+import { groupMessageParts } from "~/lib/message-grouping";
+import { isWorkspaceActionTool } from "~/lib/workspace-tool-model";
 
 interface MessagePartsProps {
   parts: UIMessagePart[];
@@ -151,10 +68,6 @@ function renderContentPart(
       return <AudioPart url={part.url} />;
     case "document":
       return <DocumentPart url={part.url} fileName={part.fileName} mime={part.mime} />;
-    case "reasoning":
-      return (
-        <ReasoningFallbackPart reasoning={part.reasoning} isFinished={part.finishedAt != null} />
-      );
     case "tool":
       return (
         <div className="text-xs text-muted-foreground">{t("message_parts.tool_step_hint")}</div>
@@ -217,7 +130,9 @@ export const MessageParts = React.memo(
             );
           }
 
-          if (block.type === "workspaceAction") {
+          if (block.type === "failedWorkspaceAction") {
+            // 终局失败的工作区动作:红色状态常驻的顶层动作卡。运行中/成功的动作
+            // 留在下方 thinking 链内(WorkspaceActionStep),失败信号到达才弹出。
             return (
               <WorkspaceActionCard
                 key={`workspace-action-${block.tool.toolCallId || block.index}`}
@@ -253,6 +168,19 @@ export const MessageParts = React.memo(
                   }
 
                   const stepKey = step.tool.toolCallId || `${blockIndex}-${stepIndex}`;
+                  if (isWorkspaceActionTool(step.tool.toolName)) {
+                    // 工作区动作步骤:传消息级 loading(bash 流式中已有输出仍在运行,
+                    // 终局以结构化 exitCode 为准,由步骤内部的 finished 判定)。
+                    return (
+                      <WorkspaceActionStep
+                        key={stepKey}
+                        tool={step.tool}
+                        loading={loading}
+                        isFirst={isFirst}
+                        isLast={isLast}
+                      />
+                    );
+                  }
                   return (
                     <ToolStepPart
                       key={stepKey}

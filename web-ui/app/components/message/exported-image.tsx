@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 
 import Markdown from "~/components/markdown/markdown";
-import { workspaceToolExportLabel, workspaceToolKind } from "~/components/message/parts/workspace-tool-part";
+import { workspaceToolExportLabel } from "~/components/message/parts/workspace-tool-part";
+import { workspaceToolKind } from "~/lib/workspace-tool-model";
 import { AIIcon } from "~/components/ui/ai-icon";
 import { UIAvatar } from "~/components/ui/ui-avatar";
 import { useSettingsStore } from "~/stores";

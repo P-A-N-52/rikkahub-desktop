@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import type { LucideIcon } from "lucide-react";
 import {
   Check,
   ChevronDown,
@@ -20,92 +21,27 @@ import { Button } from "~/components/ui/button";
 import { DiffView, parseDiffStats } from "~/components/workspace/diff-view";
 import { TerminalOutput } from "~/components/workspace/terminal-output";
 import { cn } from "~/lib/utils";
+import {
+  buildWorkspaceActionModel,
+  numField as num,
+  parseArgs,
+  strField as str,
+  workspaceDetails,
+  workspaceToolKind,
+  type WorkspaceActionModel,
+} from "~/lib/workspace-tool-model";
 import type { ToolPart as UIToolPart } from "~/types";
 
-// 工作区工具渲染器(M2-3,方案 §4.3)。可见性分层:
+import { ControlledChainOfThoughtStep } from "../chain-of-thought";
+
+// 工作区工具渲染器(M2-3,方案 §4.3;2026-09-05 抽屉合并修订)。可见性分层:
 // - read(只读侦察)留在思维链折叠组(tool-part.tsx 只借本模块的标题/图标);
-// - write/edit/bash(改变世界的动作)由 message-part.tsx 抽出为顶层动作卡(本模块)。
-// 渲染 100% 由 part 数据驱动(input/output/metadata.workspace),无前端私有状态——
-// 备份互通的两个方向都不降级:PC 存 pi 原样;安卓导入的 workspace_* 四个别名
-// toolName 在此注册,同样原生渲染。
-
-export type WorkspaceToolKind = "read" | "write" | "edit" | "bash";
-
-const KIND_BY_TOOL_NAME: Record<string, WorkspaceToolKind> = {
-  // pi 原名(PC 原生)
-  read: "read",
-  write: "write",
-  edit: "edit",
-  bash: "bash",
-  // 安卓别名(备份导入,§9.1B)
-  workspace_read_file: "read",
-  workspace_write_file: "write",
-  workspace_edit_file: "edit",
-  workspace_shell: "bash",
-};
-
-export function workspaceToolKind(toolName: string): WorkspaceToolKind | null {
-  return KIND_BY_TOOL_NAME[toolName] ?? null;
-}
-
-/** write/edit/bash 是"改变世界"的动作,抽出为顶层动作卡;read 留折叠组。 */
-export function isWorkspaceActionTool(toolName: string): boolean {
-  const kind = workspaceToolKind(toolName);
-  return kind !== null && kind !== "read";
-}
-
-// ===== part 数据抽取(全部防御式:安卓导入的 args 键名可能有别) =====
-
-function parseArgs(input: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(input || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function str(args: Record<string, unknown>, key: string): string | undefined {
-  const value = args[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function num(args: Record<string, unknown>, key: string): number | undefined {
-  const value = args[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** M1 契约:结构化 details 挂首个 text 输出条目的 metadata.workspace.details。 */
-function workspaceDetails(tool: UIToolPart): Record<string, unknown> | null {
-  for (const entry of tool.output) {
-    if (!entry || typeof entry !== "object") continue;
-    const meta = (entry as { metadata?: unknown }).metadata;
-    if (!meta || typeof meta !== "object") continue;
-    const workspace = (meta as Record<string, unknown>).workspace;
-    if (!workspace || typeof workspace !== "object") continue;
-    const details = (workspace as Record<string, unknown>).details;
-    if (details && typeof details === "object") return details as Record<string, unknown>;
-  }
-  return null;
-}
-
-function outputText(tool: UIToolPart): string {
-  return tool.output
-    .filter((entry): entry is { type: "text"; text: string } =>
-      Boolean(entry && typeof entry === "object" && (entry as { type?: unknown }).type === "text"),
-    )
-    .map((entry) => entry.text)
-    .join("\n");
-}
-
-function outputError(tool: UIToolPart): string | null {
-  for (const entry of tool.output) {
-    if (entry && typeof entry === "object" && typeof (entry as { error?: unknown }).error === "string") {
-      return (entry as { error: string }).error;
-    }
-  }
-  return null;
-}
+// - write/edit/bash 运行中/成功:思维链折叠组内的动作步骤(WorkspaceActionStep),
+//   连续调用共享一张大卡,靠滑动窗口收敛纵向空间;
+// - write/edit/bash 终局失败(被拒/错误/非零退出):由 message-part.tsx 抽出为
+//   顶层动作卡(WorkspaceActionCard),红色状态常驻——"抽出"=需要用户注意。
+// 渲染 100% 由 part 数据驱动(input/output/metadata.workspace),无前端私有状态;
+// 纯数据模型(kind 注册表/args/details 抽取/失败判定)在 lib/workspace-tool-model.ts。
 
 /** read 徽标文案:offset/limit 存在时标注读取窗口。 */
 export function readRangeBadge(args: Record<string, unknown>, t: TFunction): string | null {
@@ -162,48 +98,37 @@ export function workspaceToolExportLabel(tool: UIToolPart, t: TFunction): string
   return stats ? `${base} (+${stats.added} -${stats.removed})` : base;
 }
 
-// ===== 顶层动作卡 =====
+// ===== 动作卡/动作步骤共享的视图模型(同一动作两种容器,派生值必须同源) =====
 
-interface CardModel {
-  kind: WorkspaceToolKind;
-  args: Record<string, unknown>;
-  details: Record<string, unknown> | null;
-  text: string;
-  error: string | null;
-  denied: boolean;
-  deniedReason: string;
-  /** 是否已有终局结果(bash 以结构化 exitCode 到位为准,其余以任何输出到位为准)。 */
-  finished: boolean;
-  exitCode: number | null;
+interface WorkspaceActionView {
+  t: TFunction;
+  model: WorkspaceActionModel;
+  running: boolean;
+  expanded: boolean;
+  setUserExpanded: (next: boolean) => void;
+  drawerOpen: boolean;
+  setDrawerOpen: (open: boolean) => void;
+  path: string;
+  command: string;
+  diff: string;
+  patch: string;
+  stats: ReturnType<typeof parseDiffStats> | null;
+  writtenBytes: number | null;
+  title: string;
+  TitleIcon: LucideIcon;
 }
 
-function buildCardModel(tool: UIToolPart): CardModel {
-  const kind = workspaceToolKind(tool.toolName) ?? "bash";
-  const args = parseArgs(tool.input);
-  const details = workspaceDetails(tool);
-  const error = outputError(tool);
-  const denied = tool.approvalState.type === "denied";
-  const deniedReason = tool.approvalState.type === "denied" ? (tool.approvalState.reason ?? "") : "";
-  const exitCode = details && typeof details.exitCode === "number" ? details.exitCode : null;
-  const finished =
-    denied || error !== null || (kind === "bash" ? details !== null && "exitCode" in details : tool.output.length > 0);
-  return { kind, args, details, text: outputText(tool), error, denied, deniedReason, finished, exitCode };
-}
-
-const WRITE_PREVIEW_LINES = 12;
-
-export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loading?: boolean }) {
+function useWorkspaceActionView(tool: UIToolPart, loading?: boolean): WorkspaceActionView {
   const { t } = useTranslation("message");
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
-  const model = React.useMemo(() => buildCardModel(tool), [tool]);
+  const model = React.useMemo(() => buildWorkspaceActionModel(tool), [tool]);
   const running = Boolean(loading) && !model.finished;
-  // 自动折叠(2.0.0 内测,与思维链一致):执行中的卡保持展开,终局后自动收起,压住长会话
+  // 自动折叠(2.0.0 内测,与思维链一致):执行中保持展开,终局后自动收起,压住长会话
   // 纵向空间;历史消息挂载时 running=false 直接收起。用户点过 chevron 后(userExpanded
-  // 非 null)以用户选择为准,不再自动干预。头部常驻状态图标/exit 徽标,失败收起也可见。
+  // 非 null)以用户选择为准,不再自动干预。
   const [userExpanded, setUserExpanded] = React.useState<boolean | null>(null);
   const expanded = userExpanded ?? running;
-  const failed = model.error !== null || model.denied || (model.exitCode !== null && model.exitCode !== 0);
 
   const path = str(model.args, "path") ?? "";
   const command = str(model.args, "command") ?? "";
@@ -231,9 +156,148 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
           : t("workspace_tool.edit_title");
   const TitleIcon = model.kind === "bash" ? SquareTerminal : model.kind === "write" ? FilePlus2 : FilePen;
 
+  return {
+    t,
+    model,
+    running,
+    expanded,
+    setUserExpanded,
+    drawerOpen,
+    setDrawerOpen,
+    path,
+    command,
+    diff,
+    patch,
+    stats,
+    writtenBytes,
+    title,
+    TitleIcon,
+  };
+}
+
+/** 展开区正文(卡/步骤共用):denied/error 分支仅失败卡可达(失败即抽出,不进链)。 */
+function WorkspaceActionBody({ view }: { view: WorkspaceActionView }) {
+  const { t, model, running, diff } = view;
+  if (model.denied) {
+    return (
+      <div className="px-3 py-2 text-xs text-destructive">
+        {model.deniedReason
+          ? t("tool_part.denied_with_reason", { reason: model.deniedReason })
+          : t("tool_part.denied")}
+      </div>
+    );
+  }
+  if (model.error !== null) {
+    return (
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-xs text-destructive">
+        {model.error}
+      </pre>
+    );
+  }
+  if (model.kind === "edit") return <DiffView diff={diff} />;
+  if (model.kind === "bash") {
+    return model.text || running ? (
+      <TerminalOutput text={model.text} running={running} />
+    ) : (
+      <div className="px-3 py-2 text-xs text-muted-foreground">{t("workspace_tool.no_output")}</div>
+    );
+  }
+  return <WriteBodyPreview content={str(model.args, "content") ?? ""} t={t} />;
+}
+
+/** 全量详情抽屉(卡/步骤共用):参数/DiffView/写入正文/结果/错误/patch。 */
+function WorkspaceActionDrawer({ view, toolName }: { view: WorkspaceActionView; toolName: string }) {
+  const { t, model, drawerOpen, setDrawerOpen, path, command, diff, patch, title } = view;
+  return (
+    <DetailDrawer
+      open={drawerOpen}
+      onOpenChange={setDrawerOpen}
+      title={model.kind === "bash" ? `$ ${command}` : title}
+      description={t("tool_part.tool_name_label", { toolName })}
+    >
+      <div className="space-y-4">
+        {model.kind !== "bash" && path ? (
+          <div className="break-all font-mono text-xs text-muted-foreground">{path}</div>
+        ) : null}
+        {model.kind === "edit" && diff ? <DiffView diff={diff} className="rounded-md border" /> : null}
+        {model.kind === "write" ? (
+          <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
+            {str(model.args, "content") ?? ""}
+          </pre>
+        ) : null}
+        {model.text ? (
+          <div>
+            <div className="mb-1 text-xs text-muted-foreground">{t("tool_part.result")}</div>
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
+              {model.text}
+            </pre>
+          </div>
+        ) : null}
+        {model.error !== null ? (
+          <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border border-destructive/30 bg-destructive/5 p-3 font-mono text-xs text-destructive">
+            {model.error}
+          </pre>
+        ) : null}
+        {patch ? (
+          <div>
+            <div className="mb-1 text-xs text-muted-foreground">{t("workspace_tool.patch")}</div>
+            <pre className="max-h-64 overflow-auto whitespace-pre rounded-md border bg-muted/20 p-3 font-mono text-xs">
+              {patch}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    </DetailDrawer>
+  );
+}
+
+/** 详情入口(卡/步骤头部共用):停止冒泡,不触发行开合。 */
+function OpenDetailsButton({ view }: { view: WorkspaceActionView }) {
+  return (
+    <span
+      role="button"
+      aria-label={view.t("workspace_tool.open_details")}
+      onClick={(event) => {
+        event.stopPropagation();
+        view.setDrawerOpen(true);
+      }}
+      className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors duration-150 hover:bg-muted hover:text-foreground"
+    >
+      <Maximize2 className="size-3" />
+    </span>
+  );
+}
+
+function ActionStatBadges({ view }: { view: WorkspaceActionView }) {
+  const { t, stats, writtenBytes } = view;
+  return (
+    <>
+      {stats ? (
+        <span className="shrink-0 font-mono text-xs">
+          <span className="text-[oklch(0.5_0.12_150)] dark:text-[oklch(0.75_0.12_150)]">+{stats.added}</span>{" "}
+          <span className="text-[oklch(0.5_0.14_25)] dark:text-[oklch(0.75_0.14_25)]">-{stats.removed}</span>
+        </span>
+      ) : null}
+      {writtenBytes !== null ? (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
+          {t("workspace_tool.bytes", { bytes: writtenBytes })}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+// ===== 顶层动作卡(抽屉合并修订后仅终局失败的动作到达;红色状态常驻,收起也可见) =====
+
+const WRITE_PREVIEW_LINES = 12;
+
+export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loading?: boolean }) {
+  const view = useWorkspaceActionView(tool, loading);
+  const { t, model, running, expanded, setUserExpanded, title, TitleIcon } = view;
+
   const statusIcon = running ? (
     <Loader2 className="size-4 animate-spin text-primary" />
-  ) : failed ? (
+  ) : model.failed ? (
     <CircleX className="size-4 text-[oklch(0.55_0.18_25)] dark:text-[oklch(0.7_0.16_25)]" />
   ) : (
     <CircleCheck className="size-4 text-[oklch(0.55_0.14_150)] dark:text-[oklch(0.72_0.13_150)]" />
@@ -261,17 +325,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
               title
             )}
           </span>
-          {stats ? (
-            <span className="shrink-0 font-mono text-xs">
-              <span className="text-[oklch(0.5_0.12_150)] dark:text-[oklch(0.75_0.12_150)]">+{stats.added}</span>{" "}
-              <span className="text-[oklch(0.5_0.14_25)] dark:text-[oklch(0.75_0.14_25)]">-{stats.removed}</span>
-            </span>
-          ) : null}
-          {writtenBytes !== null ? (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
-              {t("workspace_tool.bytes", { bytes: writtenBytes })}
-            </span>
-          ) : null}
+          <ActionStatBadges view={view} />
           {model.exitCode !== null ? (
             <span
               className={cn(
@@ -284,17 +338,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
               exit {model.exitCode}
             </span>
           ) : null}
-          <span
-            role="button"
-            aria-label={t("workspace_tool.open_details")}
-            onClick={(event) => {
-              event.stopPropagation();
-              setDrawerOpen(true);
-            }}
-            className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors duration-150 hover:bg-muted hover:text-foreground"
-          >
-            <Maximize2 className="size-3" />
-          </span>
+          <OpenDetailsButton view={view} />
           <ChevronDown
             className={cn(
               "size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200",
@@ -305,70 +349,82 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
 
         {expanded ? (
           <div className="border-t border-border/50">
-            {model.denied ? (
-              <div className="px-3 py-2 text-xs text-destructive">
-                {model.deniedReason
-                  ? t("tool_part.denied_with_reason", { reason: model.deniedReason })
-                  : t("tool_part.denied")}
-              </div>
-            ) : model.error !== null ? (
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-xs text-destructive">
-                {model.error}
-              </pre>
-            ) : model.kind === "edit" ? (
-              <DiffView diff={diff} />
-            ) : model.kind === "bash" ? (
-              model.text || running ? (
-                <TerminalOutput text={model.text} running={running} />
-              ) : (
-                <div className="px-3 py-2 text-xs text-muted-foreground">{t("workspace_tool.no_output")}</div>
-              )
-            ) : (
-              <WriteBodyPreview content={str(model.args, "content") ?? ""} t={t} />
-            )}
+            <WorkspaceActionBody view={view} />
           </div>
         ) : null}
       </div>
 
-      <DetailDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        title={model.kind === "bash" ? `$ ${command}` : title}
-        description={t("tool_part.tool_name_label", { toolName: tool.toolName })}
+      <WorkspaceActionDrawer view={view} toolName={tool.toolName} />
+    </>
+  );
+}
+
+// ===== 思维链折叠组内的动作步骤(运行中/成功;失败由分组层抽出成顶层卡) =====
+
+/** 与动作卡同一视图模型:行=类型图标+标题+diff/bytes 徽标+详情入口;行点击开合
+ *  内容区(edit=DiffView/bash=实时终端/write=正文预览)。自动开合与动作卡一致:
+ *  运行中展开(链尾实时可见),终局自动收起,用户点过以用户选择为准。 */
+export function WorkspaceActionStep({
+  tool,
+  loading,
+  isFirst,
+  isLast,
+}: {
+  tool: UIToolPart;
+  loading?: boolean;
+  isFirst?: boolean;
+  isLast?: boolean;
+}) {
+  const view = useWorkspaceActionView(tool, loading);
+  const { t, model, running, expanded, setUserExpanded, title, TitleIcon } = view;
+
+  const hasBody =
+    model.kind === "bash"
+      ? Boolean(model.text) || running
+      : model.kind === "edit"
+        ? Boolean(view.diff)
+        : Boolean(str(model.args, "content"));
+
+  return (
+    <>
+      <ControlledChainOfThoughtStep
+        expanded={expanded}
+        onExpandedChange={setUserExpanded}
+        isFirst={isFirst}
+        isLast={isLast}
+        active={running}
+        icon={
+          running ? (
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          ) : (
+            <TitleIcon className="h-4 w-4 text-primary" />
+          )
+        }
+        label={
+          model.kind === "bash" ? (
+            <span className="text-foreground line-clamp-2 text-sm font-medium">
+              {t("workspace_tool.bash_prefix")}
+              <span className="font-mono text-[0.8125rem] font-normal">{title}</span>
+            </span>
+          ) : (
+            <span className="text-foreground line-clamp-2 text-sm font-medium">{title}</span>
+          )
+        }
+        extra={
+          <span className="flex shrink-0 items-center gap-2">
+            <ActionStatBadges view={view} />
+            <OpenDetailsButton view={view} />
+          </span>
+        }
       >
-        <div className="space-y-4">
-          {model.kind !== "bash" && path ? (
-            <div className="break-all font-mono text-xs text-muted-foreground">{path}</div>
-          ) : null}
-          {model.kind === "edit" && diff ? <DiffView diff={diff} className="rounded-md border" /> : null}
-          {model.kind === "write" ? (
-            <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
-              {str(model.args, "content") ?? ""}
-            </pre>
-          ) : null}
-          {model.text ? (
-            <div>
-              <div className="mb-1 text-xs text-muted-foreground">{t("tool_part.result")}</div>
-              <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
-                {model.text}
-              </pre>
-            </div>
-          ) : null}
-          {model.error !== null ? (
-            <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border border-destructive/30 bg-destructive/5 p-3 font-mono text-xs text-destructive">
-              {model.error}
-            </pre>
-          ) : null}
-          {patch ? (
-            <div>
-              <div className="mb-1 text-xs text-muted-foreground">{t("workspace_tool.patch")}</div>
-              <pre className="max-h-64 overflow-auto whitespace-pre rounded-md border bg-muted/20 p-3 font-mono text-xs">
-                {patch}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      </DetailDrawer>
+        {hasBody ? (
+          <div className="overflow-hidden rounded-lg border border-border/50 bg-card">
+            <WorkspaceActionBody view={view} />
+          </div>
+        ) : null}
+      </ControlledChainOfThoughtStep>
+
+      <WorkspaceActionDrawer view={view} toolName={tool.toolName} />
     </>
   );
 }

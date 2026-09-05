@@ -32,12 +32,13 @@ import { resolveFileUrl } from "~/lib/files";
 import { cn } from "~/lib/utils";
 import type { TextPart as UITextPart, ToolPart as UIToolPart } from "~/types";
 
+import { workspaceToolKind } from "~/lib/workspace-tool-model";
+
 import { ControlledChainOfThoughtStep } from "../chain-of-thought";
 import {
   WorkspaceApprovalCard,
   workspaceReadTitle,
   workspaceReconTitle,
-  workspaceToolKind,
 } from "./workspace-tool-part";
 import { AudioPart as AudioPartRenderer } from "./audio-part";
 import { ImagePart as ImagePartRenderer } from "./image-part";
