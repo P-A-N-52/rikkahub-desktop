@@ -1223,12 +1223,10 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* 语义警示/成功(域13-5):单点颜色 + 派生浅底,组件用 text-warning / bg-success-bg 等。
+  /* 语义警示/成功(域13-5):单点颜色 + 派生浅底,组件用 text-warning / bg-warning/10 等。
      明暗主题各自的 --ds-warning/--ds-success 在 :root/.dark 里定义,此处仅做映射。 */
   --color-warning: var(--ds-warning);
-  --color-warning-bg: var(--ds-warning-bg);
   --color-success: var(--ds-success);
-  --color-success-bg: var(--ds-success-bg);
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
@@ -1238,9 +1236,10 @@
      (text-xs/sm/base 已被全仓 700+ 处用于默认 12/14/16px,覆写会造成视觉回归)。
      micro=10px(角标/序号), mini=11px(辅助说明/时间戳), compact=13px(紧凑正文)。
      12px 用 Tailwind 预设 text-xs;0.7rem(11.2px)孤例就近并入 mini。
-     不带 --line-height:收编前的任意值 text-[Nrem] 行高是 normal(~1.2×),这些档位多用于
-     标签页/选择器等固定高紧凑容器;若强行带固定行高(如 compact 带 1.25rem)会把行盒撑高、
-     文字视觉发胀——4D 内测实测标签页/选择器因此「字体变大」。保持 normal 与替换前逐像素一致。 */
+     刻意不带 --line-height:被收编的 text-[Nrem] 只设字号、行高继承父级,补 companion 会
+     改变行盒高度(compact 带 1.25rem 即把 h-7 标签的行盒顶满),不再是等值替换。
+     ⚠ 此处每新增一档,必须同步登记进 lib/utils.ts 的 cn(),否则 tailwind-merge 会把它
+     误判成文字颜色而整类删除(见该处注释);app/tests/cn-theme-scale.test.ts 锁死这一点。 */
   --text-micro: 0.625rem;
   --text-mini: 0.6875rem;
   --text-compact: 0.8125rem;
