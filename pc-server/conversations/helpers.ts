@@ -171,7 +171,14 @@ export function ensureUsage(msg: Message, conversation?: Conversation) {
   // 输出统计恒 0。改为按字段兜底:真实值保留,缺失侧(0 值)单独估算补齐。
   // 全 0 载荷(流式骨架每轮下沉 generationMs 的纯时长对象)自然落双侧估算,行为不变。
   const promptReal = usable && Number(existing.promptTokens ?? 0) > 0;
-  const completionReal = usable && Number(existing.completionTokens ?? 0) > 0;
+  // completion 判 >1 而非 >0:anthropic 流式 message_start.usage.output_tokens 是起始
+  // 计数(恒 1),最终值只来自 message_delta。Kimi coding 等兼容端点 message_delta 不带
+  // usage,起始值 1 残留下沉——对话模式已在 mergeClaudeUsage 源头剥离(output 只认
+  // message_delta),但工作区走 pi vendor 的 anthropic 客户端(message_start 照吸,
+  // vendor 只跟上游不可改),残留的 1 会挡住估算兜底 → TPS≈0。此处按语义收紧:1 是
+  // 协议起始计数的特征值,不是可信回报;真实回答恰为 1 token 的场景落估算后显示依旧
+  // ≈1(标 estimated),零伤害。
+  const completionReal = usable && Number(existing.completionTokens ?? 0) > 1;
   if (promptReal && completionReal) return;
   // 思考模型的输出=正文+思维链,两段都计(旧 || 短路曾把思维链整段丢掉,TPS 低估一个数量级)。
   // 空段跳过:estimateTokens 有 max(1,·) 下限,空串也计 1,相加会虚增。

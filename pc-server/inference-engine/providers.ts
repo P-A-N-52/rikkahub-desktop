@@ -314,7 +314,12 @@ export async function readClaudeStreamingRound(
     if (!dataJson || typeof dataJson !== "object") return;
     if (eventName === "message_start") {
       const u = dataJson.message?.usage;
-      if (u) setUsage(u);
+      // anthropic 语义:message_start.usage.output_tokens 是起始计数(常为 1),最终值
+      // 只来自 message_delta。Kimi coding 等兼容端点 message_delta 不带 usage,若把
+      // 起始值当真:completionTokens 恒 1,ensureUsage 字段级估算兜底被非零值挡住,
+      // TPS 显示≈0(内测两连反馈的最终根因)。message_start 只吸收 input 侧字段;
+      // output 侧留给 message_delta——官方端点正常覆盖,兼容端点落估算兜底。
+      if (u) setUsage({ ...u, output_tokens: 0 });
       return;
     }
     if (eventName === "message_delta") {

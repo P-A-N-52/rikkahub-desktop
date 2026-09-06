@@ -229,3 +229,51 @@ describe("streamClaudeChatWithTools 非流式模式", () => {
     expect(events.some((e) => e.kind === "text_delta" && e.text === "完成")).toBe(true);
   });
 });
+
+// 内测两连反馈(Kimi TPS≈0)的最终根因回归:anthropic 语义里 message_start.usage.
+// output_tokens 是起始计数(常为 1),最终值只来自 message_delta。Kimi coding 等兼容
+// 端点 message_delta 不带 usage——若把起始值当真,completionTokens 恒 1,ensureUsage
+// 字段级估算兜底被非零值挡住,TPS 显示≈0。
+describe("readClaudeStreamingRound:message_start 不吸收 output_tokens", () => {
+  async function runRound(events: Array<[string, unknown]>) {
+    const { readClaudeStreamingRound } = await import("./providers");
+    const hooks = {
+      conversation: { id: "c1", title: "t" },
+      node: { id: "n1" },
+      message: { id: "m1", role: "ASSISTANT", parts: [] as unknown[], annotations: [], createdAt: 0, finishedAt: null },
+      sink: () => {},
+    } as never;
+    const response = new Response(sse(events), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+    return readClaudeStreamingRound(response, hooks, assistant);
+  }
+
+  test("兼容端点(message_delta 无 usage):completion 保持 0,交给估算兜底;input 侧照常吸收", async () => {
+    const round = await runRound([
+      ["message_start", { message: { usage: { input_tokens: 100, cache_read_input_tokens: 20, output_tokens: 1 } } }],
+      ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { index: 0, delta: { type: "text_delta", text: "回答正文" } }],
+      ["content_block_stop", { index: 0 }],
+      ["message_delta", { delta: { stop_reason: "end_turn" } }],
+      ["message_stop", {}],
+    ]);
+    const usage = round.usage as Record<string, number>;
+    expect(usage.completionTokens).toBe(0);
+    expect(usage.promptTokens).toBe(120);
+    expect(usage.cachedTokens).toBe(20);
+  });
+
+  test("官方端点回归:message_delta 的最终 output_tokens 正常覆盖", async () => {
+    const round = await runRound([
+      ["message_start", { message: { usage: { input_tokens: 10, output_tokens: 1 } } }],
+      ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { index: 0, delta: { type: "text_delta", text: "hi" } }],
+      ["content_block_stop", { index: 0 }],
+      ["message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 520 } }],
+      ["message_stop", {}],
+    ]);
+    expect((round.usage as Record<string, number>).completionTokens).toBe(520);
+  });
+});
