@@ -165,23 +165,31 @@ export function estimatePromptTokensForConversation(conversation: Conversation) 
 export function ensureUsage(msg: Message, conversation?: Conversation) {
   const existing = msg.usage as Record<string, unknown> | null | undefined;
   const usable = existing && typeof existing === "object" && !Array.isArray(existing);
-  // 判定"实质 usage"看 token 是否非零:流式骨架每轮下沉 generationMs 时会发全 0
-  // token 的载荷(厂商未回报 usage 的轮),纯时长对象不能挡住估算兜底,否则输出
-  // token 恒显 0。上游真回报全 0 的边缘场景同样落估算(estimated 标记,统计页照旧排除)。
-  const hasRealTokens =
-    usable &&
-    (Number(existing.promptTokens ?? 0) > 0 || Number(existing.completionTokens ?? 0) > 0 || Number(existing.totalTokens ?? 0) > 0);
-  if (hasRealTokens) return;
-  // 内测反馈(Kimi 思考模型 TPS 异常小):旧写法 text || reasoning 是短路——正文非空时
-  // 思维链一个 token 都不计,思考型模型(思维链几千 token+正文几百)的输出被低估一个
-  // 数量级,速度=被低估的 token/真实时长,显示值失真。输出=正文+思维链,两段都计。
-  const completionTokens = estimateTokens(textFromParts(msg.parts)) + estimateTokens(reasoningFromParts(msg.parts));
-  const promptTokens = conversation ? estimatePromptTokensForConversation(conversation) : 0;
+  // 字段级兜底(内测实锤,Kimi anthropic 兼容端点):message_start 只回 input_tokens,
+  // output_tokens 恒 0 且 message_delta 不带 usage——上游只回报一半。旧判定"任一字段
+  // 非零就全信上游"被 promptTokens 挡住,completionTokens 恒 0:TPS 行消失/失真、
+  // 输出统计恒 0。改为按字段兜底:真实值保留,缺失侧(0 值)单独估算补齐。
+  // 全 0 载荷(流式骨架每轮下沉 generationMs 的纯时长对象)自然落双侧估算,行为不变。
+  const promptReal = usable && Number(existing.promptTokens ?? 0) > 0;
+  const completionReal = usable && Number(existing.completionTokens ?? 0) > 0;
+  if (promptReal && completionReal) return;
+  // 思考模型的输出=正文+思维链,两段都计(旧 || 短路曾把思维链整段丢掉,TPS 低估一个数量级)。
+  // 空段跳过:estimateTokens 有 max(1,·) 下限,空串也计 1,相加会虚增。
+  const visibleText = textFromParts(msg.parts);
+  const reasoningText = reasoningFromParts(msg.parts);
+  const estimatedCompletion =
+    (visibleText ? estimateTokens(visibleText) : 0) + (reasoningText ? estimateTokens(reasoningText) : 0);
+  const promptTokens = promptReal
+    ? Number(existing.promptTokens)
+    : conversation ? estimatePromptTokensForConversation(conversation) : 0;
+  const completionTokens = completionReal ? Number(existing.completionTokens) : estimatedCompletion;
   msg.usage = {
     promptTokens,
     completionTokens,
     totalTokens: promptTokens + completionTokens,
-    cachedTokens: 0,
+    // 上游回报过的缓存命中数是真实值,保留(Kimi 场景 cache_read 正常回报)。
+    cachedTokens: usable ? Number(existing.cachedTokens ?? 0) : 0,
+    // 只要有估算成分就标 estimated(统计页照旧排除),不冒充全真实。
     estimated: true,
     // 估算只兜 token;骨架已累计的纯生成耗时是真实测量值,保留(速度=估算token/真实时长)。
     ...(usable && Number(existing.generationMs ?? 0) > 0 ? { generationMs: Number(existing.generationMs) } : {}),

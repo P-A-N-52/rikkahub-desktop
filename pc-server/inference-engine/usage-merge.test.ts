@@ -100,6 +100,25 @@ describe("ensureUsage 估算兜底与纯时长载荷的交互", () => {
     expect((msg.usage as Record<string, unknown>).estimated).toBeUndefined();
   });
 
+  test("字段级兜底:上游只回 input(Kimi anthropic 端点 output_tokens 恒 0) → prompt 保留真实值,completion 估算补齐", async () => {
+    // 内测实锤:api.kimi.com/coding anthropic 兼容端点 message_start 只回 input_tokens,
+    // output_tokens 恒 0 且 message_delta 不带 usage。旧判定"任一非零就全信"被 prompt
+    // 挡住 → completion 恒 0,TPS 行消失/失真。
+    const { ensureUsage } = await import("../conversations/helpers");
+    const { estimateTokens } = await import("../foundation/utils");
+    const text = "秋天的清晨,雾气还未散尽。".repeat(30);
+    const msg = message("ASSISTANT", [{ type: "text", text }]);
+    msg.usage = { promptTokens: 106, completionTokens: 0, totalTokens: 106, cachedTokens: 3, generationMs: 12800 };
+    ensureUsage(msg);
+    const usage = msg.usage as Record<string, unknown>;
+    expect(usage.promptTokens).toBe(106); // 真实值保留
+    expect(Number(usage.completionTokens)).toBe(estimateTokens(text)); // 缺失侧估算补齐
+    expect(usage.cachedTokens).toBe(3); // 上游缓存命中保留
+    expect(usage.generationMs).toBe(12800); // 真实耗时保留
+    expect(usage.estimated).toBe(true); // 含估算成分,统计页照旧排除
+    expect(Number(usage.totalTokens)).toBe(106 + estimateTokens(text));
+  });
+
   test("思考模型估算:正文与思维链都计入输出(内测反馈 Kimi TPS 异常小的回归)", async () => {
     // 旧写法 estimateTokens(text || reasoning) 是短路——正文非空时思维链一个 token
     // 不计,思考型模型(思维链几千 token+正文几百)的输出被低估一个数量级。
