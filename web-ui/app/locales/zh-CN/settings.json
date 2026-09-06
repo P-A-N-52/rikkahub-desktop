@@ -76,6 +76,9 @@
     "save_failed": "保存失败",
     "autosaving": "正在自动保存...",
     "autosaved": "已自动保存",
+    "autosave_failed": "自动保存失败",
+    "autosave_failed_named": "自动保存{{name}}失败",
+    "autosave_failed_retry": "保存失败,点击重试",
     "delete": "删除",
     "hide_key": "隐藏 API Key",
     "show_key": "显示 API Key"

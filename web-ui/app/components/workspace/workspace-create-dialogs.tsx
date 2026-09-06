@@ -164,7 +164,7 @@ export function WorkspaceTrustDialog({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-5 text-amber-500" />
+            <ShieldAlert className="size-5 text-warning" />
             {t("workspace.trust.title")}
           </DialogTitle>
           <DialogDescription>{t("workspace.trust.description")}</DialogDescription>

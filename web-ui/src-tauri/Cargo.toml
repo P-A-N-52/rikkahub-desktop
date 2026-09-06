@@ -23,6 +23,8 @@ tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
 # 专题8:窗口尺寸/位置/最大化状态的记忆(官方插件,自动多屏/DPI 处理)。
 tauri-plugin-window-state = "2"
+# 域4-1(专题-交互审查 2A):审批等待桌面通知——AI 等审批而窗口失焦时提醒用户回来决策。
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Lightweight locale detection (~3 KB) — used to render the tray menu in the

@@ -247,7 +247,7 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
                 )}
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                 {entry.type === "file" ? (
-                  <span className="shrink-0 text-[0.625rem] text-muted-foreground/70">{formatSize(entry.size)}</span>
+                  <span className="shrink-0 text-micro text-muted-foreground/70">{formatSize(entry.size)}</span>
                 ) : null}
               </button>
             </ContextMenuTrigger>
@@ -282,7 +282,7 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
             <ArrowLeft className="size-4" />
           </Button>
           <span className="min-w-0 flex-1 truncate font-mono text-xs" title={preview.path}>{preview.path}</span>
-          {preview.data ? <span className="shrink-0 text-[0.625rem] text-muted-foreground">{formatSize(preview.data.size)}</span> : null}
+          {preview.data ? <span className="shrink-0 text-micro text-muted-foreground">{formatSize(preview.data.size)}</span> : null}
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {preview.data === null ? (
@@ -294,7 +294,7 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
           ) : preview.data.kind === "text" ? (
             <>
               {preview.data.truncated ? (
-                <div className="border-b bg-amber-500/10 px-3 py-1.5 text-amber-600 text-xs dark:text-amber-400">
+                <div className="border-b bg-warning/10 px-3 py-1.5 text-warning text-xs">
                   {t("workbench.files.preview_truncated")}
                 </div>
               ) : null}
@@ -313,7 +313,7 @@ export function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-muted-foreground" title={workspace.root}>
+        <span className="min-w-0 flex-1 truncate font-mono text-mini text-muted-foreground" title={workspace.root}>
           {workspace.root}
         </span>
         <Button

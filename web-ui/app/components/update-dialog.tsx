@@ -193,9 +193,9 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
           </div>
         ) : null}
         {info.containerized ? (
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+          <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning">
             {t("update.containerized_prefix")}
-            <code className="mx-0.5 rounded bg-amber-500/10 px-1 py-0.5 font-mono">
+            <code className="mx-0.5 rounded bg-warning/10 px-1 py-0.5 font-mono">
               docker pull
             </code>
             {t("update.containerized_suffix")}
@@ -226,7 +226,7 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
           </div>
         ) : null}
         {installerPath ? (
-          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+          <div className="rounded-md border border-success/30 bg-success/5 p-3 text-xs text-success">
             {info.platform === "linux" ? (
               <>{t("update.linux_ready")}</>
             ) : (

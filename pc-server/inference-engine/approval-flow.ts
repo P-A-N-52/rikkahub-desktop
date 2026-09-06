@@ -15,12 +15,16 @@
 import type { ToolApprovalState } from "../foundation/types";
 import type { GenerationEventSink } from "./events";
 import { waitForToolApproval } from "./approval-gate";
+import { awaitingApproval } from "../conversations/generation-state";
 
 export interface ApprovalFlowContext {
   conversationId: string;
   toolCallId: string;
   sink: GenerationEventSink;
   signal?: AbortSignal;
+  /** 域4-1:通知/状态摘要用的工具名与审批对象摘要(命令/路径,截断后)。 */
+  toolName?: string;
+  summary?: string;
 }
 
 /** 走完审批生命周期。approval 为非 pending(auto 等)时立即返回 false(免审执行);
@@ -30,10 +34,32 @@ export interface ApprovalFlowContext {
 export async function gateToolApproval(approval: ToolApprovalState, ctx: ApprovalFlowContext): Promise<boolean> {
   if (approval.type !== "pending") return false;
   ctx.sink({ kind: "tool_approval_updated", toolCallId: ctx.toolCallId, approvalState: approval });
+  // 域4-1:等待期间注册会话级"等待审批"态——SSE 重连快照据此恢复琥珀态点,桌面
+  // 通知据此知道"哪个会话在等用户"。engine_status 帧由协调器 sink 直通 SSE 状态条;
+  // 注册表是跨重连的权威记录(engine-status 帧瞬态,重连即丢)。决定/中止/兜底任一
+  // 路径离开等待都必须注销,绝不残留"假等待"。
+  awaitingApproval.set(ctx.conversationId, {
+    startedAt: Date.now(),
+    ...(ctx.toolName ? { toolName: ctx.toolName } : {}),
+    ...(ctx.summary ? { summary: ctx.summary } : {}),
+  });
+  ctx.sink({
+    kind: "engine_status",
+    status: {
+      busy: true,
+      phase: "awaiting_approval",
+      startedAt: Date.now(),
+      toolCallId: ctx.toolCallId,
+      ...(ctx.toolName ? { toolName: ctx.toolName } : {}),
+      ...(ctx.summary ? { summary: ctx.summary } : {}),
+    },
+  });
   let decision: { approved: boolean; reason?: string };
   try {
     decision = await waitForToolApproval(ctx.conversationId, ctx.toolCallId, ctx.signal);
   } catch (err) {
+    awaitingApproval.delete(ctx.conversationId);
+    ctx.sink({ kind: "engine_status", status: { busy: false } });
     ctx.sink({
       kind: "tool_approval_updated",
       toolCallId: ctx.toolCallId,
@@ -41,6 +67,8 @@ export async function gateToolApproval(approval: ToolApprovalState, ctx: Approva
     });
     throw err;
   }
+  awaitingApproval.delete(ctx.conversationId);
+  ctx.sink({ kind: "engine_status", status: { busy: false } });
   if (!decision.approved) {
     ctx.sink({
       kind: "tool_approval_updated",

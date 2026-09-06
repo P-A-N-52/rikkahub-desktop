@@ -1415,9 +1415,10 @@ export async function fetchOpenAiAuxiliaryStream(
   body: Record<string, any>,
   providerItem: Provider,
   onDelta: (text: string) => void,
+  signal?: AbortSignal,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS, signal });
   let text = "";
   if (response.ok) {
     text = await readOpenAiStream(response, (delta) => {
@@ -1453,9 +1454,10 @@ export async function fetchClaudeAuxiliaryStream(
   body: Record<string, any>,
   providerItem: Provider,
   onDelta: (text: string) => void,
+  signal?: AbortSignal,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS, signal });
   if (!response.ok) {
     const text = await response.text();
     addLog({
@@ -1558,9 +1560,10 @@ export async function fetchGoogleAuxiliaryStream(
   body: JsonValue | object,
   providerItem: Provider,
   onDelta: (text: string) => void,
+  signal?: AbortSignal,
 ) {
   const started = Date.now();
-  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS });
+  const response = await fetchWithTimeout(url, { method: "POST", headers: { ...headers, Accept: "text/event-stream" }, body: JSON.stringify(body), timeoutMs: AUX_STREAM_TIMEOUT_MS, signal });
   const rawText = await response.text();
   addLog({
     providerId: providerItem.id,

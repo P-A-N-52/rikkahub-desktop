@@ -76,6 +76,7 @@
       "start": "开始压缩",
       "success": "对话历史已压缩",
       "workspace_success": "引擎工作记忆已压缩",
+      "aborted": "已中止压缩，上下文未受影响",
       "failed": "压缩失败"
     },
     "engine_status": {
@@ -86,6 +87,13 @@
       "elapsed_seconds": "已处理 {{seconds}}秒",
       "elapsed_minutes": "已处理 {{minutes}}分{{seconds}}秒",
       "interrupt": "中止 (Esc)"
+    },
+    "awaiting_approval": {
+      "status": "等待审批",
+      "elapsed_seconds": "已等待 {{seconds}}秒",
+      "elapsed_minutes": "已等待 {{minutes}}分{{seconds}}秒",
+      "notification_title": "AI 正在等待你的审批",
+      "notification_body": "「{{summary}}」等待你审批"
     },
     "translate": {
       "dialog_title": "选择翻译语言",

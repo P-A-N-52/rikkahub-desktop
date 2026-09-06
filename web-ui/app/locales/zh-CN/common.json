@@ -8,6 +8,7 @@
     "yesterday": "昨天",
     "unnamed_conversation": "未命名会话",
     "generating": "生成中",
+    "awaiting_approval": "等待审批",
     "conversation_actions": "会话操作",
     "action_failed_retry": "操作失败，请稍后重试",
     "pin": "置顶",
@@ -171,7 +172,10 @@
     "badge_generate": "生成",
     "badge_edit": "编辑",
     "delete": "删除",
-    "not_selected": "未选择"
+    "not_selected": "未选择",
+    "waiting_seconds": "已等待 {{seconds}} 秒",
+    "cancel": "取消",
+    "cancelled": "已取消生成"
   },
   "web_auth_gate": {
     "title": "Web API 已锁定",
@@ -187,6 +191,10 @@
     "description": "RikkaHub 正在完成数据装载与升级迁移，数据量大时可能需要几分钟。请不要关闭应用，进度完成后会自动进入。",
     "failed_title": "启动失败",
     "failed_description": "服务端在启动或数据迁移过程中出错。你的原始数据未被删除；重启应用会自动重试。若反复出现，请联系支持并附上以下信息：",
+    "retry": "重试",
+    "copy_error": "复制错误信息",
+    "copied": "已复制",
+    "report_issue": "反馈问题",
     "phase": {
       "starting": "正在启动服务",
       "load_state": "正在读取应用数据",
@@ -232,6 +240,7 @@
     "apply_failed": "应用更新失败"
   },
   "errors": {
+    "network_unreachable": "无法连接到本地服务，请稍候重试；若持续出现请重启应用",
     "load_conversations_failed": "加载会话失败",
     "read_image_failed": "读取图片失败",
     "decode_image_failed": "图片解码失败"

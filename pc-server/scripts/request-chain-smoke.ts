@@ -62,6 +62,13 @@ function requestJson(req: Request) {
   return req.json().catch(() => ({})) as Promise<AnyRecord>;
 }
 
+/** 会话事件流中的 engine-status 帧序列(压缩/重试状态条的服务端广播,事件名带连字符)。 */
+function eventsToEngineStatusFrames(events: AnyRecord[]): AnyRecord[] {
+  return events
+    .filter((event) => event.event === "engine-status")
+    .map((event) => (event.data ?? {}) as AnyRecord);
+}
+
 function promptTextFromChatBody(body: AnyRecord) {
   return (body.messages ?? [])
     .map((item: AnyRecord) => typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? ""))
@@ -100,6 +107,11 @@ const mockServer = Bun.serve({
             ]);
           }
           if (promptText.includes("conversation compression assistant") || promptText.includes("<conversation>")) {
+            // 压缩请求走辅助模型;带"保留工具调用结论"指示的请求挂起 2s,给进行中互斥
+            // 冒烟(双发起 409)制造确定性窗口——普通压缩请求保持快返回。
+            if (promptText.includes("保留工具调用结论")) {
+              await Bun.sleep(2000);
+            }
             return sse([
               { choices: [{ delta: { content: "Compressed " } }] },
               { payload: { choices: [{ delta: { content: "conversation summary." } }] }, delayMs: 80 },
@@ -1769,17 +1781,33 @@ async function runCompressionSmoke() {
     (item) => !item.isGenerating && assistantMessages(item).some((msg: AnyRecord) => textFromParts(msg.parts ?? []).includes("继续回复")),
     "answer before compression",
   );
-  await expectApiError(
-    `/api/conversations/${conversationId}/compress`,
-    { method: "POST", body: JSON.stringify({ keepRecentMessages: 32, targetTokens: 512 }) },
-    "消息数量不足",
-  );
+  // ① 完成态幂等:无 compaction_boundary 的新会话先来一次降级压缩(keep 32 > 消息数
+  //   自动折半)——回归锁:降级逻辑活着;若未来恢复"不足即拒绝",这里红。
+  //   此压缩挂在 mock 的 2s 延迟窗上(带"保留工具调用结论"指示),顺势充当 ② 的
+  //   在飞压缩:进行时撞第二次,服务端权威 compressing 注册表必须 409。
+  const inFlightCompression = fetch(`${baseUrl}/api/conversations/${conversationId}/compress`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keepRecentMessages: 32, targetTokens: 512, additionalPrompt: "保留工具调用结论" }),
+  }).then(async (response) => {
+    assert(response.ok, `first compression should succeed via keep-recent degradation, got ${response.status}: ${await response.text()}`);
+  });
+  // 等第一次压缩确实进入服务端注册表再撞第二次(mock 的 2s 延迟给了充足窗口)。
+  await Bun.sleep(150);
+  const conflictResponse = await fetch(`${baseUrl}/api/conversations/${conversationId}/compress`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keepRecentMessages: 0, targetTokens: 512, additionalPrompt: "保留工具调用结论" }),
+  });
+  assert(conflictResponse.status === 409, `concurrent compression should 409, got ${conflictResponse.status}: ${await conflictResponse.text()}`);
+  await inFlightCompression;
+  // engine-status 帧是瞬态广播(不进快照),只在压缩生命周期内订阅才能收到;
+  // 收集器必须挂在带延迟窗的最终压缩上(keep 0 → 压全部 → 走 mock 的 2s 延迟)。
+  // 注意:busy:false 兜底清条只在 pi 引擎生成路径广播(编排器 isRunAndSuspend),
+  // 对话模式手动压缩只发"压缩相"帧——终止条件锁定压缩相帧本身。
   const compressionEventsPromise = collectConversationEvents(
     conversationId,
-    (events) => events.some((event) =>
-      event.event === "snapshot" &&
-      selectedMessages(event.data?.conversation ?? {}).some((msg: AnyRecord) => textFromParts(msg.parts ?? []).includes("Compressed conversation summary."))
-    ),
+    (events) => eventsToEngineStatusFrames(events).some((frame) => frame.phase === "compacting"),
     15_000,
   );
   await Bun.sleep(50);
@@ -1789,11 +1817,14 @@ async function runCompressionSmoke() {
   });
   assert(result.status === "compressed", "compression route should return compressed status");
   const compressionEvents = await compressionEventsPromise;
-  assert(compressionEvents.some((event) =>
-    event.event === "snapshot" &&
-    Array.isArray(event.data?.conversation?.chatSuggestions) &&
-    event.data.conversation.chatSuggestions.some((item: string) => item.includes("正在压缩对话历史"))
-  ), "compression did not broadcast progress suggestion");
+  // 压缩进度经 engine-status 帧呈现(状态条"正在压缩上下文 (n/m)"),原实现借
+  // chatSuggestions 建议条的 hack 已随 R7-4 退役——断言改为:压缩期间广播过
+  // engine-status 压缩相,且结束后广播 busy:false 清条。
+  const engineStatusFrames = eventsToEngineStatusFrames(compressionEvents);
+  assert(
+    engineStatusFrames.some((frame) => frame.phase === "compacting" && frame.busy === true),
+    "compression did not broadcast engine-status compacting phase",
+  );
   const compressed = await api(`/api/conversations/${conversationId}`);
   assert(selectedMessages(compressed).some((msg: AnyRecord) => textFromParts(msg.parts ?? []).includes("Compressed conversation summary.")), "compressed summary was not written back as context");
   const compressionRequest = requests
@@ -1975,6 +2006,8 @@ async function runImageGenerationSmoke() {
     { method: "POST", body: JSON.stringify({ prompt: "blocked edit", referenceFileIds: [referenceId] }) },
     "Gemini image edit is not supported",
   );
+  // state.json 落盘走 scheduleThrottledSaveState(200ms 节流)——直接读文件可能早于落盘。
+  await Bun.sleep(600);
   const stateAfter = JSON.parse(readFileSync(join(tempDir, "state.json"), "utf8"));
   assert(stateAfter.generatedImages.some((item: AnyRecord) => item.type === "image_generation" && item.prompt === "smoke generated image"), "generated image was not persisted");
   assert(stateAfter.generatedImages.some((item: AnyRecord) => item.type === "image_edit" && item.sourceFileIds?.[0] === referenceId), "edited image reference was not persisted");

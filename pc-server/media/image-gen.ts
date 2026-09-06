@@ -114,6 +114,8 @@ export async function callImageGeneration(input: {
   /** 4-4:显式模型覆盖(provider 测试用)。缺省走全局设置;禁止调用方为复用管线
    *  临时改写全局 state——并发窗口内其他生图请求会读到串味模型。 */
   overrideModelUuid?: string;
+  /** 域10-2:前端取消/断开时中止上游请求,不再空转到自然超时。 */
+  signal?: AbortSignal;
 }) {
   bumpAnalyticsImgCount();
   const picked = findModel(input.overrideModelUuid || state.settings.imageGenerationModelId);
@@ -139,6 +141,7 @@ export async function callImageGeneration(input: {
       headers: applyModelRequestHeaders({ "Content-Type": "application/json", ...providerHeaders(providerItem) }, providerItem, modelItem),
       body: JSON.stringify(body),
       timeoutMs: IMAGE_GEN_TIMEOUT_MS,
+      signal: input.signal,
     });
     const text = await response.text();
     addLog({
@@ -187,7 +190,7 @@ export async function callImageGeneration(input: {
     for (const entry of customBodyEntriesForForm(modelItem)) {
       form.append(entry.key, customFormValue(entry.value));
     }
-    const response = await fetchWithTimeout(endpoint, { method: "POST", headers, body: form, timeoutMs: IMAGE_GEN_TIMEOUT_MS });
+    const response = await fetchWithTimeout(endpoint, { method: "POST", headers, body: form, timeoutMs: IMAGE_GEN_TIMEOUT_MS, signal: input.signal });
     const text = await response.text();
     addLog({
       providerId: providerItem.id,
@@ -223,6 +226,7 @@ export async function callImageGeneration(input: {
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(body),
     timeoutMs: IMAGE_GEN_TIMEOUT_MS,
+    signal: input.signal,
   });
   const text = await response.text();
   addLog({

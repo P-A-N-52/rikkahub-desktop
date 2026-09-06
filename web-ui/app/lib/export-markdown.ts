@@ -177,18 +177,6 @@ export async function convertConversationToMarkdown(
   return lines.join("\n").trim();
 }
 
-export function downloadMarkdown(content: string, filename: string) {
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
 export function safeMarkdownFilename(name: string, fallback = "conversation") {
   const cleaned = name
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")

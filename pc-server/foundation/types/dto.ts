@@ -291,7 +291,9 @@ export type EngineStatusEventDto =
   | { busy: false }
   | {
       busy: true;
-      phase: "compacting" | "retrying";
+      /** awaiting_approval(域4-1):审批挂起期间持续——外显等待,供侧栏/标签双态点
+       *  与桌面通知消费。与 events.ts EngineStatus 同构。 */
+      phase: "compacting" | "retrying" | "awaiting_approval";
       /** compacting:manual/threshold/overflow;retrying 无。 */
       reason?: string;
       /** retrying:第几次/共几次。 */
@@ -299,7 +301,11 @@ export type EngineStatusEventDto =
       maxAttempts?: number;
       /** compacting(UI 历史压缩):分块进度。状态条渲染"(current/total)"。 */
       progress?: { current: number; total: number };
-      /** 压缩开始时刻(epoch ms,服务端权威)。状态条据此渲染"已处理 xx秒",SSE 重连
+      /** 压缩/审批开始时刻(epoch ms,服务端权威)。状态条据此渲染"已处理/已等待 xx秒",SSE 重连
        *  快照带回真实起点,切页回来计时连续。缺省时前端以首见 busy 帧时刻兜底。 */
       startedAt?: number;
+      /** awaiting_approval:挂起等待的工具调用 id / 工具名 / 审批对象摘要(通知用)。 */
+      toolCallId?: string;
+      toolName?: string;
+      summary?: string;
     };

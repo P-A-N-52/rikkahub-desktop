@@ -47,6 +47,9 @@ interface MessagePartsProps {
   parts: UIMessagePart[];
   /** 展开态 store 键的命名空间;缺省时块身份仍稳定,仅跨消息撞键风险略升。 */
   messageId?: string;
+  /** 域3-1 耗时计时基准:消息级时间戳(起点=首个内容到达,终点=协调器终局收口)。 */
+  messageCreatedAt?: string;
+  messageFinishedAt?: string | null;
   loading?: boolean;
   assistant?: AssistantProfile | null;
   role?: "USER" | "ASSISTANT" | "SYSTEM" | "TOOL";
@@ -105,6 +108,8 @@ export const MessageParts = React.memo(
   ({
     parts,
     messageId,
+    messageCreatedAt,
+    messageFinishedAt,
     loading = false,
     assistant,
     role,
@@ -150,6 +155,8 @@ export const MessageParts = React.memo(
                 key={`pending-tool-${block.tool.toolCallId || block.index}`}
                 tool={block.tool}
                 loading={loading && block.tool.output.length === 0}
+                messageCreatedAt={messageCreatedAt}
+                messageFinishedAt={messageFinishedAt}
                 onToolApproval={onToolApproval}
               />
             );
@@ -163,6 +170,8 @@ export const MessageParts = React.memo(
                 key={`workspace-action-${block.tool.toolCallId || block.index}`}
                 tool={block.tool}
                 loading={loading}
+                messageCreatedAt={messageCreatedAt}
+                messageFinishedAt={messageFinishedAt}
               />
             );
           }
@@ -205,6 +214,8 @@ export const MessageParts = React.memo(
                         key={stepKey}
                         tool={step.tool}
                         loading={loading}
+                        messageCreatedAt={messageCreatedAt}
+                        messageFinishedAt={messageFinishedAt}
                         isFirst={isFirst}
                         isLast={isLast}
                       />
@@ -215,6 +226,8 @@ export const MessageParts = React.memo(
                       key={stepKey}
                       tool={step.tool}
                       loading={loading && step.tool.output.length === 0}
+                      messageCreatedAt={messageCreatedAt}
+                      messageFinishedAt={messageFinishedAt}
                       onToolApproval={onToolApproval}
                       isFirst={isFirst}
                       isLast={isLast}

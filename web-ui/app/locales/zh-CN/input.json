@@ -123,6 +123,7 @@
     "uploading_progress": "上传中 {{percent}}%",
     "parsing_progress": "解析中 {{done}}/{{total}} 页",
     "parsing": "解析中",
+    "parsing_send_blocked": "附件解析中，完成后即可发送",
     "extraction_failed": "解析失败：发送时将无法附带此文件的正文",
     "extraction_empty": "未能提取出文本（可能是扫描件或不支持的格式）",
     "stop_generating": "停止生成"

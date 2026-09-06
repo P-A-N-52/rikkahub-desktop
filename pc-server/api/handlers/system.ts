@@ -2,12 +2,13 @@
 // 纪律：纯搬迁自 server.ts routeApi()；辅助函数（字体/图标/统计等）暂经 ../../server 导入，待后续收敛。
 
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { customFontsDir, dataDir } from "../../foundation/paths";
 import { saveState, state } from "../../persistence/json-store";
 import { APP_VERSION } from "../../updates/index";
 import { loadModelsDev, lookupContextLimit, modelsDevCache } from "../../inference-engine/providers";
 import { error, json, readJson } from "../request";
+import { isLoopbackRequest } from "../net-context";
 import { appClients, openSse } from "../sse";
 import { memoryStore } from "../../memory/index";
 import { recentAppErrors } from "../../observability/app-errors";
@@ -75,6 +76,50 @@ export async function handleSystemRoutes(request: Request, url: URL, path: strin
         : process.platform === "darwin"
           ? ["open", file]
           : ["xdg-open", file];
+    Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
+    return json({ ok: true });
+  }
+  // 域10-1(交互审查 4A):分享导出落盘 + 在文件夹中定位。
+  // 桌面壳(与后端同机)把导出内容写进 dataDir/exports/,toast 携带"在文件夹中显示"按钮,
+  // 点按调 reveal 用系统文件管理器选中该文件。仅限本机直连(与 data/export/to-path 同一回环闸);
+  // 浏览器部署维持原下载通道,不走这里。
+  if (path === "exports/save" && request.method === "POST") {
+    if (!isLoopbackRequest(request)) return error("Forbidden: this endpoint is loopback-only", 403);
+    const body = await readJson<{ content?: string; filename?: string; encoding?: string }>(request);
+    const content = typeof body?.content === "string" ? body.content : "";
+    if (!content) return error("Missing content", 400);
+    // 文件名白名单化:剥离任何路径前缀,只留安全 basename,防 traversal。
+    const safeName = (typeof body?.filename === "string" ? body.filename : "")
+      .replace(/[\u0000-\u001f<>:"/\\|?*]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[. ]+$/g, "");
+    if (!safeName) return error("Invalid filename", 400);
+    const isBase64 = body?.encoding === "base64";
+    const exportsDir = join(dataDir, "exports");
+    mkdirSync(exportsDir, { recursive: true });
+    // 同名冲突时追加序号,不覆盖旧导出。
+    let file = join(exportsDir, safeName);
+    const dot = safeName.lastIndexOf(".");
+    const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
+    const ext = dot > 0 ? safeName.slice(dot) : "";
+    for (let i = 1; existsSync(file); i++) file = join(exportsDir, `${stem} (${i})${ext}`);
+    await Bun.write(file, isBase64 ? Buffer.from(content, "base64") : content);
+    return json({ ok: true, path: file, filename: basename(file) });
+  }
+  if (path === "exports/reveal" && request.method === "POST") {
+    if (!isLoopbackRequest(request)) return error("Forbidden: this endpoint is loopback-only", 403);
+    const body = await readJson<{ path?: unknown }>(request);
+    const target = typeof body?.path === "string" ? body.path : "";
+    // 只允许定位 dataDir/exports/ 内的文件,不暴露任意路径给系统 shell。
+    const exportsDir = join(dataDir, "exports");
+    if (!target.startsWith(exportsDir) || !existsSync(target)) return error("Invalid path", 400);
+    const opener =
+      process.platform === "win32"
+        ? ["explorer", "/select,", target]
+        : process.platform === "darwin"
+          ? ["open", "-R", target]
+          : ["xdg-open", exportsDir];
     Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
     return json({ ok: true });
   }

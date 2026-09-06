@@ -26,7 +26,7 @@ function OcrStatus({ metadata }: { metadata?: Record<string, unknown> | null }) 
   if (status === "done") {
     return (
       <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-        <CheckCircle2 className="size-3 text-emerald-500" />
+        <CheckCircle2 className="size-3 text-success" />
         <span>OCR 已完成</span>
       </div>
     );

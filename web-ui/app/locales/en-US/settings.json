@@ -76,6 +76,9 @@
     "save_failed": "Save failed",
     "autosaving": "Auto-saving...",
     "autosaved": "Saved automatically",
+    "autosave_failed": "Auto-save failed",
+    "autosave_failed_named": "Failed to auto-save {{name}}",
+    "autosave_failed_retry": "Save failed — click to retry",
     "delete": "Delete",
     "hide_key": "Hide API Key",
     "show_key": "Show API Key"

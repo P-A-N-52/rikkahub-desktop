@@ -4,7 +4,9 @@
     "collapse_thinking": "收起思考过程",
     "expand_thinking_steps": "展开 {{count}} 条思考步骤",
     "deep_thinking": "深度思考",
-    "thinking_seconds": "思考了 {{seconds}} 秒"
+    "thinking_seconds": "思考了 {{seconds}} 秒",
+    "elapsed_running_seconds": "已运行 {{seconds}} 秒",
+    "elapsed_done_seconds": "用时 {{seconds}} 秒"
   },
   "chat_message": {
     "copy_image": "图片",
@@ -56,11 +58,15 @@
     "md_document_label": "文档",
     "md_video_label": "视频",
     "md_audio_label": "音频",
-    "export_success_md": "已导出 Markdown",
-    "export_success_image": "已导出图片",
-    "export_success_desc": "文件已下载到浏览器下载目录:{{filename}}",
+    "export_success": "已导出",
+    "export_success_desc": "文件已保存:{{filename}}",
+    "export_show_in_folder": "在文件夹中显示",
     "export_image_watermark": "由 Rikkahub Desktop 生成 · rikkahub-desktop.pages.dev",
     "open_model_settings": "打开模型设置",
+    "generation_failed": "生成失败",
+    "copy_error": "复制错误信息",
+    "expand_error": "展开错误详情",
+    "collapse_error": "收起错误详情",
     "translation": "译文",
     "expand_translation": "展开译文",
     "collapse_translation": "收起译文",
@@ -121,7 +127,12 @@
     "pending_approval_title": "AI 正在请求工具调用授权",
     "pending_approval_desc": "AI 想要调用工具「{{toolName}}」继续完成任务。在你点击\"同意\"或\"拒绝\"之前，生成会暂停。",
     "pending_approve": "同意",
-    "pending_deny": "拒绝"
+    "pending_deny": "拒绝",
+    "deny_dialog_title": "拒绝工具调用",
+    "deny_dialog_desc": "可以填写拒绝原因（可选），会一并反馈给 AI，帮助它调整后续做法。",
+    "deny_dialog_placeholder": "拒绝原因（可选）",
+    "deny_dialog_confirm": "确认拒绝",
+    "deny_dialog_cancel": "取消"
   },
   "media_part": {
     "video_load_failed": "加载视频失败：{{url}}",
@@ -147,6 +158,8 @@
     "diff_empty": "无变更",
     "diff_show_more": "展开其余 {{count}} 行",
     "terminal_hidden_lines": "已隐藏前 {{count}} 行，完整输出见详情",
+    "copy_output": "复制输出",
+    "copied": "已复制",
     "approval_read": "AI 请求读取文件",
     "approval_write": "AI 请求写入文件",
     "approval_edit": "AI 请求编辑文件",

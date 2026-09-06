@@ -19,7 +19,7 @@ import type { SlashCommandDto } from "~/lib/slash-commands";
 /** 输入框文本度量(影响字形排布的全部类,镜像层与 Textarea 共用单源)。
  *  组成:chat-input 对 ui/Textarea 的覆盖(p-2 text-sm)+ 基础组件中参与度量的
  *  w-full 与 md 字号档。行高继承 text-sm,两层同 class 组合必然同结果。 */
-export const TEXTAREA_METRICS = "w-full p-2 text-sm md:text-[0.8125rem]";
+export const TEXTAREA_METRICS = "w-full p-2 text-sm md:text-compact";
 
 export interface SlashCommandMenuProps {
   /** aria-controls 对齐用(textarea 侧标注)。 */

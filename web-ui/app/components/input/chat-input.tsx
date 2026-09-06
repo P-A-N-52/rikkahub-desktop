@@ -48,7 +48,9 @@ export interface ChatInputProps {
   slashCommands?: SlashCommandDto[];
   /** 斜杠指令拦截执行(完整指令提交时调用;输入框随即清空,不发消息)。执行中的
    *  状态与结果反馈由执行器自理(压缩中提示/toast),不占用发送按钮。 */
-  onSlashCommand?: (name: string, argument: string) => Promise<void> | void;
+  /** 域5-1(3F):返回 Promise<boolean>;true/undefined=已受理(输入框维持清空),
+   *  false/抛错=未受理(输入框回填原始指令文本)。 */
+  onSlashCommand?: (name: string, argument: string) => Promise<boolean | void> | boolean | void;
   /** 产品决策①:安卓"清除上下文"对齐(切换语义,再点一次撤销)。 */
   // 提示词优化时,返回最近几轮对话的纯文本作为上下文(让优化模型理解模糊指代)。
   // 无对话(首条消息)时返回空串。只在用户点击"优化提示词"时调用。
@@ -209,11 +211,19 @@ function useExtractionStatus(fileId: number | null, isDocument: boolean): Extrac
 
 /** 专题4:附件 chip 上的提取指示。解析中 = 进度圆圈(PDF 有逐页百分比,其他格式
  *  不定圈);失败/无文本 = 可悬停的警示角标;done/none = 不渲染,chip 恢复普通样子。
- *  发送永远不被提取阻塞——未完成时该文件走 fallback 占位文案(服务端 3-4 机制)。 */
+ *  域9-1(3B):解析状态同步进 chat-input store 的 parsingFileIds——发送门禁(按钮灰 +
+ *  发送键短路)读同一份数据,与本 chip 的进度圆圈严格同源,不另造轮询。 */
 function ExtractionBadge({ part }: { part: UIMessagePart }) {
   const { t } = useTranslation("input");
   const fileId = getPartFileId(part);
   const status = useExtractionStatus(fileId, part.type === "document");
+  const setPartParsing = useChatInputStore((state) => state.setPartParsing);
+  const parsing = status?.status === "pending";
+  React.useEffect(() => {
+    if (fileId == null) return;
+    setPartParsing(fileId, parsing);
+    if (parsing) return () => setPartParsing(fileId, false); // 卸载(附件被移除)即解除
+  }, [fileId, parsing, setPartParsing]);
   if (!status) return null;
   if (status.status === "pending") {
     const hasPageProgress = status.done != null && status.total != null && status.total > 0;
@@ -237,7 +247,7 @@ function ExtractionBadge({ part }: { part: UIMessagePart }) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center text-amber-500">
+          <span className="inline-flex items-center text-warning">
             <TriangleAlert className="size-3.5 shrink-0" />
           </span>
         </TooltipTrigger>
@@ -367,6 +377,17 @@ function ChatInputInner({
 
   const isEmpty = value.trim().length === 0 && attachments.length === 0;
 
+  // 域9-1(3B):任一草稿附件仍在解析 → 发送整体门禁(按钮灰 + 发送键短路,换行键保留)。
+  // 只阻塞"进行中";failed/empty 不阻塞——用户可自行决定带失败附件发送(走服务端降级)。
+  const parsingFileIds = useChatInputStore((state) => state.parsingFileIds);
+  const hasParsingAttachments = React.useMemo(() => {
+    if (parsingFileIds.length === 0) return false;
+    return attachments.some((part) => {
+      const fileId = getPartFileId(part);
+      return fileId != null && parsingFileIds.includes(fileId);
+    });
+  }, [attachments, parsingFileIds]);
+
   // ── 斜杠指令(方案 tmp_doc/指令体系方案-2026-09-05.md §4/§5) ──────────────
   // 指令面开关:带附件不拦截(附件+文本=用户想发消息);编辑历史消息不触发;
   // 生成中禁用(与压缩互斥同语义)。清单为空 = 指令在此环境不存在(禁用不可见)。
@@ -396,7 +417,9 @@ function ChatInputInner({
   }, [commandPainted, value]);
 
   const canStop = ready && Boolean(onStop) && isGenerating && !disabled;
-  const canSend = ready && !isGenerating && !disabled && !isEmpty;
+  // 域9-1:解析中门禁并入 canSend——canSend=false 时 actionDisabled 让发送按钮置灰,
+  // handlePrimaryAction 顶部 return 短路键盘路径;canStop(停止生成)不受附件解析影响。
+  const canSend = ready && !isGenerating && !disabled && !isEmpty && !hasParsingAttachments;
   // 生成中允许上传:用户常在模型输出时准备下一轮的 prompt 和附件,加文件到草稿和打字
   // 一样都不打断当前生成。submitting(发送的一瞬间)和 uploading 仍保留互斥。
   const canUpload = ready && !disabled && !uploading && !submitting;
@@ -440,11 +463,18 @@ function ChatInputInner({
 
       if (canSend) {
         // 斜杠指令拦截:完整指令不作为消息发送,清空输入框交执行器(方案 §3.5)。
-        // 不 await:执行反馈由执行器自理,发送按钮立即释放,不阻塞下一条输入。
+        // 域5-1(3F):执行器返回 false / 抛错 = 未受理(如压缩占用),把原始指令文本回填
+        // 输入框,用户键入的参数不丢。受理(默认 true)则维持"已清空"。
         if (parsedCommand && onSlashCommand) {
           const { command, argument } = parsedCommand;
+          const originalText = value;
           onValueChange("");
-          void onSlashCommand(command.name, argument);
+          try {
+            const accepted = await onSlashCommand(command.name, argument);
+            if (accepted === false) onValueChange(originalText);
+          } catch {
+            onValueChange(originalText);
+          }
           return;
         }
         setOriginalBeforeOptimize(null);
@@ -456,7 +486,7 @@ function ChatInputInner({
     } finally {
       setSubmitting(false);
     }
-  }, [actionDisabled, canSend, canStop, onSend, onSlashCommand, onStop, onValueChange, parsedCommand, t]);
+  }, [actionDisabled, canSend, canStop, onSend, onSlashCommand, onStop, onValueChange, parsedCommand, t, value]);
 
   const handleOptimize = React.useCallback(async () => {
     const original = value.trim();
@@ -687,6 +717,17 @@ function ChatInputInner({
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       // 斜杠推荐菜单优先消费(↑↓/Tab/Enter/Esc;菜单打开时 Enter=补全,绝不发送)。
       if (slash.handleMenuKeyDown(event)) return;
+
+      // 域9-2(3D):编辑模式 Esc = 点"取消"按钮。菜单开着时上面已消费(第一次 Esc 只关
+      // 菜单);IME 组合输入中(isComposing)不响应,避免中/日文输入法取词 Esc 误退编辑。
+      if (event.key === "Escape") {
+        if (isEditing && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          onCancelEdit?.();
+        }
+        return;
+      }
+
       if (event.key !== "Enter") return;
       if (isGenerating) return;
       if (event.nativeEvent.isComposing) return;
@@ -695,12 +736,19 @@ function ChatInputInner({
       // sendOnEnter = true: Enter 发送，Shift+Enter 换行
       // sendOnEnter = false: Shift+Enter 发送，Enter 换行
       const shouldSend = sendOnEnter ? !event.shiftKey : event.shiftKey;
-      if (!shouldSend) return;
+      if (!shouldSend) return; // 换行角色的组合始终放行(域9-1:解析中也不动换行)
+
+      // 域9-1:发送角色的组合在附件解析中短路(不换行、不发送、不 preventDefault);
+      // 按钮侧已由 actionDisabled 置灰。toast 提示避免"按了没反应"的困惑。
+      if (hasParsingAttachments) {
+        toast.info(t("chat.parsing_send_blocked"));
+        return;
+      }
 
       event.preventDefault();
       void handlePrimaryAction();
     },
-    [handlePrimaryAction, isGenerating, sendOnEnter, slash.handleMenuKeyDown],
+    [handlePrimaryAction, hasParsingAttachments, isEditing, isGenerating, onCancelEdit, sendOnEnter, slash.handleMenuKeyDown, t],
   );
 
   const handleUploadInputChange = React.useCallback(
@@ -995,7 +1043,7 @@ function ChatInputInner({
             <div className="relative flex items-center gap-1.5">
               {/* 优化较慢提示:浮在按钮组上方,绝对定位不挤占布局(原方案放底部会把整个输入区往下顶)。 */}
               {optimizeHint ? (
-                <span className="animate-pulse absolute -top-8 right-0 z-10 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[0.6875rem] text-muted-foreground shadow-sm">
+                <span className="animate-pulse absolute -top-8 right-0 z-10 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-mini text-muted-foreground shadow-sm">
                   {optimizeHint}
                 </span>
               ) : null}
@@ -1049,7 +1097,9 @@ function ChatInputInner({
                       ? t("asr.stop")
                       : isEmpty
                         ? t("asr.start")
-                        : undefined
+                        : hasParsingAttachments
+                          ? t("chat.parsing_send_blocked")
+                          : undefined
                 }
                 onClick={() => {
                   if (isGenerating || !isEmpty) void handlePrimaryAction();
@@ -1099,7 +1149,7 @@ function ChatInputInner({
                 key={`${suggestion}-${index}`}
                 type="button"
                 disabled={!canUseQuickMessage}
-                className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--ds-pill-bg)] px-2.5 text-[0.75rem] font-medium text-[var(--ds-brand-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--ds-pill-bg)] px-2.5 text-xs font-medium text-[var(--ds-brand-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => {
                   handleSuggestionSelect(suggestion);
                 }}

@@ -36,6 +36,15 @@ import {
 
 type ReasoningLevel = "off" | "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** 持久化值与 locale 键的归一边界：数据层允许大写枚举（AUTO/OFF…，与 Android 对齐的
+ *  存储格式，跨端备份依赖它），展示层所有键拼接与档位对比必须先过这里。 */
+function normalizeLevel(level: string | null | undefined): ReasoningLevel | null {
+  const normalized = String(level ?? "").toLowerCase();
+  return (REASONING_LEVELS as readonly string[]).includes(normalized)
+    ? (normalized as ReasoningLevel)
+    : null;
+}
+
 const REASONING_LEVELS: ReasoningLevel[] = ["off", "auto", "low", "medium", "high", "xhigh", "max"];
 
 interface ReasoningPreset {
@@ -90,7 +99,7 @@ export function useCurrentReasoningLabel(): string | null {
   const { currentAssistant } = useCurrentAssistant();
   const { currentModel } = useCurrentModel();
   if (!isReasoningModel(currentModel)) return null;
-  const level = (currentAssistant?.reasoningLevel as ReasoningLevel | null | undefined) ?? "auto";
+  const level = normalizeLevel(currentAssistant?.reasoningLevel) ?? "auto";
   return t(`reasoning.presets.${level}.label`);
 }
 
@@ -108,8 +117,7 @@ export function ReasoningSubmenu({ disabled = false }: ReasoningSubmenuProps) {
   const canUse = Boolean(currentAssistant && !disabled);
   const canReasoning = isReasoningModel(currentModel);
 
-  const currentLevel =
-    (currentAssistant?.reasoningLevel as ReasoningLevel | null | undefined) ?? "auto";
+  const currentLevel = normalizeLevel(currentAssistant?.reasoningLevel) ?? "auto";
   const currentPreset =
     reasoningPresets.find((preset) => preset.key === currentLevel) ?? reasoningPresets[1];
 

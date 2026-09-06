@@ -35,7 +35,7 @@ import { DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
 import { attachOcrToImageParts, compressConversation, englishLanguageName, fetchAuxiliaryText, generateTitleForConversation, isQwenMtModel, markOcrPendingParts } from "../../conversations/auxiliary";
 import { compactEngineConversation, generateAnswer, resolveEngineForConversation } from "../../conversations/orchestrator";
 import { deleteConversationsById, ensureConversation, findAssistant, finishInterruptedPendingToolsInConversation, hasPendingToolApproval } from "../../conversations/helpers";
-import { compressing, generating } from "../../conversations/generation-state";
+import { awaitingApproval, compressing, generating } from "../../conversations/generation-state";
 import { getWorkspace } from "../../workspace";
 import { resolveToolApproval } from "../../inference-engine/approval-gate";
 
@@ -120,9 +120,24 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
     // 压缩进行中(compressing 注册表,服务端权威)则补发状态条帧(含 startedAt,
     // "已处理 xx秒"计时跨重连连续),切页回来即恢复显示。
     const compressStartedAt = compressing.get(conversation.id);
-    const initialFrames: [string, JsonValue | object][] = compressStartedAt
-      ? [initialFrame, ["engine-status", { busy: true, phase: "compacting", startedAt: compressStartedAt } satisfies EngineStatusEventDto]]
-      : [initialFrame];
+    // 域4-1:审批等待同哲学——等待中(awaitingApproval 注册表)补发琥珀态帧,侧栏/
+    // 标签双态点与"已等待 xx秒"跨切页/重连续存。压缩与审批互斥(压缩时无工具执行),
+    // 但快照逻辑各自独立判定,不互斥假设。
+    const pendingApproval = awaitingApproval.get(conversation.id);
+    const statusFrames: [string, JsonValue | object][] = [];
+    if (compressStartedAt) {
+      statusFrames.push(["engine-status", { busy: true, phase: "compacting", startedAt: compressStartedAt } satisfies EngineStatusEventDto]);
+    }
+    if (pendingApproval) {
+      statusFrames.push(["engine-status", {
+        busy: true,
+        phase: "awaiting_approval",
+        startedAt: pendingApproval.startedAt,
+        ...(pendingApproval.toolName ? { toolName: pendingApproval.toolName } : {}),
+        ...(pendingApproval.summary ? { summary: pendingApproval.summary } : {}),
+      } satisfies EngineStatusEventDto]);
+    }
+    const initialFrames: [string, JsonValue | object][] = [initialFrame, ...statusFrames];
     return openSse(
       () => initialFrames,
       (controller) => {
@@ -587,6 +602,11 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         );
         return json({ status: "compressed", summaries });
       } catch (err) {
+        // 用户中止(请求 signal 断)是正常路径不是故障:静默吞掉,不写错误中心、不刷全局
+        // toast——前端的取消 feedback 在发起侧(取消键/Esc 的 toast.info)。其余错误照常上浮。
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return json({ status: "aborted" });
+        }
         // CodedError 透传业务码,前端按码查 i18n 文案(message 兜底,通道见 foundation/errors)。
         const errorCode = err instanceof CodedError ? err.errorCode : undefined;
         return error(err instanceof Error ? err.message : String(err), 400, errorCode);

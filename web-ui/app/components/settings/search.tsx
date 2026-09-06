@@ -10,6 +10,7 @@ import { Input } from "~/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Textarea } from "~/components/ui/textarea";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
@@ -141,7 +142,7 @@ function SearchApiKeyList({
             {entry ? (
               entry.status === "ok" ? (
                 <CheckCircle2
-                  className="size-4 shrink-0 text-emerald-500"
+                  className="size-4 shrink-0 text-success"
                   aria-label={t("settings:search.key_ok")}
                 />
               ) : (
@@ -451,7 +452,7 @@ export function SearchSection({
                           aria-hidden
                           className={cn(
                             "size-2 shrink-0 rounded-full",
-                            passed ? "bg-emerald-500" : "bg-muted-foreground/40",
+                            passed ? "bg-success" : "bg-muted-foreground/40",
                           )}
                           title={
                             passed
@@ -691,9 +692,10 @@ export function SearchSection({
               <Trash2 className="size-4" />
               {t("settings:search.delete")}
             </Button>
-            <div className="flex items-center px-2 text-xs text-muted-foreground">
-              {t("settings:search.autosaved")}
-            </div>
+            <AutosaveStatusRow
+              status={autosave.status}
+              onRetry={() => void autosave.saveNow()}
+            />
           </div>
           {testResult ? (
             <pre className="max-h-56 overflow-auto rounded-md border bg-muted p-3 text-xs whitespace-pre-wrap">
@@ -709,7 +711,7 @@ export function SearchSection({
                 <div key={index} className="space-y-0.5">
                   <div className="flex items-center gap-2 text-xs">
                     {entry.status === "ok" ? (
-                      <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+                      <CheckCircle2 className="size-3.5 shrink-0 text-success" />
                     ) : (
                       <XCircle className="size-3.5 shrink-0 text-destructive" />
                     )}
@@ -727,7 +729,7 @@ export function SearchSection({
                   </div>
                   {/* issue11:失败时附底层错误原文,便于区分超时/证书/DNS/5xx */}
                   {entry.status === "fail" && entry.detail ? (
-                    <div className="pl-5.5 font-mono text-[0.6875rem] break-all text-muted-foreground">
+                    <div className="pl-5.5 font-mono text-mini break-all text-muted-foreground">
                       {entry.detail}
                     </div>
                   ) : null}

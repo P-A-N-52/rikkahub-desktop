@@ -83,6 +83,7 @@ import { cn } from "~/lib/utils";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { clearWebAuthToken } from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
+import { useConversationEngineStatus } from "~/stores/conversation-store";
 import api from "~/services/api";
 import type { AssistantAvatar, AssistantProfile, AssistantTag, ConversationListDto } from "~/types";
 
@@ -243,6 +244,11 @@ const ConversationListRow = React.memo(
     const [menuOpen, setMenuOpen] = React.useState(false);
     const [pendingAction, setPendingAction] = React.useState<string | null>(null);
     const [renameOpen, setRenameOpen] = React.useState(false);
+    // 域4-1(交互审查 2A):生成中绿点升级为双态——琥珀=有工具审批在等待用户裁决,
+    // 仍归"生成中"语义(approval 等待期间 isGenerating 保持 true),故琥珀取代而非并列。
+    // 窄选择器订阅本行会话的瞬态状态,压缩/重试/审批帧跳变才重渲染本行。
+    const engineStatus = useConversationEngineStatus(conversation.id);
+    const awaitingApproval = engineStatus?.phase === "awaiting_approval";
 
     const moveTargets = React.useMemo(
       () => assistants.filter((assistant) => assistant.id !== conversation.assistantId),
@@ -315,9 +321,12 @@ const ConversationListRow = React.memo(
               {conversation.isPinned && <Pin className="size-3 text-primary" aria-hidden />}
               {conversation.isGenerating && (
                 <span
-                  className="inline-block size-2 rounded-full bg-emerald-500"
-                  aria-label={t("conversation_sidebar.generating")}
-                  title={t("conversation_sidebar.generating")}
+                  className={cn(
+                    "inline-block size-2 rounded-full",
+                    awaitingApproval ? "animate-pulse bg-warning" : "bg-success",
+                  )}
+                  aria-label={t(awaitingApproval ? "conversation_sidebar.awaiting_approval" : "conversation_sidebar.generating")}
+                  title={t(awaitingApproval ? "conversation_sidebar.awaiting_approval" : "conversation_sidebar.generating")}
                 />
               )}
             </span>

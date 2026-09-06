@@ -687,7 +687,7 @@ function CodeBlockCopyButton({ className, ...props }: CodeBlockActionButtonProps
       variant="ghost"
       {...props}
     >
-      {isCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+      {isCopied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
     </Button>
   );
 }
@@ -747,7 +747,7 @@ function CodeBlockOpenButton({ className, ...props }: CodeBlockActionButtonProps
       {...props}
     >
       {isOpened ? (
-        <Check className="size-3.5 text-emerald-500" />
+        <Check className="size-3.5 text-success" />
       ) : (
         <ExternalLink className="size-3.5" />
       )}
@@ -802,7 +802,7 @@ function CodeBlockDownloadButton({ className, ...props }: CodeBlockActionButtonP
       {...props}
     >
       {isDownloaded ? (
-        <Check className="size-3.5 text-emerald-500" />
+        <Check className="size-3.5 text-success" />
       ) : (
         <Download className="size-3.5" />
       )}

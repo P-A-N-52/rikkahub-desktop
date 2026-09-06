@@ -67,7 +67,9 @@ export type EngineStatus =
   | { busy: false }
   | {
       busy: true;
-      phase: "compacting" | "retrying";
+      /** awaiting_approval(域4-1):审批挂起期间持续——用户离开页面/失焦时靠它外显
+       *  等待,与 compacting/retrying 同一瞬态通道(不落库、SSE 重连即快照恢复)。 */
+      phase: "compacting" | "retrying" | "awaiting_approval";
       /** compacting:manual/threshold/overflow;retrying 无。 */
       reason?: string;
       /** retrying:第几次/共几次。 */
@@ -75,8 +77,14 @@ export type EngineStatus =
       maxAttempts?: number;
       /** compacting(UI 历史压缩):分块进度。状态条渲染"(current/total)"。 */
       progress?: { current: number; total: number };
-      /** 压缩开始时刻(epoch ms,服务端权威),状态条"已处理 xx秒"计时起点。 */
+      /** 压缩/审批开始时刻(epoch ms,服务端权威),状态条"已处理/已等待 xx秒"计时起点。 */
       startedAt?: number;
+      /** awaiting_approval:挂起等待的工具调用 id(前端定位审批卡/通知摘要)。 */
+      toolCallId?: string;
+      /** awaiting_approval:工具名(通知摘要用,如 bash/edit)。 */
+      toolName?: string;
+      /** awaiting_approval:审批对象一句话摘要(截断后的命令/路径)。 */
+      summary?: string;
     };
 
 /** 事件接收器。Provider 流式函数在解析到增量时调用它。 */

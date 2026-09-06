@@ -264,8 +264,9 @@ function openStream(id: string, record: StreamRecord, options?: { negotiate?: bo
   record.controller = controller;
   setConversationSubscribing(id, true);
   setConversationError(id, null);
-  // 引擎状态是瞬态语义:服务端不重放,重连即重置——断连期间错过 busy:false 帧
-  // 不能让"压缩中"挂死在界面上。
+  // 引擎状态以"最新帧覆盖"为准:重连时清掉旧残影(断连期间错过 busy:false 帧
+  // 不能让"压缩中"挂死),但连接建立与 openSse 入队连接期快照帧(压缩/审批注册表
+  // 补发,域4-1)天然有先后——快照帧一到达即覆盖回真实状态,无竞态窗口。
   setConversationEngineStatus(id, { busy: false });
 
   // 唯一数据路径:SSE 连接首帧即全量快照(服务端 openSse 保证),不发并行 GET

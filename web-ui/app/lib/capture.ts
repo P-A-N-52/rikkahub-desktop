@@ -99,13 +99,3 @@ export async function captureNodeAsPng(
 
   return toPng(node, captureOptions);
 }
-
-/** 触发浏览器下载 dataURL 为文件(与 downloadMarkdown 同款用法)。 */
-export function downloadDataUrl(dataUrl: string, filename: string): void {
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}

@@ -17,9 +17,12 @@ import {
 } from "lucide-react";
 
 import { DetailDrawer } from "~/components/detail-drawer";
+import { DenyReasonDialog } from "~/components/message/deny-reason-dialog";
 import { Button } from "~/components/ui/button";
+import { CopyButton } from "~/components/ui/copy-button";
 import { DiffView, parseDiffStats } from "~/components/workspace/diff-view";
 import { TerminalOutput } from "~/components/workspace/terminal-output";
+import { useElapsedSeconds } from "~/hooks/use-elapsed-since";
 import { cn } from "~/lib/utils";
 import {
   buildWorkspaceActionModel,
@@ -104,6 +107,7 @@ interface WorkspaceActionView {
   t: TFunction;
   model: WorkspaceActionModel;
   running: boolean;
+  elapsedSeconds: number | null;
   expanded: boolean;
   setUserExpanded: (next: boolean) => void;
   drawerOpen: boolean;
@@ -118,12 +122,21 @@ interface WorkspaceActionView {
   TitleIcon: LucideIcon;
 }
 
-function useWorkspaceActionView(tool: UIToolPart, loading?: boolean): WorkspaceActionView {
+function useWorkspaceActionView(
+  tool: UIToolPart,
+  loading: boolean | undefined,
+  messageCreatedAt?: string,
+  messageFinishedAt?: string | null,
+): WorkspaceActionView {
   const { t } = useTranslation("message");
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   const model = React.useMemo(() => buildWorkspaceActionModel(tool), [tool]);
   const running = Boolean(loading) && !model.finished;
+  // 域3-1:运行耗时。起点消息 createdAt(首个内容到达时被 markStreamFirstContent 覆写
+  // 为真实起点;等待期入账与"已等待 xx 秒"一致,等待+执行 = 用户体感的"这个动作多久"),
+  // 终点消息 finishedAt(协调器终局统一收口)。运行中每秒 tick、终局定格,口径与思维链一致。
+  const elapsedSeconds = useElapsedSeconds(messageCreatedAt, messageFinishedAt ?? null);
   // 自动折叠(2.0.0 内测,与思维链一致):执行中保持展开,终局后自动收起,压住长会话
   // 纵向空间;历史消息挂载时 running=false 直接收起。用户点过 chevron 后(userExpanded
   // 非 null)以用户选择为准,不再自动干预。
@@ -160,6 +173,7 @@ function useWorkspaceActionView(tool: UIToolPart, loading?: boolean): WorkspaceA
     t,
     model,
     running,
+    elapsedSeconds,
     expanded,
     setUserExpanded,
     drawerOpen,
@@ -208,6 +222,7 @@ function WorkspaceActionBody({ view }: { view: WorkspaceActionView }) {
 /** 全量详情抽屉(卡/步骤共用):参数/DiffView/写入正文/结果/错误/patch。 */
 function WorkspaceActionDrawer({ view, toolName }: { view: WorkspaceActionView; toolName: string }) {
   const { t, model, drawerOpen, setDrawerOpen, path, command, diff, patch, title } = view;
+  const writeContent = model.kind === "write" ? (str(model.args, "content") ?? "") : null;
   return (
     <DetailDrawer
       open={drawerOpen}
@@ -220,17 +235,33 @@ function WorkspaceActionDrawer({ view, toolName }: { view: WorkspaceActionView; 
           <div className="break-all font-mono text-xs text-muted-foreground">{path}</div>
         ) : null}
         {model.kind === "edit" && diff ? <DiffView diff={diff} className="rounded-md border" /> : null}
-        {model.kind === "write" ? (
-          <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
-            {str(model.args, "content") ?? ""}
-          </pre>
+        {writeContent !== null ? (
+          <div className="group/drawer-pre relative">
+            <pre className="overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
+              {writeContent}
+            </pre>
+            <CopyButton
+              text={writeContent}
+              label={t("tool_part.copy")}
+              copiedLabel={t("tool_part.copied")}
+              className="absolute right-1.5 top-1.5 bg-background/80 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/drawer-pre:opacity-100"
+            />
+          </div>
         ) : null}
         {model.text ? (
           <div>
             <div className="mb-1 text-xs text-muted-foreground">{t("tool_part.result")}</div>
-            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
-              {model.text}
-            </pre>
+            <div className="group/drawer-pre relative">
+              <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/20 p-3 font-mono text-xs">
+                {model.text}
+              </pre>
+              <CopyButton
+                text={model.text}
+                label={t("tool_part.copy")}
+                copiedLabel={t("tool_part.copied")}
+                className="absolute right-1.5 top-1.5 bg-background/80 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/drawer-pre:opacity-100"
+              />
+            </div>
           </div>
         ) : null}
         {model.error !== null ? (
@@ -241,9 +272,17 @@ function WorkspaceActionDrawer({ view, toolName }: { view: WorkspaceActionView; 
         {patch ? (
           <div>
             <div className="mb-1 text-xs text-muted-foreground">{t("workspace_tool.patch")}</div>
-            <pre className="max-h-64 overflow-auto whitespace-pre rounded-md border bg-muted/20 p-3 font-mono text-xs">
-              {patch}
-            </pre>
+            <div className="group/drawer-pre relative">
+              <pre className="max-h-64 overflow-auto whitespace-pre rounded-md border bg-muted/20 p-3 font-mono text-xs">
+                {patch}
+              </pre>
+              <CopyButton
+                text={patch}
+                label={t("tool_part.copy")}
+                copiedLabel={t("tool_part.copied")}
+                className="absolute right-1.5 top-1.5 bg-background/80 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/drawer-pre:opacity-100"
+              />
+            </div>
           </div>
         ) : null}
       </div>
@@ -268,8 +307,23 @@ function OpenDetailsButton({ view }: { view: WorkspaceActionView }) {
   );
 }
 
+/** 耗时徽章(域3-1):与思维链"思考了 xx 秒"同一枚小字徽章,tabular-nums 防数字抖动。 */
+export function ElapsedBadge({ seconds, running }: { seconds: number; running: boolean }) {
+  const { t } = useTranslation("message");
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1.5 py-0.5 font-mono text-mini tabular-nums",
+        running ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+      )}
+    >
+      {t(running ? "message_parts.elapsed_running_seconds" : "message_parts.elapsed_done_seconds", { seconds })}
+    </span>
+  );
+}
+
 function ActionStatBadges({ view }: { view: WorkspaceActionView }) {
-  const { t, stats, writtenBytes } = view;
+  const { t, stats, writtenBytes, elapsedSeconds, running } = view;
   return (
     <>
       {stats ? (
@@ -279,10 +333,11 @@ function ActionStatBadges({ view }: { view: WorkspaceActionView }) {
         </span>
       ) : null}
       {writtenBytes !== null ? (
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-mini text-muted-foreground">
           {t("workspace_tool.bytes", { bytes: writtenBytes })}
         </span>
       ) : null}
+      {elapsedSeconds !== null ? <ElapsedBadge seconds={elapsedSeconds} running={running} /> : null}
     </>
   );
 }
@@ -291,8 +346,18 @@ function ActionStatBadges({ view }: { view: WorkspaceActionView }) {
 
 const WRITE_PREVIEW_LINES = 12;
 
-export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loading?: boolean }) {
-  const view = useWorkspaceActionView(tool, loading);
+export function WorkspaceActionCard({
+  tool,
+  loading,
+  messageCreatedAt,
+  messageFinishedAt,
+}: {
+  tool: UIToolPart;
+  loading?: boolean;
+  messageCreatedAt?: string;
+  messageFinishedAt?: string | null;
+}) {
+  const view = useWorkspaceActionView(tool, loading, messageCreatedAt, messageFinishedAt);
   const { t, model, running, expanded, setUserExpanded, title, TitleIcon } = view;
 
   const statusIcon = running ? (
@@ -319,7 +384,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
             {model.kind === "bash" ? (
               <>
                 {t("workspace_tool.bash_prefix")}
-                <span className="font-mono text-[0.8125rem] font-normal">{title}</span>
+                <span className="font-mono text-compact font-normal">{title}</span>
               </>
             ) : (
               title
@@ -329,7 +394,7 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
           {model.exitCode !== null ? (
             <span
               className={cn(
-                "shrink-0 rounded px-1.5 py-0.5 font-mono text-[0.6875rem]",
+                "shrink-0 rounded px-1.5 py-0.5 font-mono text-mini",
                 model.exitCode === 0
                   ? "bg-muted text-muted-foreground"
                   : "bg-[oklch(0.95_0.05_25)] text-[oklch(0.5_0.14_25)] dark:bg-[oklch(0.3_0.05_25)] dark:text-[oklch(0.75_0.14_25)]",
@@ -367,15 +432,19 @@ export function WorkspaceActionCard({ tool, loading }: { tool: UIToolPart; loadi
 export function WorkspaceActionStep({
   tool,
   loading,
+  messageCreatedAt,
+  messageFinishedAt,
   isFirst,
   isLast,
 }: {
   tool: UIToolPart;
   loading?: boolean;
+  messageCreatedAt?: string;
+  messageFinishedAt?: string | null;
   isFirst?: boolean;
   isLast?: boolean;
 }) {
-  const view = useWorkspaceActionView(tool, loading);
+  const view = useWorkspaceActionView(tool, loading, messageCreatedAt, messageFinishedAt);
   const { t, model, running, expanded, setUserExpanded, title, TitleIcon } = view;
 
   const hasBody =
@@ -404,7 +473,7 @@ export function WorkspaceActionStep({
           model.kind === "bash" ? (
             <span className="text-foreground line-clamp-2 text-sm font-medium">
               {t("workspace_tool.bash_prefix")}
-              <span className="font-mono text-[0.8125rem] font-normal">{title}</span>
+              <span className="font-mono text-compact font-normal">{title}</span>
             </span>
           ) : (
             <span className="text-foreground line-clamp-2 text-sm font-medium">{title}</span>
@@ -442,7 +511,7 @@ function WriteBodyPreview({ content, t }: { content: string; t: TFunction }) {
         {preview}
       </pre>
       {hidden > 0 ? (
-        <div className="border-t border-border/40 bg-muted/30 px-3 py-1 text-[0.6875rem] text-muted-foreground">
+        <div className="border-t border-border/40 bg-muted/30 px-3 py-1 text-mini text-muted-foreground">
           {t("workspace_tool.write_preview_more", { count: hidden })}
         </div>
       ) : null}
@@ -473,25 +542,27 @@ export function WorkspaceApprovalCard({
   // "默认权限"档下用户只会在不安全操作时见到审批卡,必须告诉他为什么被拦。
   const pendingReason = tool.approvalState.type === "pending" ? (tool.approvalState.reason ?? "") : "";
 
+  // 域4-2(3E):拒绝改走应用内 Dialog,理由可空;理由回传链路(denied approvalState.reason
+  //  → 模型)不变。open 状态挂在卡片上,onConfirm 收到理由才真正下发 denied。
+  const [denyDialogOpen, setDenyDialogOpen] = React.useState(false);
+
   const handleApprove = async () => {
     if (!onToolApproval) return;
     await onToolApproval(tool.toolCallId, true, "");
   };
-  const handleDeny = async () => {
+  const handleDenyConfirm = async (reason: string) => {
     if (!onToolApproval) return;
-    const reason = window.prompt(t("tool_part.deny_reason_prompt"), "");
-    if (reason === null) return;
     await onToolApproval(tool.toolCallId, false, reason);
   };
 
   return (
     <div
-      className="my-2 overflow-hidden rounded-xl border border-amber-500/30 border-l-4 border-l-amber-500 bg-amber-500/5 shadow-sm"
+      className="my-2 overflow-hidden rounded-xl border border-warning/30 border-l-4 border-l-warning bg-warning/5 shadow-sm"
       role="region"
       aria-live="polite"
     >
       <div className="flex items-start gap-2.5 px-4 pt-3">
-        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-warning/15 text-warning">
           {kind === "bash" ? (
             <SquareTerminal className="size-4" />
           ) : kind === "read" ? (
@@ -505,11 +576,11 @@ export function WorkspaceApprovalCard({
             <span className="text-sm font-semibold text-foreground">
               {t(`workspace_tool.approval_${kind}`)}
             </span>
-            <span className="size-1.5 animate-pulse rounded-full bg-amber-500" aria-hidden />
+            <span className="size-1.5 animate-pulse rounded-full bg-warning" aria-hidden />
           </div>
           <p className="text-xs text-muted-foreground">{t("workspace_tool.approval_hint")}</p>
           {pendingReason ? (
-            <p className="break-all text-xs font-medium text-amber-600 dark:text-amber-400">
+            <p className="break-all text-xs font-medium text-warning">
               {t("workspace_tool.approval_reason", { reason: pendingReason })}
             </p>
           ) : null}
@@ -522,7 +593,12 @@ export function WorkspaceApprovalCard({
       </pre>
 
       <div className="flex justify-end gap-2 px-4 py-3">
-        <Button size="sm" variant="outline" onClick={handleDeny} disabled={!onToolApproval}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setDenyDialogOpen(true)}
+          disabled={!onToolApproval}
+        >
           <X className="mr-1.5 size-3.5" />
           {t("tool_part.pending_deny")}
         </Button>
@@ -531,6 +607,12 @@ export function WorkspaceApprovalCard({
           {t("tool_part.pending_approve")}
         </Button>
       </div>
+
+      <DenyReasonDialog
+        open={denyDialogOpen}
+        onOpenChange={setDenyDialogOpen}
+        onConfirm={(reason) => void handleDenyConfirm(reason)}
+      />
     </div>
   );
 }

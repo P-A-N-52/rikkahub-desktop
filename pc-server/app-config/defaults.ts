@@ -66,7 +66,10 @@ export function defaultSettings(): Settings {
       codeBlockAutoWrap: false,
       codeBlockAutoCollapse: false,
       showLineNumbers: false,
-      sendOnEnter: false,
+      // 域13-2(交互审查 3C):默认 Enter 发送(对齐主流桌面 IM)。normalizeState 用
+      // { ...defaults, ...persisted } 合并——存量用户显式保存过的 false 原样保留,
+      // 本默认值只影响新装机与缺省字段回填。前端 chat-input 的 ?? true 兜底同向。
+      sendOnEnter: true,
       enableAutoScroll: true,
       fontSizeRatio: 1,
       // 界面字号缩放(建议 0.85–1.20)。null = 不缩放,根字号保持浏览器默认 16px。PC-only,

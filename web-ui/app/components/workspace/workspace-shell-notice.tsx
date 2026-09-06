@@ -72,8 +72,8 @@ export function WorkspaceShellNotice() {
   };
 
   return (
-    <div className="mx-auto mb-4 max-w-md rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left">
-      <div className="flex items-center gap-2 font-medium text-amber-600 text-xs dark:text-amber-400">
+    <div className="mx-auto mb-4 max-w-md rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-left">
+      <div className="flex items-center gap-2 font-medium text-warning text-xs">
         <SquareTerminal className="size-3.5 shrink-0" strokeWidth={2} />
         {t("workspace.shell.title")}
       </div>

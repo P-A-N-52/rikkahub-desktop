@@ -76,6 +76,7 @@
       "start": "Start compression",
       "success": "Conversation history compressed",
       "workspace_success": "Engine working memory compacted",
+      "aborted": "Compression stopped — your context is unchanged",
       "failed": "Compression failed"
     },
     "engine_status": {
@@ -86,6 +87,13 @@
       "elapsed_seconds": "Elapsed {{seconds}}s",
       "elapsed_minutes": "Elapsed {{minutes}}m {{seconds}}s",
       "interrupt": "Interrupt (Esc)"
+    },
+    "awaiting_approval": {
+      "status": "Awaiting approval",
+      "elapsed_seconds": "Waiting {{seconds}}s",
+      "elapsed_minutes": "Waiting {{minutes}}m {{seconds}}s",
+      "notification_title": "AI is waiting for your approval",
+      "notification_body": "\"{{summary}}\" awaits your approval"
     },
     "translate": {
       "dialog_title": "Select translation language",

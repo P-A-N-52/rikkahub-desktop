@@ -26,6 +26,8 @@ import { normalizeImageForModelUpload } from "~/lib/image-normalize";
 import api from "~/services/api";
 import { useSettingsStore } from "~/stores/app-store";
 import { confirmDialog } from "~/stores/confirm-store";
+import { useElapsedSeconds } from "~/hooks/use-elapsed-since";
+import { serverNow } from "~/lib/utils";
 import type { ProviderModel } from "~/types";
 import i18n from "~/i18n";
 
@@ -80,6 +82,48 @@ function modelLabel(model: ProviderModel, fallback: string) {
   return model?.displayName || model?.modelId || fallback;
 }
 
+/** 域10-2:生成中的占位卡——骨架 + 已等待秒数(每秒 tick)+ 取消按钮。
+ *  从骨架屏里直接取消,比去输入区找按钮更符合"等待中的注意力就在这里"。 */
+function GeneratingPlaceholderCard({
+  startedAt,
+  onCancel,
+}: {
+  startedAt: string;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const elapsedSeconds = useElapsedSeconds(startedAt, null);
+  return (
+    <article className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="relative">
+        <Skeleton className="aspect-square w-full rounded-none" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          {elapsedSeconds !== null ? (
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              {t("image_page.waiting_seconds", { seconds: elapsedSeconds })}
+            </span>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={onCancel}
+            className="mt-1"
+          >
+            <X className="size-3.5" />
+            {t("image_page.cancel")}
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-2 p-3">
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-3 w-1/2" />
+      </div>
+    </article>
+  );
+}
+
 export default function ImagesPage() {
   const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.settings);
@@ -90,6 +134,9 @@ export default function ImagesPage() {
   const [referenceImages, setReferenceImages] = React.useState<UploadedFile[]>([]);
   const [images, setImages] = React.useState<GeneratedImage[]>([]);
   const [generating, setGenerating] = React.useState(false);
+  // 域10-2:取消与耗时。startedAt 用服务器对齐时钟(serverNow),与全站耗时口径一致。
+  const [generatingStartedAt, setGeneratingStartedAt] = React.useState<string | null>(null);
+  const abortRef = React.useRef<AbortController | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
 
   const imageModels = React.useMemo<ImageModelOption[]>(() => {
@@ -180,6 +227,9 @@ export default function ImagesPage() {
       toast.error(t("image_page.edit_blocked_msg"));
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setGeneratingStartedAt(new Date(serverNow()).toISOString());
     setGenerating(true);
     try {
       const response = await api.post<{ images: GeneratedImage[] }>(
@@ -190,16 +240,27 @@ export default function ImagesPage() {
           aspectRatio,
           referenceFileIds: referenceImages.map((image) => image.id),
         },
-        { timeout: false },
+        { timeout: false, signal: controller.signal },
       );
       setImages((current) => [...response.images, ...current]);
       toast.success(
         referenceImages.length ? t("image_page.edit_done") : t("image_page.generate_done"),
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("image_page.generate_failed"));
+      // 主动取消:ky 抛 AbortError / 后端回 499;其余错误照常 toast。root.tsx 的
+      // unhandledrejection 已忽略 AbortError,这里再 toast.info 告诉用户取消了。
+      const isAbort =
+        (error instanceof DOMException && error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError");
+      if (isAbort || controller.signal.aborted) {
+        toast.info(t("image_page.cancelled"));
+      } else {
+        toast.error(error instanceof Error ? error.message : t("image_page.generate_failed"));
+      }
     } finally {
+      abortRef.current = null;
       setGenerating(false);
+      setGeneratingStartedAt(null);
     }
   }, [
     aspectRatio,
@@ -210,6 +271,10 @@ export default function ImagesPage() {
     settings?.imageGenerationModelId,
     t,
   ]);
+
+  const cancelGenerate = React.useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
@@ -398,32 +463,33 @@ export default function ImagesPage() {
                 </div>
                 <Button
                   type="button"
-                  onClick={() => void generate()}
-                  disabled={generating || !settings?.imageGenerationModelId || editBlocked}
+                  onClick={() => (generating ? cancelGenerate() : void generate())}
+                  variant={generating ? "outline" : "default"}
+                  disabled={!generating && (!settings?.imageGenerationModelId || editBlocked)}
                 >
                   {generating ? (
-                    <Loader2 className="size-4 animate-spin" />
+                    <X className="size-4" />
                   ) : (
                     <Plus className="size-4" />
                   )}
-                  {referenceImages.length ? t("image_page.edit") : t("image_page.generate")}
+                  {generating
+                    ? t("image_page.cancel")
+                    : referenceImages.length
+                      ? t("image_page.edit")
+                      : t("image_page.generate")}
                 </Button>
               </div>
             </section>
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {generating &&
+                generatingStartedAt &&
                 Array.from({ length: Number(numberOfImages) }).map((_, index) => (
-                  <article
+                  <GeneratingPlaceholderCard
                     key={`skeleton-${index}`}
-                    className="overflow-hidden rounded-xl border bg-card shadow-sm"
-                  >
-                    <Skeleton className="aspect-square w-full rounded-none" />
-                    <div className="space-y-2 p-3">
-                      <Skeleton className="h-4 w-3/4" />
-                      <Skeleton className="h-3 w-1/2" />
-                    </div>
-                  </article>
+                    startedAt={generatingStartedAt}
+                    onCancel={cancelGenerate}
+                  />
                 ))}
               {images.map((image, index) => (
                 <motion.article

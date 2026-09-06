@@ -5,7 +5,8 @@ import { useTranslation } from "react-i18next";
 import Markdown from "~/components/markdown/markdown";
 import type { ReasoningPart as UIReasoningPart } from "~/types";
 import Think from "~/assets/think.svg?react";
-import { extractThinkingTitle, serverNow } from "~/lib/utils";
+import { extractThinkingTitle } from "~/lib/utils";
+import { useElapsedSeconds } from "~/hooks/use-elapsed-since";
 
 import { useSettingsStore } from "~/stores";
 
@@ -21,22 +22,6 @@ enum ReasoningCardState {
   Collapsed = "collapsed",
   Preview = "preview",
   Expanded = "expanded",
-}
-
-function formatDuration(createdAt?: string, finishedAt?: string | null): number | null {
-  if (!createdAt) return null;
-
-  const start = Date.parse(createdAt);
-  if (Number.isNaN(start)) return null;
-
-  const end = finishedAt ? Date.parse(finishedAt) : serverNow();
-  if (Number.isNaN(end)) return null;
-
-  const seconds = Math.max((end - start) / 1000, 0);
-  if (seconds <= 0) return null;
-
-  // 精确到个位即可(用户反馈:一位小数没必要);不足 1 秒进位显示 1 秒。
-  return Math.max(1, Math.round(seconds));
 }
 
 export function ReasoningStepPart({
@@ -89,20 +74,8 @@ export function ReasoningStepPart({
     setExpandState(nextExpanded ? ReasoningCardState.Expanded : ReasoningCardState.Collapsed);
   };
 
-  const [duration, setDuration] = React.useState<number | null>(() =>
-    formatDuration(reasoning.createdAt, reasoning.finishedAt),
-  );
-
-  React.useEffect(() => {
-    setDuration(formatDuration(reasoning.createdAt, reasoning.finishedAt));
-    if (!loading) return;
-    // 500ms 刷新足够(显示精度 1s);原 100ms(10fps)会让推理消息持续
-    // 高频重渲染 + Markdown 重解析,是思考过程卡顿的放大器。
-    const id = setInterval(() => {
-      setDuration(formatDuration(reasoning.createdAt, reasoning.finishedAt));
-    }, 500);
-    return () => clearInterval(id);
-  }, [loading, reasoning.createdAt, reasoning.finishedAt]);
+  // 耗时口径与工具卡共用(useElapsedSeconds):不足 1 秒静默、定格进位显示 1 秒、1s tick。
+  const duration = useElapsedSeconds(reasoning.createdAt, reasoning.finishedAt);
 
   const preview = expandState === ReasoningCardState.Preview;
 

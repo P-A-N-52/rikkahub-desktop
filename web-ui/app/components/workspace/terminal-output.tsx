@@ -1,12 +1,14 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { CopyButton } from "~/components/ui/copy-button";
 import { cn } from "~/lib/utils";
 
 // 终端输出块(工作区 M2-3,方案 §4.3/§4.5):bash 动作卡的流式输出区。
 // 有界渲染纪律:流式期间只 slice 尾部 MAX_VISIBLE_LINES 行进普通 <pre>——
 // 不进 Markdown/shiki 管线(终端输出无语法可言),每帧渲染成本与累计输出解耦。
 // 限高+内滚动+跟随到底(用户上滚则暂停跟随,回底自动恢复);全量看详情抽屉。
+// 域4-5:hover 出复制按钮,复制全量原始输出(非截断后的 200 行窗口)。
 
 const MAX_VISIBLE_LINES = 200;
 
@@ -38,9 +40,9 @@ export function TerminalOutput({
   }, [visible]);
 
   return (
-    <div className={cn("min-w-0", className)}>
+    <div className={cn("group/terminal relative min-w-0", className)}>
       {hiddenLines > 0 ? (
-        <div className="border-b border-border/40 bg-muted/30 px-3 py-1 text-[0.6875rem] text-muted-foreground">
+        <div className="border-b border-border/40 bg-muted/30 px-3 py-1 text-mini text-muted-foreground">
           {t("workspace_tool.terminal_hidden_lines", { count: hiddenLines })}
         </div>
       ) : null}
@@ -57,6 +59,14 @@ export function TerminalOutput({
           {running ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/70 align-middle" /> : null}
         </pre>
       </div>
+      {text ? (
+        <CopyButton
+          text={text}
+          label={t("workspace_tool.copy_output")}
+          copiedLabel={t("workspace_tool.copied")}
+          className="absolute right-1.5 top-1.5 bg-background/80 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/terminal:opacity-100"
+        />
+      ) : null}
     </div>
   );
 }

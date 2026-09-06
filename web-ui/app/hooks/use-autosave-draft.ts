@@ -21,7 +21,21 @@
 //   (POST 后到同样复活)。与 reset 的区别:reset 面向"切换实体",脏编辑要补发;
 //   discard 面向"实体即将消失",脏编辑必须丢弃。
 // - 卸载:若仍有脏数据,尽力发一次保存(修复原样板"切页即丢"——旧实现卸载时只清定时器)。
+//
+// 域7-1(交互审查 3A)追加——失败必须外显,消灭"缺省即静默":
+// - 状态外显:控制器维护 status 机(idle → pending → saving → saved/failed)并通过
+//   onStatusChange 回调推给 React 层;<AutosaveStatus/> 据此渲染三态行
+//   (保存中/已自动保存/保存失败+点击重试)。失败保持脏,重试=saveNow。
+// - 缺省不再静默:onSaveError 省略时由 useAutosaveDraft 用 i18n 键 toast.error(
+//   settings:common.autosave_failed,可带分区名覆盖);各分区旧的 console.warn 静默档
+//   全部删除,只剩"显式自定义 toast"与"缺省统一 toast"两种形态。
 import * as React from "react";
+import { toast } from "sonner";
+
+import i18n from "~/i18n";
+
+/** 自动保存状态机:idle(未编辑) → pending(已置脏,防抖窗口内) → saving → saved/failed。 */
+export type AutosaveStatus = "idle" | "pending" | "saving" | "saved" | "failed";
 
 interface AutosaveScheduler {
   set: (fn: () => void, ms: number) => number;
@@ -31,8 +45,11 @@ interface AutosaveScheduler {
 export interface AutosaveControllerOptions {
   /** 防抖延迟,默认 700ms。 */
   delayMs?: number;
-  /** 防抖/卸载路径的保存失败出口(手动 saveNow 的失败直接抛给调用方)。 */
+  /** 防抖/卸载路径的保存失败出口(手动 saveNow 的失败直接抛给调用方)。
+   *  域7-1:省略时由 useAutosaveDraft 用统一 i18n 键 toast.error——不再有静默档。 */
   onSaveError?: (error: unknown) => void;
+  /** 状态跳变通知(域7-1 三态状态行的数据源)。 */
+  onStatusChange?: (status: AutosaveStatus) => void;
   /** 测试注入假定时器。 */
   scheduler?: AutosaveScheduler;
 }
@@ -70,6 +87,13 @@ export function createAutosaveController(
   let editedDuringSave = false;
   let timer: number | null = null;
   let inFlight: Promise<void> | null = null;
+  let status: AutosaveStatus = "idle";
+
+  const setStatus = (next: AutosaveStatus) => {
+    if (status === next) return;
+    status = next;
+    options.onStatusChange?.(next);
+  };
 
   const clearTimer = () => {
     if (timer !== null) {
@@ -81,14 +105,17 @@ export function createAutosaveController(
   const runSave = (): Promise<void> => {
     saving = true;
     editedDuringSave = false;
+    setStatus("saving");
     const attempt = (async () => {
       try {
         await save();
         // 保存窗口内有编辑 → 保持脏并立即补排下一轮(这是三件套修复的核心)。
         dirty = editedDuringSave;
         if (dirty) schedule();
+        else setStatus("saved");
       } catch (error) {
         dirty = true; // 失败保持脏:下一次编辑触发重试
+        setStatus("failed");
         throw error;
       } finally {
         saving = false;
@@ -113,6 +140,7 @@ export function createAutosaveController(
     markDirty() {
       dirty = true;
       if (saving) editedDuringSave = true;
+      if (!saving) setStatus("pending");
       schedule();
     },
     reset() {
@@ -132,6 +160,8 @@ export function createAutosaveController(
       }
       dirty = false;
       editedDuringSave = false;
+      // 切换实体后新表单尚未被编辑:状态归零,避免旧实体的 failed/saved 残影跟到新实体。
+      if (!saving) setStatus("idle");
     },
     async discard() {
       clearTimer();
@@ -145,6 +175,7 @@ export function createAutosaveController(
           // 在飞那笔的错误已由其发起路径处理
         }
       }
+      setStatus("idle");
     },
     isDirty: () => dirty,
     async saveNow({ force = false }: { force?: boolean } = {}) {
@@ -172,23 +203,49 @@ export function createAutosaveController(
 /**
  * React 包装:save/onSaveError 每次渲染取最新闭包(草稿状态不需要额外 ref),
  * 卸载时自动 flushOnTeardown。
+ *
+ * 返回值在控制器之上多带一个响应式 `status`(AutosaveStatus),由 onStatusChange
+ * 同步进 React state;配 `<AutosaveStatus/>` 渲染三态行(域7-1)。
+ * `errorLabel`(分区名,如"MCP"/"世界书")仅用于缺省失败 toast 的文案定位;
+ * 调用方传了 onSaveError 则完全接管失败呈现,缺省 toast 不再触发。
  */
 export function useAutosaveDraft(
   save: () => Promise<void>,
-  options?: Pick<AutosaveControllerOptions, "delayMs" | "onSaveError">,
-): AutosaveController {
+  options?: Pick<AutosaveControllerOptions, "delayMs" | "onSaveError"> & {
+    errorLabel?: string;
+  },
+): AutosaveController & { status: AutosaveStatus } {
   const saveRef = React.useRef(save);
   saveRef.current = save;
   const onSaveErrorRef = React.useRef(options?.onSaveError);
   onSaveErrorRef.current = options?.onSaveError;
+  const errorLabelRef = React.useRef(options?.errorLabel);
+  errorLabelRef.current = options?.errorLabel;
+  const [status, setStatus] = React.useState<AutosaveStatus>("idle");
   const [controller] = React.useState(() =>
     createAutosaveController(() => saveRef.current(), {
       delayMs: options?.delayMs,
-      onSaveError: (error) => onSaveErrorRef.current?.(error),
+      onSaveError: (error) => {
+        // 域7-1:缺省即外显——调用方未接管失败呈现时,统一 toast(分区名定位)。
+        // 显式 onSaveError 优先(分区要自定义文案/附带动作时)。
+        if (onSaveErrorRef.current) {
+          onSaveErrorRef.current(error);
+          return;
+        }
+        const label = errorLabelRef.current;
+        const detail = error instanceof Error ? error.message : "";
+        toast.error(
+          label
+            ? i18n.t("settings:common.autosave_failed_named", { name: label })
+            : i18n.t("settings:common.autosave_failed"),
+          detail ? { description: detail } : undefined,
+        );
+      },
+      onStatusChange: setStatus,
     }),
   );
   React.useEffect(() => {
     return () => controller.flushOnTeardown();
   }, [controller]);
-  return controller;
+  return React.useMemo(() => Object.assign(controller, { status }), [controller, status]);
 }

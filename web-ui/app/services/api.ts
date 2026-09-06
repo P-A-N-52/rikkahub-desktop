@@ -1,4 +1,4 @@
-import ky, { type Options, HTTPError } from "ky";
+import ky, { type Options, HTTPError, TimeoutError } from "ky";
 
 interface ErrorResponse {
   error: string;
@@ -92,6 +92,16 @@ const kyInstance = ky.create({
   },
 });
 
+/** 本地合成(非服务端下发)的错误码:与 CodedError 共用 errors.* i18n 通道。 */
+export const ERROR_CODE_NETWORK_UNREACHABLE = "network_unreachable";
+
+/** 网络层失败统一收口:ky 对连接失败/请求中断抛裸 TypeError("Failed to fetch" 等
+ *  浏览器黑话),这里换成带码 ApiError,前端按码出人话(域6-1)。 */
+function isNetworkLayerError(error: unknown): boolean {
+  if (error instanceof TimeoutError) return true;
+  return error instanceof TypeError;
+}
+
 async function handleError(error: unknown): Promise<never> {
   if (error instanceof HTTPError) {
     const { response } = error;
@@ -114,6 +124,9 @@ async function handleError(error: unknown): Promise<never> {
       void maybeDispatchStartupPending();
     }
     throw new ApiError(message, code, errorData?.errorCode);
+  }
+  if (isNetworkLayerError(error)) {
+    throw new ApiError(ERROR_CODE_NETWORK_UNREACHABLE, 0, ERROR_CODE_NETWORK_UNREACHABLE);
   }
   throw error;
 }
@@ -284,7 +297,10 @@ const api = {
         }
         reject(new ApiError(message, code, errorCode));
       };
-      xhr.onerror = () => reject(new ApiError("Network error", 0));
+      xhr.onerror = () =>
+        reject(new ApiError(ERROR_CODE_NETWORK_UNREACHABLE, 0, ERROR_CODE_NETWORK_UNREACHABLE));
+      xhr.ontimeout = () =>
+        reject(new ApiError(ERROR_CODE_NETWORK_UNREACHABLE, 0, ERROR_CODE_NETWORK_UNREACHABLE));
       xhr.send(formData);
     });
   },
@@ -335,6 +351,23 @@ export async function requestWebAuthToken(password: string): Promise<WebAuthToke
  */
 export async function openCodePreviewFile(content: string, language: string): Promise<void> {
   await api.post("code-preview/open", { content, language });
+}
+
+/**
+ * 域10-1(交互审查 4A):桌面壳导出落盘。后端把内容写进 dataDir/exports/,返回绝对路径,
+ * 前端 toast 携带"在文件夹中显示"按钮调 revealExportFile 定位。仅限本机直连(后端回环闸)。
+ * 浏览器部署维持下载通道,不走这里。
+ */
+export async function saveExportFile(
+  filename: string,
+  content: string,
+  encoding?: "base64",
+): Promise<{ path: string; filename: string }> {
+  return api.post<{ path: string; filename: string }>("exports/save", { filename, content, encoding });
+}
+
+export async function revealExportFile(path: string): Promise<void> {
+  await api.post("exports/reveal", { path });
 }
 
 export interface SSEEvent<T> {

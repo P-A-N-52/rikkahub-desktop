@@ -36,6 +36,24 @@ import type { ConversationListDto } from "~/types";
 
 const EMPTY_TABS: string[] = [];
 
+/** 域4-1(交互审查 2A):标签页审批等待点。琥珀脉冲 = 有工具审批挂起等待用户裁决;
+    生成中但非等待态不显示(避免与激活态高亮叠加成常驻噪音)。独立组件 = 窄选择器
+    只订阅本标签会话的瞬态状态,其它会话的 engine-status 帧不触发本组件重渲染。 */
+function TabApprovalDot({ conversationId }: { conversationId: string }) {
+  const { t } = useTranslation();
+  const awaiting = useConversationStore(
+    (state) => state.engineStatus[conversationId]?.phase === "awaiting_approval",
+  );
+  if (!awaiting) return null;
+  return (
+    <span
+      className="inline-block size-2 shrink-0 animate-pulse rounded-full bg-warning"
+      aria-label={t("conversation_sidebar.awaiting_approval")}
+      title={t("conversation_sidebar.awaiting_approval")}
+    />
+  );
+}
+
 /** 悬停卡内容(H4):标题 + 本会话累计缓存命中率(专题11-P1-3 的口径:已加载消息窗口内
     选中分支的 cached/prompt 总和;本地估算 usage 无缓存信息,计入会稀释命中率,跳过;
     厂商不回报命中数据时整行隐藏)。独立组件 = Tooltip 打开才挂载、才订阅 store。 */
@@ -164,7 +182,7 @@ export function ConversationTabStrip({
                       if (node && active) node.scrollIntoView({ inline: "nearest", block: "nearest" });
                     }}
                     className={cn(
-                      "group relative flex h-[26px] min-w-14 shrink basis-44 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-[0.8125rem] transition-colors duration-150",
+                      "group relative flex h-[26px] min-w-14 shrink basis-44 cursor-pointer select-none items-center gap-1 rounded-lg px-2.5 text-compact transition-colors duration-150",
                       active
                         ? "bg-[var(--ds-on-surface)] font-medium text-[var(--ds-text-primary)] shadow-[inset_0_0_0_0.5px_var(--ds-divider)]"
                         : "text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
@@ -185,6 +203,7 @@ export function ConversationTabStrip({
                     onDragEnd={() => useTabDragStore.getState().setDragging(null)}
                   >
                     <span className="min-w-0 truncate">{title}</span>
+                    <TabApprovalDot conversationId={conversationId} />
                     <span
                       role="button"
                       aria-label={t("workspace.tabs.close")}

@@ -360,7 +360,7 @@ export function SearchPickerButtonImpl({ disabled = false, className }: SearchPi
                               <span
                                 className={cn(
                                   "size-2 shrink-0 rounded-full",
-                                  passed ? "bg-emerald-500" : "bg-muted-foreground/40",
+                                  passed ? "bg-success" : "bg-muted-foreground/40",
                                 )}
                                 title={
                                   passed ? (isPreset ? "预置可用" : "已通过测试") : "未通过测试"

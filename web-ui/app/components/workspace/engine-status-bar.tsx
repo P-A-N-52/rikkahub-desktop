@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
-import { FoldVertical, Loader2 } from "lucide-react";
+import { FoldVertical, Loader2, ShieldAlert } from "lucide-react";
 
 import { useConversationEngineStatus } from "~/stores/conversation-store";
 import { useCompressStore, useConversationCompressing } from "~/stores/compress-store";
@@ -24,8 +24,13 @@ function useElapsedSeconds(startedAt: number | undefined): number | null {
 export function EngineStatusBar({ conversationId }: { conversationId: string | null }) {
   const { t } = useTranslation("page");
   const status = useConversationEngineStatus(conversationId);
-  // 耗时计时只在压缩相生效(重试相是短暂交替态,计时无意义)。hook 须在条件返回之前调用。
-  const elapsed = useElapsedSeconds(status?.phase === "compacting" ? status.startedAt : undefined);
+  // 耗时计时的生效相:压缩(长任务)+ 域4-1 审批等待(用户离席回来要看等了多久)。
+  // 重试相是短暂交替态,计时无意义。hook 须在条件返回之前调用。
+  const elapsed = useElapsedSeconds(
+    status?.phase === "compacting" || status?.phase === "awaiting_approval"
+      ? status.startedAt
+      : undefined,
+  );
   // 可中止 = 压缩相 && 本端持有取消句柄(手动 /compact 或压缩框发起,compress-store 有
   // AbortController)。pi 自动压缩(threshold/overflow)发生在生成流内、无本端句柄,
   // 天然不显示中止钮也不响应 Esc——自动维护动作不该被误按打断。
@@ -54,25 +59,29 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
           attempt: status.attempt ?? 1,
           max: status.maxAttempts ?? 1,
         })
-      : status.reason === "threshold" || status.reason === "overflow"
-        ? t("conversations.engine_status.compacting_auto")
-        : status.progress
-          ? t("conversations.engine_status.compacting_progress", {
-              current: status.progress.current,
-              total: status.progress.total,
-            })
-          : t("conversations.engine_status.compacting");
+      : status.phase === "awaiting_approval"
+        ? t("conversations.awaiting_approval.status")
+        : status.reason === "threshold" || status.reason === "overflow"
+          ? t("conversations.engine_status.compacting_auto")
+          : status.progress
+            ? t("conversations.engine_status.compacting_progress", {
+                current: status.progress.current,
+                total: status.progress.total,
+              })
+            : t("conversations.engine_status.compacting");
 
   // "已处理 xx秒"(Codex 截图):秒级实时递增,起点服务端权威(切页/重连计时连续)。
+  // 审批相措辞换"已等待"(用户离席回来读的是等待时长,不是处理时长)。
+  const ns = status.phase === "awaiting_approval" ? "awaiting_approval" : "engine_status";
   const elapsedText =
     elapsed === null
       ? null
       : elapsed >= 60
-        ? t("conversations.engine_status.elapsed_minutes", {
+        ? t(`conversations.${ns}.elapsed_minutes`, {
             minutes: Math.floor(elapsed / 60),
             seconds: elapsed % 60,
           })
-        : t("conversations.engine_status.elapsed_seconds", { seconds: elapsed });
+        : t(`conversations.${ns}.elapsed_seconds`, { seconds: elapsed });
 
   // Codex 式行内状态(内测拍板):左对齐、无边框背景、小图标+灰字,与消息列同宽对齐;
   // 压缩相用折叠图标+文字呼吸(pulse),重试相保留 spinner(旋转更贴"重试中"语义)。
@@ -80,6 +89,8 @@ export function EngineStatusBar({ conversationId }: { conversationId: string | n
     <div className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 px-4 text-muted-foreground text-xs">
       {status.phase === "retrying" ? (
         <Loader2 className="size-3.5 shrink-0 animate-spin" />
+      ) : status.phase === "awaiting_approval" ? (
+        <ShieldAlert className="size-3.5 shrink-0 text-warning" />
       ) : (
         <FoldVertical className="size-3.5 shrink-0" />
       )}

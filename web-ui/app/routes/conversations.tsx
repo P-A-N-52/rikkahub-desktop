@@ -46,9 +46,9 @@ import { useCurrentAssistant } from "~/hooks/use-current-assistant";
 import type { SlashCommandDto } from "~/lib/slash-commands";
 import {
   convertConversationToMarkdown,
-  downloadMarkdown,
   safeMarkdownFilename,
 } from "~/lib/export-markdown";
+import { exportTextFile } from "~/lib/export-file";
 import { refreshSettingsStore } from "~/lib/settings-sync";
 import { cn } from "~/lib/utils";
 import { isCompactionBoundaryMessage } from "~/lib/compaction";
@@ -540,7 +540,7 @@ interface ChatInputAreaProps {
   onExportConversation?: (includeReasoning: boolean) => void;
   onCompressConversation?: () => void;
   slashCommands?: SlashCommandDto[];
-  onSlashCommand?: (name: string, argument: string) => Promise<void> | void;
+  onSlashCommand?: (name: string, argument: string) => Promise<boolean | void> | boolean | void;
   getOptimizeContext?: () => string;
 }
 
@@ -1616,6 +1616,21 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   );
 
   const handleSend = React.useCallback(async () => {
+    // 域9-1(3B)防御层:发送门禁主判定在 chat-input(按钮灰+发送键短路),这里再兜一层
+    // ——编辑会话/快捷键/程序化触发等绕开按钮的路径,也不会把"解析中"的附件发出去。
+    const draftPartsForGate = getCurrentSubmitParts();
+    const parsingIds = useChatInputStore.getState().parsingFileIds;
+    if (
+      parsingIds.length > 0 &&
+      draftPartsForGate.some((part) => {
+        const fileId = part.metadata?.fileId;
+        return typeof fileId === "number" && parsingIds.includes(fileId);
+      })
+    ) {
+      toast.info(t("input:chat.parsing_send_blocked"));
+      return;
+    }
+
     if (!editingSession) {
       await handleSubmit();
       refreshList();
@@ -1624,7 +1639,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
 
     if (!activeId) return;
 
-    const draftParts = getCurrentSubmitParts();
+    const draftParts = draftPartsForGate;
     if (draftParts.length === 0) return;
 
     const nextParts = buildEditedParts(editingSession, draftParts);
@@ -1643,6 +1658,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     getCurrentSubmitParts,
     handleSubmit,
     refreshList,
+    t,
   ]);
 
   const handleCompressConversation = React.useCallback(() => {
@@ -1690,21 +1706,31 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
       const controller = new AbortController();
       useCompressStore.getState().begin(conversationId, controller);
       try {
-        await api.post<{ status: string }>(`conversations/${conversationId}/compress`, params, {
+        // status 契约:compressed / aborted(服务端收到取消后静默吞掉 AbortError 的确认,
+        // 不带成功文案)。客户端 abort 路径抛 AbortError;服务端已停止但 fetch 尚未断时
+        // 走这里——同一轻量确认文案,不弹成功。
+        const result = await api.post<{ status: string }>(`conversations/${conversationId}/compress`, params, {
           timeout: false,
           signal: controller.signal,
         });
         setCompressDialogOpen(false);
-        refreshConversation(conversationId);
-        refreshList();
-        toast.success(
-          isWorkspaceConversation
-            ? t("conversations.compress.workspace_success")
-            : t("conversations.compress.success"),
-        );
+        if (result.status === "aborted") {
+          toast.info(t("conversations.compress.aborted"));
+        } else {
+          refreshConversation(conversationId);
+          refreshList();
+          toast.success(
+            isWorkspaceConversation
+              ? t("conversations.compress.workspace_success")
+              : t("conversations.compress.success"),
+          );
+        }
       } catch (error) {
-        // R7-4:用户主动取消不报错(取消不是失败)。
-        if (!controller.signal.aborted) {
+        // R7-4:用户主动取消不报错(取消不是失败)——给一条轻量确认,明确上下文未受影响
+        // (内测反馈:中止后毫无反应,用户不确定压缩到底做没做)。
+        if (controller.signal.aborted) {
+          toast.info(t("conversations.compress.aborted"));
+        } else {
           // 带业务码的错误按码查 i18n 文案(服务端 CodedError 通道;查不到用后端 message 兜底)。
           const coded =
             error instanceof ApiError && error.errorCode
@@ -1731,13 +1757,14 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
 
   // ── 斜杠指令:清单(服务端权威)+ 执行分发表(实现池前端部分;方案 §3.4) ──────
   const availableSlashCommands = useAvailableCommands(activeId);
-  const slashExecutors = React.useMemo<Record<string, (argument: string) => Promise<void> | void>>(
+  // 域5-1(3F):执行器返回 false=未受理(如压缩占用),chat-input 据此回填原文;正常受理返回 void。
+  const slashExecutors: Record<string, (argument: string) => Promise<boolean | void>> = React.useMemo(
     () => ({
-      // /compact [额外指示] → 既有压缩链路;进行中再触发提示占用(复用现有互斥)。
-      compact: async (argument) => {
+      // /compact [额外指示] → 既有压缩链路;进行中再触发提示占用(复用现有互斥)并告知未受理。
+      compact: async (argument: string) => {
         if (compressing) {
           toast.error(t("conversations.compress.busy"));
-          return;
+          return false;
         }
         await performCompress({ additionalPrompt: argument }, "/compact ");
       },
@@ -1755,7 +1782,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   }, [availableSlashCommands, slashExecutors]);
   const handleSlashCommand = React.useCallback(
     async (name: string, argument: string) => {
-      await slashExecutors[name]?.(argument);
+      return await slashExecutors[name]?.(argument);
     },
     [slashExecutors],
   );
@@ -1926,7 +1953,8 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
                     }
                     const content = await convertConversationToMarkdown(detail, includeReasoning);
                     const filename = safeMarkdownFilename(detail.title || "conversation");
-                    downloadMarkdown(content, filename);
+                    // 域10-1:桌面壳落盘 + 定位;浏览器维持下载(编排层分流)。
+                    await exportTextFile(content, filename);
                   }
                 : undefined
             }

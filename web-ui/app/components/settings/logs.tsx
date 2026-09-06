@@ -110,7 +110,7 @@ function RequestLogRow({ log, onClick }: { log: RequestLog; onClick: () => void 
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-semibold text-primary">{log.method ?? "POST"}</span>
-        <span className={cn("text-xs font-medium", log.ok ? "text-emerald-600" : "text-destructive")}>
+        <span className={cn("text-xs font-medium", log.ok ? "text-success" : "text-destructive")}>
           {log.status}
         </span>
       </div>
@@ -130,7 +130,7 @@ function RequestLogRow({ log, onClick }: { log: RequestLog; onClick: () => void 
 
 const SEVERITY_STYLE: Record<AppErrorDto["severity"], string> = {
   error: "bg-destructive/10 text-destructive",
-  warn: "bg-amber-500/10 text-amber-600",
+  warn: "bg-warning/10 text-warning",
   info: "bg-muted text-muted-foreground",
 };
 
@@ -220,7 +220,7 @@ function LogDetailDialog({ log, onClose }: { log: RequestLog | null; onClose: ()
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
               <DetailField label={t("settings:logs.field_time")} value={new Date(log.at).toLocaleString()} />
               <DetailField label={t("settings:logs.field_method")} value={log.method ?? "-"} />
-              <DetailField label={t("settings:logs.field_status")} value={String(log.status)} valueClass={log.ok ? "text-emerald-600" : "text-destructive"} />
+              <DetailField label={t("settings:logs.field_status")} value={String(log.status)} valueClass={log.ok ? "text-success" : "text-destructive"} />
               <DetailField label={t("settings:logs.field_duration")} value={`${log.durationMs ?? 0}ms`} />
               <DetailField label={t("settings:logs.field_provider")} value={log.providerName} />
               <DetailField label={t("settings:logs.field_kind")} value={log.kind ?? "-"} />

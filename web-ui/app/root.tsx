@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import { GlobalConfirmDialog } from "./components/global-confirm-dialog";
 import { useAppErrorsStore } from "./stores/app-errors-store";
 import { startUsageActivityBeacon } from "./services/usage-activity";
+import { useApprovalNotifications } from "./lib/approval-notification";
 import api from "~/services/api";
 
 const queryClient = new QueryClient();
@@ -190,6 +191,8 @@ function AppContent() {
   useSettingsSubscription();
   useMemorySubscription();
   useAppErrorsSubscription();
+  // 域4-1(交互审查 2A):审批等待的桌面通知(窗口不可见时),琥珀点外显在侧栏/标签条。
+  useApprovalNotifications();
   useHotkeys();
   const displaySetting = useSettingsStore((state) => state.settings?.displaySetting);
   // 专题8:界面语言权威在后端 displaySetting.language(localStorage 按 origin 隔离,

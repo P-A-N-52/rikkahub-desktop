@@ -68,11 +68,17 @@ function buildGeneralTool(
       const args = (params ?? {}) as Record<string, JsonValue>;
       const argsJson = JSON.stringify(args);
       const approval = initialApprovalState(name, ctx.assistant, ctx.conversation, argsJson);
+      // 域4-1:通用/MCP 工具审批的摘要——优先 url/query 等可读字段,退化工具名。
+      const approvalTarget = args.url ?? args.query ?? args.content ?? args.path ?? args.command;
+      const approvalSummary =
+        typeof approvalTarget === "string" && approvalTarget.trim() ? approvalTarget.trim().slice(0, 120) : undefined;
       await gateToolApproval(approval, {
         conversationId: ctx.conversation.id,
         toolCallId,
         sink: ctx.sink,
         signal,
+        toolName: name,
+        ...(approvalSummary ? { summary: approvalSummary } : {}),
       });
       const raw = await executeToolCall(
         { id: toolCallId, function: { name, arguments: argsJson } },

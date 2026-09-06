@@ -101,11 +101,16 @@ function buildTool(
       // 生命周期走共享状态机;返回 true = 用户对 pending 卡显式批准,是危险命令
       // 拦截的知情同意放行门(workspace/runtime.ts),仅此路径可置 true。 ——
       const approval = initialApprovalState(name, ctx.assistant, ctx.conversation, JSON.stringify(args));
+      // 域4-1:通知摘要取审批对象本体(bash=command,write/edit/read=path),截断防爆通知体。
+      const approvalTarget = args.command ?? args.path;
+      const approvalSummary = typeof approvalTarget === "string" && approvalTarget.trim() ? approvalTarget.trim().slice(0, 120) : undefined;
       const userApproved = await gateToolApproval(approval, {
         conversationId: ctx.conversation.id,
         toolCallId,
         sink: ctx.sink,
         signal,
+        toolName: name,
+        ...(approvalSummary ? { summary: approvalSummary } : {}),
       });
       const result = await executeWorkspaceToolCore(name, args, {
         conversationId: ctx.conversation.id,

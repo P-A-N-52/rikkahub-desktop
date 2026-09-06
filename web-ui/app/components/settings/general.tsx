@@ -8,6 +8,7 @@ import { AvatarCropper } from "~/components/avatar-cropper";
 import { FontPickerPair } from "~/components/font-picker";
 import { CHAT_CJK_OVERRIDE_FAMILY, UI_CJK_OVERRIDE_FAMILY } from "~/lib/font-chain";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 import { KeybindingSettings } from "~/components/keybinding-settings";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -33,18 +34,13 @@ export function GeneralSection({
   const [avatar, setAvatar] = React.useState<AssistantAvatar>(
     display.userAvatar ?? { type: "dummy" },
   );
-  const [saving, setSaving] = React.useState(false);
   // R8-2:防抖自动保存统一走共享三件套 hook(保存窗口内键击不丢,语义见 hook 文件头)。
+  // 域7-1(3A):保存进行中 indicator 由 hook status 机驱动,不再手维护 saving state。
   const autosave = useAutosaveDraft(
     async () => {
-      setSaving(true);
-      try {
-        await patchDisplay({ userNickname: name.trim(), userAvatar: avatar });
-      } finally {
-        setSaving(false);
-      }
+      await patchDisplay({ userNickname: name.trim(), userAvatar: avatar });
     },
-    { delayMs: 600, onSaveError: (error) => console.warn('Profile auto-save failed', error) },
+    { delayMs: 600, errorLabel: t("settings:general.title") },
   );
 
   // --- 窗口行为(最小化到托盘 / 退出)—— 仅 Tauri 桌面端渲染 ---
@@ -261,8 +257,11 @@ export function GeneralSection({
               </label>
             ))}
           </div>
-          <div className="flex justify-end text-xs text-muted-foreground">
-            {saving ? t("settings:common.autosaving") : t("settings:common.autosaved")}
+          <div className="flex justify-end">
+            <AutosaveStatusRow
+              status={autosave.status}
+              onRetry={() => void autosave.saveNow()}
+            />
           </div>
         </div>
         {tauriReady && (

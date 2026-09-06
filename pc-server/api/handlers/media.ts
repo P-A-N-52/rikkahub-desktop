@@ -154,9 +154,15 @@ export async function handleMediaRoutes(request: Request, _url: URL, path: strin
         numberOfImages: Number(body.numberOfImages ?? 1),
         aspectRatio: String(body.aspectRatio ?? "square"),
         referenceFileIds: Array.isArray(body.referenceFileIds) ? body.referenceFileIds.map(Number).filter(Number.isFinite) : [],
+        // 域10-2:客户端取消/断开即中止上游生成,不再空转到自然超时。
+        signal: request.signal,
       });
       return json({ status: "ok", images });
     } catch (err) {
+      // 客户端主动取消(AbortError)/断开:不算失败,回 499 与压缩中止同款口径,前端静默忽略。
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return error("Client cancelled", 499);
+      }
       return error(friendlyRequestError(err, state.settings.proxyConfig), 502);
     }
   }

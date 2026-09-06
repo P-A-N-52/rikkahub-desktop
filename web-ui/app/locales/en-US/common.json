@@ -8,6 +8,7 @@
     "yesterday": "Yesterday",
     "unnamed_conversation": "Untitled conversation",
     "generating": "Generating",
+    "awaiting_approval": "Awaiting approval",
     "conversation_actions": "Conversation actions",
     "action_failed_retry": "Action failed. Please try again later.",
     "pin": "Pin",
@@ -171,7 +172,10 @@
     "badge_generate": "Generated",
     "badge_edit": "Edited",
     "delete": "Delete",
-    "not_selected": "Not selected"
+    "not_selected": "Not selected",
+    "waiting_seconds": "Waiting {{seconds}}s",
+    "cancel": "Cancel",
+    "cancelled": "Generation cancelled"
   },
   "web_auth_gate": {
     "title": "Web API is locked",
@@ -187,6 +191,10 @@
     "description": "RikkaHub is loading data and finishing upgrade migrations. Large libraries can take a few minutes. Please keep the app open — it will continue automatically.",
     "failed_title": "Startup failed",
     "failed_description": "The server hit an error while starting or migrating data. Your original data has not been deleted; restarting the app will retry automatically. If this keeps happening, contact support with the details below:",
+    "retry": "Retry",
+    "copy_error": "Copy error details",
+    "copied": "Copied",
+    "report_issue": "Report issue",
     "phase": {
       "starting": "Starting the service",
       "load_state": "Loading application data",
@@ -232,6 +240,7 @@
     "apply_failed": "Failed to apply update"
   },
   "errors": {
+    "network_unreachable": "Cannot reach the local service. Please retry shortly; restart the app if this persists",
     "load_conversations_failed": "Failed to load conversations",
     "read_image_failed": "Failed to read image",
     "decode_image_failed": "Failed to decode image"

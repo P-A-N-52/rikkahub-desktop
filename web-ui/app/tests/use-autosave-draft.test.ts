@@ -319,4 +319,34 @@ describe("createAutosaveController", () => {
     expect(errors).toHaveLength(1);
     expect(ctl.isDirty()).toBe(false); // 失败是旧实体的遗憾,新实体不背脏
   });
+
+  // 域7-1(交互审查 3A):status 机是 <AutosaveStatusRow/> 三态行的唯一数据源。
+  // 锁定关键迁移——失败必须落 failed(用户要看到"保存失败"而不是假"已保存")。
+  test("域7-1 status 机:idle→pending→saving→saved;失败→failed;saveNow 重试回 saved", async () => {
+    const scheduler = fakeScheduler();
+    const seen: string[] = [];
+    let fail = false;
+    const ctl = createAutosaveController(
+      async () => {
+        if (fail) throw new Error("offline");
+      },
+      { scheduler, onStatusChange: (s) => seen.push(s), onSaveError: () => {} },
+    );
+
+    ctl.markDirty();
+    expect(seen).toEqual(["pending"]); // 置脏即 pending(防抖窗口内)
+    scheduler.fire();
+    await tick();
+    expect(seen).toEqual(["pending", "saving", "saved"]); // 成功走完整链
+
+    fail = true;
+    ctl.markDirty();
+    scheduler.fire();
+    await tick();
+    expect(seen.at(-1)).toBe("failed"); // 失败必须落 failed——假"已保存"的根治点
+
+    fail = false;
+    await ctl.saveNow(); // 状态行"点击重试"路径
+    expect(seen.at(-1)).toBe("saved");
+  });
 });

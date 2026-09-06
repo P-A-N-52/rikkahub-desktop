@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
 import api from "~/services/api";
 import { SectionHeader } from "~/components/settings/shared";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 
 interface ProxyStatus {
   activeUrl: string | null;
@@ -55,7 +56,7 @@ export function ProxyNavDot() {
     return () => window.clearInterval(timer);
   }, []);
   if (!st) return null;
-  const cls = st.activeUrl ? "bg-green-500" : "bg-muted-foreground/30";
+  const cls = st.activeUrl ? "bg-success" : "bg-muted-foreground/30";
   const tip = st.activeUrl
     ? t("settings:proxy.nav_status_proxy", { url: st.activeUrl })
     : t("settings:proxy.nav_status_direct");
@@ -325,7 +326,7 @@ export function ProxySection({
               {draft.mode === "env" && t("settings:proxy.mode_env_desc")}
             </div>
             {draft.mode === "env" && status?.containerMode === false && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
                 {t("settings:proxy.env_desktop_hint")}
               </div>
             )}
@@ -428,6 +429,13 @@ export function ProxySection({
             <span className="font-mono text-foreground">{activeDisplay}</span>
           </div>
 
+          <div className="flex justify-end">
+            <AutosaveStatusRow
+              status={autosave.status}
+              onRetry={() => void autosave.saveNow()}
+            />
+          </div>
+
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <Input
@@ -456,8 +464,8 @@ export function ProxySection({
               <div
                 className={`text-xs ${
                   testResult.ok
-                    ? "text-green-600 dark:text-green-400"
-                    : "text-red-600 dark:text-red-400"
+                    ? "text-success"
+                    : "text-destructive"
                 }`}
               >
                 {testResult.ok
@@ -496,13 +504,19 @@ export function ProxySection({
               max={65535}
               step={1}
             />
+            <div className="flex justify-end">
+              <AutosaveStatusRow
+                status={portAutosave.status}
+                onRetry={() => void portAutosave.saveNow()}
+              />
+            </div>
           </label>
           {status?.containerMode ? (
             <div className="text-xs text-muted-foreground">
               {t("settings:proxy.port_container_locked")}
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
               <span>{t("settings:proxy.port_restart_note")}</span>
               {isTauri && (
                 <Button

@@ -78,7 +78,7 @@ import { flushConvDirtyNow, getConversation, getConversationsDb, markConversatio
 import { checkoutConversation, releaseConversation } from "./working-set";
 import { conversationExistsInDb } from "./read-queries";
 import { reportError } from "../observability/app-errors";
-import { generating } from "./generation-state";
+import { awaitingApproval, generating } from "./generation-state";
 import {
   appendTextPart,
   canResumeToolExecution,
@@ -954,17 +954,15 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     const rawContent = err instanceof Error ? err.message : String(err);
     const proxyHint = classifyProxyError(err, state.settings.proxyConfig);
     const failureText = proxyHint ?? classifyContextOverflowError(err) ?? classifyRateLimitError(err) ?? `请求失败：${rawContent}`;
-    // P2-1(N-7 归宿):失败文本除了写进会话消息(仅会话 SSE 可见),还上报全局通道——
+    // P2-1(N-7 归宿):失败文本除了落在消息注解上(仅会话内可见),还上报全局通道——
     // 用户不在该会话页时也能收到通知(批2 接前端 toast)。
     reportError("provider", "error", failureText, err);
     finalizeOutcome(() => {
-      if (currentMessage.parts.length === 0) {
-        finishMessage(currentMessage, [{ type: "text", text: failureText }]);
-      } else {
-        appendTextPart(currentMessage, `\n\n${failureText}`);
-        currentMessage.finishedAt = new Date().toISOString();
-      }
-      // R7-2:结构化错误标记——前端"打开模型设置"横幅由它驱动,
+      // 错误零污染正文(对齐 Android addError):失败详情只活在 model_call_error 注解的
+      // message 字段,由前端错误卡呈现;正文保留半截真实产出。既无正文也无错误的流
+      // (中止/纯失败)不会走到这里——中止分支已先行返回。
+      currentMessage.finishedAt = new Date().toISOString();
+      // R7-2:结构化错误标记——前端错误卡由它驱动,详情取注解的 message 字段,
       // 不再对正文做关键词正则(讨论 HTTP 状态码/超时的正常回答不误报)。
       currentMessage.annotations.push({ type: "model_call_error", message: failureText });
     });
@@ -975,6 +973,10 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     // 不来,不清会挂死"压缩中"。幂等,聊天引擎路径广播空集合无副作用。T1:判定改读
     // resumeSemantics——只有 run-and-suspend 引擎(pi)会发瞬态状态条,聊天引擎不发。
     if (isRunAndSuspend) broadcastEngineStatus(conversation.id, { busy: false });
+    // 域4-1:审批等待注册表兜底清除——gateToolApproval 的正常路径(决定/中止)已注销,
+    // 这里是"生成终局但审批仍挂着"的防御(引擎 run 因故结束而 execute 未走到注销)。
+    // 幂等(delete 不存在键无副作用),与 busy:false 同点收口。
+    awaitingApproval.delete(conversation.id);
     if (!conversationStillExists(conversation.id)) return;
     broadcastNodeUpdate(conversation, assistantNode);
     broadcastConversation(conversation);

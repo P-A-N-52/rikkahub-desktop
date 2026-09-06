@@ -170,7 +170,7 @@ export function StatsSection({ stats }: { stats: StatsPayload | null }) {
               {monthLabels.map((label, index) => (
                 <div
                   key={`${label}-${index}`}
-                  className="h-5 overflow-visible whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+                  className="h-5 overflow-visible whitespace-nowrap text-mini text-muted-foreground"
                 >
                   {label}
                 </div>
@@ -191,7 +191,7 @@ export function StatsSection({ stats }: { stats: StatsPayload | null }) {
               ].map((label, index) => (
                 <div
                   key={`${label}-${index}`}
-                  className="flex h-3.5 items-center justify-end text-[0.6875rem] text-muted-foreground sm:h-4"
+                  className="flex h-3.5 items-center justify-end text-mini text-muted-foreground sm:h-4"
                 >
                   {label}
                 </div>
@@ -219,7 +219,7 @@ export function StatsSection({ stats }: { stats: StatsPayload | null }) {
             </div>
           </div>
         </div>
-        <div className="mt-3 flex items-center justify-end gap-1 text-[0.6875rem] text-muted-foreground">
+        <div className="mt-3 flex items-center justify-end gap-1 text-mini text-muted-foreground">
           <span>{t("settings:stats.less")}</span>
           {[0, 1, 2, 3, 4].map((level) => (
             <span key={level} className={`size-[12px] rounded-[4px] ${heatmapClass(level)}`} />

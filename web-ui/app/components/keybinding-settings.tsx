@@ -31,7 +31,7 @@ import type { KeybindingAction, KeybindingEntry } from "~/types/settings";
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="rounded border border-border bg-muted px-1.5 font-mono text-[0.7rem]">
+    <kbd className="rounded border border-border bg-muted px-1.5 font-mono text-mini">
       {children}
     </kbd>
   );

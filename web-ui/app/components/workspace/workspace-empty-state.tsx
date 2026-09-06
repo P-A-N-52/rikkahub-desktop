@@ -56,13 +56,13 @@ function MissingRebindPanel({ workspace }: { workspace: WorkspaceDto }) {
 
   return (
     <div className="mb-6 flex flex-col items-center">
-      <div className="w-full max-w-md rounded-[var(--ds-radius-lg)] border border-amber-500/30 bg-amber-500/5 px-4 py-4 text-left">
+      <div className="w-full max-w-md rounded-[var(--ds-radius-lg)] border border-warning/30 bg-warning/5 px-4 py-4 text-left">
         <div className="flex items-start gap-2.5">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" strokeWidth={2} />
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" strokeWidth={2} />
           <div className="min-w-0 flex-1">
-            <div className="text-[0.8125rem] font-medium text-foreground">{t("workspace.empty.missing_title")}</div>
-            <div className="mt-1 text-[0.75rem] leading-5 text-muted-foreground">{t("workspace.empty.missing_desc")}</div>
-            <div className="mt-1.5 truncate font-mono text-[0.6875rem] text-[var(--ds-text-tertiary)]" title={workspace.root}>
+            <div className="text-compact font-medium text-foreground">{t("workspace.empty.missing_title")}</div>
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">{t("workspace.empty.missing_desc")}</div>
+            <div className="mt-1.5 truncate font-mono text-mini text-[var(--ds-text-tertiary)]" title={workspace.root}>
               {workspace.root}
             </div>
             <div className="mt-3 flex items-center gap-2">
@@ -70,7 +70,7 @@ function MissingRebindPanel({ workspace }: { workspace: WorkspaceDto }) {
                 value={root}
                 onChange={(event) => setRoot(event.target.value)}
                 placeholder={t("workspace.create.folder_path_placeholder")}
-                className="h-8 flex-1 font-mono text-[0.75rem]"
+                className="h-8 flex-1 font-mono text-xs"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void submit();
                 }}

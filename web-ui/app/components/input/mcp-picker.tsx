@@ -227,10 +227,10 @@ function McpPanelImpl({ disabled = false }: McpPanelProps) {
                         </button>
 
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[0.6875rem] font-medium leading-tight">
+                          <div className="truncate text-mini font-medium leading-tight">
                             {getDisplayName(server.commonOptions?.name, t("mcp.unnamed_server"))}
                           </div>
-                          <div className="text-muted-foreground text-[0.625rem] leading-tight">
+                          <div className="text-muted-foreground text-micro leading-tight">
                             {t("mcp.tools_enabled", {
                               enabled: toolCount.enabled,
                               total: toolCount.total,
@@ -283,7 +283,7 @@ function McpPanelImpl({ disabled = false }: McpPanelProps) {
                               >
                                 <div className="min-w-0 flex-1">
                                   <div
-                                    className="truncate text-[0.6875rem] leading-tight"
+                                    className="truncate text-mini leading-tight"
                                     title={tool.name}
                                   >
                                     {tool.name}
@@ -292,7 +292,7 @@ function McpPanelImpl({ disabled = false }: McpPanelProps) {
                                 {isMutating ? (
                                   <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
                                 ) : null}
-                                <label className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
+                                <label className="flex items-center gap-1 text-micro text-muted-foreground">
                                   <span>需要用户审核</span>
                                   <Switch
                                     size="sm"
@@ -314,7 +314,7 @@ function McpPanelImpl({ disabled = false }: McpPanelProps) {
                                     }}
                                   />
                                 </label>
-                                <label className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
+                                <label className="flex items-center gap-1 text-micro text-muted-foreground">
                                   <span>启用</span>
                                   <Switch
                                     size="sm"

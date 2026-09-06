@@ -13,12 +13,9 @@ import {
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { ExportedImage } from "./exported-image";
-import { captureNodeAsPng, downloadDataUrl } from "~/lib/capture";
-import {
-  convertMessagesToMarkdown,
-  downloadMarkdown,
-  safeMarkdownFilename,
-} from "~/lib/export-markdown";
+import { captureNodeAsPng } from "~/lib/capture";
+import { exportDataUrlFile, exportTextFile } from "~/lib/export-file";
+import { convertMessagesToMarkdown, safeMarkdownFilename } from "~/lib/export-markdown";
 import type { MessageDto } from "~/types";
 
 // 导出截图时排除: code-block 的复制/下载/预览按钮 (纯交互元素, 出现在图里是噪音),
@@ -57,11 +54,8 @@ export function ShareExportDialog({
     try {
       // convertMessagesToMarkdown 会把每张图 fetch 成 base64 内联,图片多/大时可能要几秒
       const content = await convertMessagesToMarkdown(messages, expandReasoning, title);
-      downloadMarkdown(content, filename);
-      toast.success(t("chat_message.export_success_md"), {
-        description: t("chat_message.export_success_desc", { filename }),
-        duration: 7000,
-      });
+      // 域10-1:桌面壳落盘 + toast"在文件夹中显示";浏览器维持下载(编排层分流)。
+      await exportTextFile(content, filename);
       onOpenChange(false);
     } catch (err) {
       toast.error(
@@ -94,11 +88,8 @@ export function ShareExportDialog({
         filter: exportImageFilter,
       });
       const filename = safeMarkdownFilename(title || "conversation").replace(/\.md$/, ".png");
-      downloadDataUrl(dataUrl, filename);
-      toast.success(t("chat_message.export_success_image"), {
-        description: t("chat_message.export_success_desc", { filename }),
-        duration: 7000,
-      });
+      // 域10-1:同 MD,桌面壳落盘 + 定位;浏览器维持下载。
+      await exportDataUrlFile(dataUrl, filename);
       onOpenChange(false);
     } catch (err) {
       toast.error(

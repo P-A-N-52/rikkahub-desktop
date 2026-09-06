@@ -31,6 +31,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
           description: "group-[.toast]:text-muted-foreground",
           actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
           cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
+          // 域6-3:severity 色彩区分——只给图标信号色(错误追加红色左边条),不启用
+          // richColors 整套填充(保持现有 popover 卡片风格,信号色是状态语言而非装饰)。
+          // success/warning 走 --ds-success/--ds-warning 语义 token(域13-5 已收编)。
+          icon: "group-data-[type=error]:text-destructive group-data-[type=success]:text-success group-data-[type=warning]:text-warning",
+          error: "border-l-4 !border-l-destructive",
         },
       }}
       style={

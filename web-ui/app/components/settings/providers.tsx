@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Switch } from "~/components/ui/switch";
 import { ModelEditDialog } from "~/components/model-edit-dialog";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 import { cn } from "~/lib/utils";
 import { isBalanceResultPathValid } from "~/lib/json-expression";
 import { openExternal } from "~/lib/external-link";
@@ -820,7 +821,7 @@ export function ProvidersSection({
               <span className="grid min-w-0 grid-cols-[28px_10px_minmax(0,1fr)_16px] items-center gap-2 text-left">
                 <AIIcon name={provider.name} size={24} className="justify-self-start" />
                 <span
-                  className={`size-2 rounded-full ${provider.enabled ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
+                  className={`size-2 rounded-full ${provider.enabled ? "bg-success" : "bg-muted-foreground/40"}`}
                 />
                 <span className="min-w-0 flex-1 truncate">{provider.name}</span>
                 {provider.builtIn ? <Check className="size-3 text-primary" /> : null}
@@ -1151,7 +1152,7 @@ export function ProvidersSection({
                           className={cn(
                             "h-7 rounded-md border px-2 text-xs transition",
                             hasTool
-                              ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                              ? "border-warning/50 bg-warning/10 text-warning"
                               : "border-border text-muted-foreground hover:bg-muted",
                           )}
                           title={hasTool ? t("settings:providers.tool_enabled") : t("settings:providers.tool_disabled")}
@@ -1220,7 +1221,10 @@ export function ProvidersSection({
                   <Trash2 className="size-4" />
                   {t("settings:providers.delete")}
                 </Button>
-                <span className="px-2 text-xs text-muted-foreground">{t("settings:providers.autosaved")}</span>
+                <AutosaveStatusRow
+                  status={autosave.status}
+                  onRetry={() => void autosave.saveNow()}
+                />
               </div>
             </div>
             <Select value={effectiveTestModelId} onValueChange={setTestModelId}>
@@ -1323,7 +1327,7 @@ export function ProvidersSection({
                       key={mode}
                       className={cn(
                         "rounded-md border bg-background px-3 py-2",
-                        check?.ok === true && "border-emerald-500/30 bg-emerald-500/5",
+                        check?.ok === true && "border-success/30 bg-success/5",
                         check?.ok === false && "border-destructive/30 bg-destructive/5",
                       )}
                     >
@@ -1331,7 +1335,7 @@ export function ProvidersSection({
                         {pending ? (
                           <Loader2 className="size-4 animate-spin text-muted-foreground" />
                         ) : check?.ok ? (
-                          <CheckCircle2 className="size-4 text-emerald-500" />
+                          <CheckCircle2 className="size-4 text-success" />
                         ) : check ? (
                           <Trash2 className="size-4 text-destructive" />
                         ) : (

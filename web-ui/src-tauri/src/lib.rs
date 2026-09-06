@@ -683,6 +683,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
+        // 域4-1(专题-交互审查 2A):审批等待桌面通知——AI 等审批而窗口失焦时提醒。
+        .plugin(tauri_plugin_notification::init())
         // 专题8:记忆窗口尺寸/位置/最大化状态,退出时保存、启动时恢复。
         // D12(复查):排除 VISIBLE——可见性由应用自己管(就绪后 show、托盘 hide),
         // 插件若恢复"上次退出时隐藏在托盘"的不可见态,下次启动窗口不出现;若过早

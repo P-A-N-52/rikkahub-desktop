@@ -593,6 +593,8 @@ export interface AuxiliaryTextOptions {
   customBody?: Record<string, any>;
   stream?: boolean;
   onDelta?: (text: string) => void;
+  /** 取消信号（压缩等可被用户中止的辅助调用）：中止立即撕底层连接，不空耗轮次。 */
+  signal?: AbortSignal;
 }
 
 export interface AsrRealtimeSession {

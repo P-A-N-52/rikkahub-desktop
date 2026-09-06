@@ -185,7 +185,7 @@ export const ConversationQuickJump = React.memo(function ConversationQuickJump({
               onLeave={clearHover}
             />
           ))}
-          <div className="mt-1 w-5 text-center text-[0.625rem] text-muted-foreground/80 tabular-nums">
+          <div className="mt-1 w-5 text-center text-micro text-muted-foreground/80 tabular-nums">
             {safeActiveIndex + 1}/{items.length}
           </div>
         </div>
@@ -196,7 +196,7 @@ export const ConversationQuickJump = React.memo(function ConversationQuickJump({
           style={{ left: hovered.left, top: hovered.top }}
         >
           <div className="space-y-0.5">
-            <div className="text-[0.6875rem] text-background/75">
+            <div className="text-mini text-background/75">
               {hovered.index + 1}/{items.length} · {getRoleLabel(hoveredItem.role, t)}
             </div>
             <div>{hoveredItem.preview?.trim() || t("quick_jump.no_preview")}</div>

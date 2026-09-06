@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ChatMessageAnnotationsRow } from "./chat-message-annotations";
 import { ChatMessageAvatarRow } from "./chat-message-avatar-row";
 import { MessageParts } from "./message-part";
+import { ModelCallErrorCard } from "./model-call-error-card";
 import Markdown from "~/components/markdown/markdown";
 import { toast } from "sonner";
 import { confirmDialog } from "~/stores/confirm-store";
@@ -764,7 +765,7 @@ const ChatMessageActionsRow = React.memo(
           type="button"
           variant="ghost"
         >
-          {copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+          {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
         </Button>
 
         {canEdit && (
@@ -848,7 +849,7 @@ const ChatMessageActionsRow = React.memo(
             >
               <ChevronLeft className="size-3.5" />
             </Button>
-            <span className="text-[0.6875rem] text-muted-foreground">
+            <span className="text-mini text-muted-foreground">
               {node.selectIndex + 1}/{node.messages.length}
             </span>
             <Button
@@ -952,7 +953,7 @@ const ChatMessageNerdLineRow = React.memo(
       return (
         <div
           className={cn(
-            "flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[0.6875rem] text-muted-foreground/50",
+            "flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-1 text-mini text-muted-foreground/50",
             alignRight ? "justify-end" : "justify-start",
           )}
         >
@@ -962,7 +963,7 @@ const ChatMessageNerdLineRow = React.memo(
     }
 
     return (
-      <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[0.6875rem] text-muted-foreground/50">
+      <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-mini text-muted-foreground/50">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {items.map(renderStat)}
         </div>
@@ -992,7 +993,6 @@ export const ChatMessage = React.memo(
     selected = false,
     onToggleSelect,
   }: ChatMessageProps) => {
-    const { t } = useTranslation("message");
     const isUser = message.role === "USER";
     const providers = useSettingsStore((state) => state.settings?.providers);
     const displaySetting = useSettingsStore((state) => state.settings?.displaySetting);
@@ -1086,6 +1086,8 @@ export const ChatMessage = React.memo(
               <MessageParts
                 parts={message.parts}
                 messageId={message.id}
+                messageCreatedAt={message.createdAt}
+                messageFinishedAt={message.finishedAt}
                 loading={loading}
                 assistant={assistant}
                 role={message.role as "USER" | "ASSISTANT" | "SYSTEM" | "TOOL"}
@@ -1119,13 +1121,7 @@ export const ChatMessage = React.memo(
         )}
 
         {hasModelCallError ? (
-          <a
-            className="mx-1 inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs text-primary shadow-sm transition hover:bg-accent"
-            href={modelSettingsHref}
-          >
-            <Zap className="size-3.5" />
-            {t("chat_message.open_model_settings")}
-          </a>
+          <ModelCallErrorCard annotations={message.annotations} settingsHref={modelSettingsHref} />
         ) : null}
 
         <ChatMessageAnnotationsRow annotations={message.annotations} alignRight={isUser} />

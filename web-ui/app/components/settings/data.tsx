@@ -27,6 +27,7 @@ import { isTauriEnvironment } from "~/lib/system-info";
 import { confirmDialog } from "~/stores/confirm-store";
 import type { S3Config, Settings, WebDavConfig } from "~/types";
 import { SectionHeader } from "~/components/settings/shared";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 
 interface S3BackupItem {
   href: string;
@@ -890,7 +891,7 @@ export function DataSection({
                 />
               </div>
               {exportTotalBytes === 0 ? (
-                <div className="text-[0.6875rem] text-muted-foreground">
+                <div className="text-mini text-muted-foreground">
                   {t("settings:data.pack_slow")}
                 </div>
               ) : null}
@@ -916,7 +917,7 @@ export function DataSection({
                 />
               </div>
               {importPhase === "processing" ? (
-                <div className="text-[0.6875rem] text-muted-foreground">
+                <div className="text-mini text-muted-foreground">
                   {t("settings:data.extract_slow")}
                 </div>
               ) : null}
@@ -945,7 +946,7 @@ export function DataSection({
               <div className="flex items-center gap-2 text-sm font-medium">
                 {t("settings:data.webdav_title")}
                 {ANDROID_COMPAT_CARD_ENABLED && schemaStatus && !schemaStatus.hasAndroidSchema && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-micro text-amber-700 dark:bg-amber-900 dark:text-amber-300">
                     {t("settings:data.chat_unsyncable")}
                   </span>
                 )}
@@ -954,9 +955,11 @@ export function DataSection({
                 {t("settings:data.webdav_desc")}
               </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              {webDavBusy ? t("settings:data.processing") : t("settings:common.autosaved")}
-            </div>
+            <AutosaveStatusRow
+              status={webDavAutosave.status}
+              onRetry={() => void webDavAutosave.saveNow()}
+              className="px-0"
+            />
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <label className="space-y-1">
@@ -1148,7 +1151,7 @@ export function DataSection({
               <div className="flex items-center gap-2 text-sm font-medium">
                 {t("settings:data.s3_title")}
                 {ANDROID_COMPAT_CARD_ENABLED && schemaStatus && !schemaStatus.hasAndroidSchema && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-micro text-amber-700 dark:bg-amber-900 dark:text-amber-300">
                     {t("settings:data.chat_unsyncable")}
                   </span>
                 )}
@@ -1156,6 +1159,11 @@ export function DataSection({
               <div className="mt-1 text-xs text-muted-foreground">{t("settings:data.s3_desc")}</div>
             </div>
             <div className="flex items-center gap-2">
+              <AutosaveStatusRow
+                status={s3Autosave.status}
+                onRetry={() => void s3Autosave.saveNow()}
+                className="px-0"
+              />
               <span className="text-xs text-muted-foreground">Path-style</span>
               <Switch
                 checked={s3Draft.pathStyle}

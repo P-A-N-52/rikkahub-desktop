@@ -20,6 +20,11 @@ export interface ChatInputSlice {
   // 专题4:上传百分比(0-100);null = 不在上传。驱动输入框上传 chip 的确定性进度圆圈。
   uploadProgress: number | null;
   setUploadProgress: (progress: number | null) => void;
+  // 域9-1(交互审查 3B):仍处"解析中"的草稿附件 fileId 集合。附件 chip 的 ExtractionBadge
+  // 轮询结果写入这里(单一状态源=chip 同款轮询,门禁不另造轮询);发送门禁据此判
+  // "是否有附件还在解析"→ 发送按钮灰 + 发送键短路。done/failed/empty/none 即移出。
+  parsingFileIds: number[];
+  setPartParsing: (fileId: number, parsing: boolean) => void;
   setText: (conversationId: string, text: string) => void;
   addParts: (conversationId: string, parts: UIMessagePart[]) => void;
   removePartAt: (conversationId: string, index: number) => void;

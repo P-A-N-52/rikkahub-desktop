@@ -78,7 +78,7 @@ export function DiffView({ diff, className }: { diff: string; className?: string
               key="fold"
               type="button"
               onClick={() => setExpanded(true)}
-              className="block w-full bg-muted/40 px-3 py-1 text-center text-[0.6875rem] text-muted-foreground transition-colors duration-150 hover:bg-muted/70"
+              className="block w-full bg-muted/40 px-3 py-1 text-center text-mini text-muted-foreground transition-colors duration-150 hover:bg-muted/70"
             >
               {t("workspace_tool.diff_show_more", { count: line.fold })}
             </button>

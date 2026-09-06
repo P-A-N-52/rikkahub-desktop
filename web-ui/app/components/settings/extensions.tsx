@@ -24,6 +24,7 @@ import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import Markdown from "~/components/markdown/markdown";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 import { openExternal } from "~/lib/external-link";
 import { cn } from "~/lib/utils";
 import api, { appendWebAuthQuery } from "~/services/api";
@@ -240,7 +241,6 @@ function McpServerEditor({
   const [toolsText, setToolsText] = React.useState(
     prettyJson((selected.commonOptions as Record<string, unknown> | undefined)?.tools ?? []),
   );
-  const [busy, setBusy] = React.useState(false);
   // R8-2:三件套竞态防护("URL input eats characters" 的修复)抽成共享 hook,本编辑器是
   // 原始出处——语义与病史见 hooks/use-autosave-draft.ts 文件头。
   // draft/headersText/toolsText 走 ref 取最新值:persist 既被防抖调用(渲染早已提交),
@@ -251,6 +251,8 @@ function McpServerEditor({
   headersTextRef.current = headersText;
   const toolsTextRef = React.useRef(toolsText);
   toolsTextRef.current = toolsText;
+  // 域7-1(3A):保存进行中 indicator 由 hook status 机驱动,删掉手维护 busy;
+  // save 体内的 POST 失败仍沿 return 路径抛给 hook → status=failed + 缺省 toast。
   const autosave = useAutosaveDraft(
     async () => {
       const currentDraft = draftRef.current;
@@ -266,23 +268,15 @@ function McpServerEditor({
           tools: parseJson<unknown[]>(toolsTextRef.current, [], t("settings:mcp.json_invalid")),
         },
       };
-      setBusy(true);
-      try {
-        const result = await api.post<{ server: Record<string, unknown> }>(
-          "settings/mcp-server/detail",
-          payload,
-        );
-        setSelectedId(String(result.server.id));
-        applyServerResult(result.server);
-        await pullSettings(onSettings);
-      } finally {
-        setBusy(false);
-      }
+      const result = await api.post<{ server: Record<string, unknown> }>(
+        "settings/mcp-server/detail",
+        payload,
+      );
+      setSelectedId(String(result.server.id));
+      applyServerResult(result.server);
+      await pullSettings(onSettings);
     },
-    {
-      delayMs: 800,
-      onSaveError: (error) => console.warn("MCP auto-save failed", error),
-    },
+    { delayMs: 800, errorLabel: t("settings:mcp.title") },
   );
   // serversRef lets the realignment effect read the freshest servers list WITHOUT taking
   // settings.mcpServers as a dependency. If settings.mcpServers were a dep, the effect
@@ -454,7 +448,7 @@ function McpServerEditor({
         return (
           <div className="flex min-w-0 items-center gap-2 text-left">
             <span
-              className={`size-2 shrink-0 rounded-full ${status.ok ? "bg-emerald-500" : "bg-red-500"}`}
+              className={`size-2 shrink-0 rounded-full ${status.ok ? "bg-success" : "bg-destructive"}`}
               title={t(`settings:mcp.status_${status.key}`)}
             />
             <span className="truncate">{mcpName(item)}</span>
@@ -560,7 +554,7 @@ function McpServerEditor({
             <span
               className={cn(
                 "shrink-0 rounded-full px-2 py-0.5 text-xs",
-                oauthAuthorized ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground",
+                oauthAuthorized ? "bg-success/10 text-success" : "bg-muted text-muted-foreground",
               )}
             >
               {oauthAuthorized
@@ -696,7 +690,7 @@ function McpServerEditor({
                               <span
                                 key={propName}
                                 className={cn(
-                                  "rounded-md px-2 py-0.5 font-mono text-[0.6875rem]",
+                                  "rounded-md px-2 py-0.5 font-mono text-mini",
                                   isRequired
                                     ? "bg-blue-500/10 text-blue-700 dark:text-blue-300"
                                     : "bg-background text-muted-foreground border",
@@ -717,9 +711,11 @@ function McpServerEditor({
           </div>
         </div>
         <div className="flex justify-end gap-2">
-          <div className="mr-auto flex items-center px-2 text-xs text-muted-foreground">
-            {busy ? t("settings:mcp.autosaving") : t("settings:mcp.autosaved")}
-          </div>
+          <AutosaveStatusRow
+            className="mr-auto"
+            status={autosave.status}
+            onRetry={() => void autosave.saveNow()}
+          />
           <Button variant="destructive" onClick={() => void remove()} disabled={!selected.id}>
             <Trash2 className="size-4" />
             {t("settings:mcp.delete")}
@@ -852,7 +848,7 @@ function LorebookEntryRow({
           <span
             className={cn(
               "size-2 rounded-full",
-              entry.enabled === false ? "bg-muted-foreground/40" : "bg-emerald-500",
+              entry.enabled === false ? "bg-muted-foreground/40" : "bg-success",
             )}
           />
           <span className="truncate text-sm font-medium">
@@ -1102,7 +1098,7 @@ function LorebookEditor({
       await api.post("settings/lorebook/detail", draft);
       await pullSettings(onSettings);
     },
-    { delayMs: 800, onSaveError: (error) => console.warn("Lorebook auto-save failed", error) },
+    { delayMs: 800, errorLabel: t("settings:mcp.tab.lorebook") },
   );
   // itemsRef: avoid re-running this effect after every autosave → pullSettings round-trip
   // (would overwrite mid-flight keystrokes). See McpServerEditor for rationale.
@@ -1241,9 +1237,11 @@ function LorebookEditor({
           </div>
         </div>
         <div className="flex justify-end gap-2">
-          <div className="mr-auto flex items-center px-2 text-xs text-muted-foreground">
-            {t("settings:mcp.autosaved")}
-          </div>
+          <AutosaveStatusRow
+            className="mr-auto"
+            status={autosave.status}
+            onRetry={() => void autosave.saveNow()}
+          />
           <Button
             variant="destructive"
             onClick={async () => {
@@ -1314,7 +1312,7 @@ function QuickMessageEditor({
       await api.post("settings/quick-message/detail", draft);
       await pullSettings(onSettings);
     },
-    { onSaveError: (error) => console.warn("Quick message auto-save failed", error) },
+    { errorLabel: t("settings:mcp.tab.quick") },
   );
   // itemsRef: avoid re-running this effect after every autosave → pullSettings round-trip
   // (would overwrite mid-flight keystrokes). See McpServerEditor for rationale.
@@ -1383,9 +1381,11 @@ function QuickMessageEditor({
           placeholder={t("settings:mcp.quick.content")}
         />
         <div className="flex justify-end gap-2">
-          <div className="mr-auto flex items-center px-2 text-xs text-muted-foreground">
-            {t("settings:mcp.autosaved")}
-          </div>
+          <AutosaveStatusRow
+            className="mr-auto"
+            status={autosave.status}
+            onRetry={() => void autosave.saveNow()}
+          />
           <Button
             variant="destructive"
             onClick={async () => {
@@ -1446,7 +1446,7 @@ function PromptItemEditor({
       await api.post(savePath, draft);
       await pullSettings(onSettings);
     },
-    { onSaveError: (error) => console.warn(`${title} auto-save failed`, error) },
+    { errorLabel: title },
   );
   const promptVariables = [
     "{{cur_datetime}}",
@@ -1623,9 +1623,11 @@ function PromptItemEditor({
           />
         </div>
         <div className="flex justify-end gap-2">
-          <div className="mr-auto flex items-center px-2 text-xs text-muted-foreground">
-            {t("settings:mcp.autosaved")}
-          </div>
+          <AutosaveStatusRow
+            className="mr-auto"
+            status={autosave.status}
+            onRetry={() => void autosave.saveNow()}
+          />
           <Button
             variant="destructive"
             onClick={async () => {
@@ -1665,22 +1667,17 @@ function SkillsEditor({
   const [githubUrl, setGithubUrl] = React.useState("");
   const [importing, setImporting] = React.useState(false);
   const [importingFile, setImportingFile] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   // R8-2:防抖自动保存统一走共享三件套 hook(保存窗口内键击不丢,语义见 hook 文件头)。
+  // 域7-1(3A):保存进行中 indicator 由 hook status 机驱动,不再手维护 saving state。
   const autosave = useAutosaveDraft(
     async () => {
       const name = textValue(parseSkillName(content) || selected || "new-skill");
-      setSaving(true);
-      try {
-        await api.post("skills/detail", { name, content });
-        await load();
-        setSelected(name);
-      } finally {
-        setSaving(false);
-      }
+      await api.post("skills/detail", { name, content });
+      await load();
+      setSelected(name);
     },
-    { delayMs: 900, onSaveError: (error) => console.warn("Skill auto-save failed", error) },
+    { delayMs: 900, errorLabel: "Skills" },
   );
 
   const load = React.useCallback(async () => {
@@ -1813,12 +1810,12 @@ function SkillsEditor({
         return (
           <div className="flex min-w-0 items-center gap-2 text-left">
             <span
-              className={`size-2 shrink-0 rounded-full ${enabled ? "bg-emerald-500" : "bg-red-500"}`}
+              className={`size-2 shrink-0 rounded-full ${enabled ? "bg-success" : "bg-destructive"}`}
             />
             <span className="block min-w-0 truncate font-medium">{name}</span>
             {issues.length > 0 ? (
               <TriangleAlert
-                className={`size-3.5 shrink-0 ${hasError ? "text-red-500" : "text-amber-500"}`}
+                className={`size-3.5 shrink-0 ${hasError ? "text-destructive" : "text-warning"}`}
                 aria-label={issues.map((issue) => issue.message).join("; ")}
               />
             ) : null}
@@ -1912,15 +1909,15 @@ function SkillsEditor({
           </div>
         ) : null}
         {selectedSkill?.issues?.length ? (
-          <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+          <div className="space-y-1.5 rounded-md border border-warning/40 bg-warning/5 p-3">
             <div className="text-xs font-medium">{t("settings:mcp.skill_issues_title")}</div>
             {selectedSkill.available === false ? (
-              <div className="text-xs text-red-500">{t("settings:mcp.skill_unavailable_hint")}</div>
+              <div className="text-xs text-destructive">{t("settings:mcp.skill_unavailable_hint")}</div>
             ) : null}
             {selectedSkill.issues.map((issue) => (
               <div
                 key={issue.message}
-                className={`font-mono text-xs ${issue.level === "error" ? "text-red-500" : "text-amber-600 dark:text-amber-400"}`}
+                className={`font-mono text-xs ${issue.level === "error" ? "text-destructive" : "text-warning"}`}
               >
                 {issue.message}
               </div>
@@ -1958,9 +1955,11 @@ function SkillsEditor({
           />
         </label>
         <div className="flex justify-end gap-2">
-          <div className="mr-auto flex items-center px-2 text-xs text-muted-foreground">
-            {saving ? t("settings:mcp.autosaving") : t("settings:mcp.autosaved")}
-          </div>
+          <AutosaveStatusRow
+            className="mr-auto"
+            status={autosave.status}
+            onRetry={() => void autosave.saveNow()}
+          />
           <Button variant="destructive" onClick={() => void remove()} disabled={!selected}>
             <Trash2 className="size-4" />
             {t("settings:mcp.delete")}

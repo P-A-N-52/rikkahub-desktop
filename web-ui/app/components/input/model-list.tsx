@@ -236,7 +236,7 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
           variant="ghost"
           size="sm"
           className={cn(
-            "ds-icon-inherit rounded-full px-0 text-[0.8125rem] font-medium text-[var(--ds-icon)] hover:text-foreground sm:h-8 sm:max-w-64 sm:justify-start sm:gap-1.5 sm:px-2.5",
+            "ds-icon-inherit rounded-full px-0 text-compact font-medium text-[var(--ds-icon)] hover:text-foreground sm:h-8 sm:max-w-64 sm:justify-start sm:gap-1.5 sm:px-2.5",
             className,
           )}
           disabled={disabled || !currentAssistant}
@@ -261,7 +261,7 @@ export function ModelListImpl({ disabled = false, className, onChanged }: ModelL
 
       <DropdownMenuContent align="end" className="min-w-[200px]">
         {sections.length === 0 ? (
-          <div className="px-[10px] py-2 text-[0.8125rem] text-[var(--ds-text-tertiary)]">
+          <div className="px-[10px] py-2 text-compact text-[var(--ds-text-tertiary)]">
             {t("model_list.empty")}
           </div>
         ) : (

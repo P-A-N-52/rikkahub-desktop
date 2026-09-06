@@ -788,7 +788,7 @@ function CustomBodyRow({
         onChange={(event) => commit(event.target.value)}
       />
       {parseError ? (
-        <div className="text-xs text-amber-600 dark:text-amber-400">{parseError}</div>
+        <div className="text-xs text-warning">{parseError}</div>
       ) : null}
     </div>
   );

@@ -29,6 +29,7 @@
     "os:allow-version",
     "process:allow-restart",
     "process:allow-exit",
+    "notification:default",
     "allow-get-data-dir",
     "allow-set-data-dir",
     "allow-launch-installer",

@@ -21,6 +21,17 @@ export const createChatInputSlice: StateCreator<AppStoreState, [], [], ChatInput
   setUploading: (uploading) => set({ uploading }),
   uploadProgress: null,
   setUploadProgress: (uploadProgress) => set({ uploadProgress }),
+  parsingFileIds: [],
+  setPartParsing: (fileId, parsing) =>
+    set((state) => {
+      const has = state.parsingFileIds.includes(fileId);
+      if (parsing === has) return state; // 幂等:轮询每 600ms 来一次,避免无效重渲染
+      return {
+        parsingFileIds: parsing
+          ? [...state.parsingFileIds, fileId]
+          : state.parsingFileIds.filter((id) => id !== fileId),
+      };
+    }),
   setText: (conversationId, text) => {
     set((state) => {
       const draft = getDraft(state.drafts, conversationId);

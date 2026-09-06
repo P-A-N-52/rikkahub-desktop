@@ -332,13 +332,13 @@ export function ContainerTabBar() {
                       <span className="flex items-center gap-1.5 truncate">
                         <span className="truncate">{workspace.name}</span>
                         {workspace.status === "missing" ? (
-                          <span className="flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[0.625rem] font-medium text-amber-600 dark:text-amber-400">
+                          <span className="flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 py-px text-micro font-medium text-warning">
                             <TriangleAlert className="size-2.5" strokeWidth={2} />
                             {t("workspace.menu.missing_badge")}
                           </span>
                         ) : null}
                       </span>
-                      <span className="truncate text-[0.6875rem] leading-4 text-[var(--ds-text-tertiary)]">
+                      <span className="truncate text-mini leading-4 text-[var(--ds-text-tertiary)]">
                         {workspace.root}
                       </span>
                     </span>
@@ -425,7 +425,7 @@ export function ContainerTabBar() {
           {/* min-w-0:DialogContent 是 grid,不压住 auto 最小宽的话长路径会把格子撑出对话框 */}
           <div className="min-w-0 space-y-4">
             <div className="space-y-1.5">
-              <label className="text-[0.8125rem] font-medium text-[var(--ds-text-secondary)]">
+              <label className="text-compact font-medium text-[var(--ds-text-secondary)]">
                 {t("workspace.menu.name_label")}
               </label>
               <Input
@@ -439,14 +439,14 @@ export function ContainerTabBar() {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[0.8125rem] font-medium text-[var(--ds-text-secondary)]">
+              <label className="text-compact font-medium text-[var(--ds-text-secondary)]">
                 {t("workspace.menu.path_label")}
               </label>
               {renameTarget?.type === "folder" ? (
                 <>
                   {/* B6-①b:folder 型路径可重绑。missing 态显示失效警告;改路径后提示需重新授权信任。 */}
                   {renameTarget.status === "missing" ? (
-                    <div className="flex items-start gap-2 rounded-[var(--ds-radius-md)] bg-amber-500/10 px-3 py-2 text-[0.75rem] text-amber-600 dark:text-amber-400">
+                    <div className="flex items-start gap-2 rounded-[var(--ds-radius-md)] bg-warning/10 px-3 py-2 text-xs text-warning">
                       <TriangleAlert className="mt-0.5 size-3.5 shrink-0" strokeWidth={2} />
                       <span>{t("workspace.menu.missing_hint")}</span>
                     </div>
@@ -456,7 +456,7 @@ export function ContainerTabBar() {
                       value={renameRoot}
                       onChange={(event) => setRenameRoot(event.target.value)}
                       placeholder={t("workspace.create.folder_path_placeholder")}
-                      className="flex-1 font-mono text-[0.8125rem]"
+                      className="flex-1 font-mono text-compact"
                     />
                     <Button type="button" variant="outline" size="sm" onClick={() => void browseRenameRoot()}>
                       <FolderSearch className="mr-1 size-4" />
@@ -464,7 +464,7 @@ export function ContainerTabBar() {
                     </Button>
                   </div>
                   {renameRoot.trim() && renameRoot.trim() !== renameTarget.root ? (
-                    <div className="text-[0.75rem] text-muted-foreground">{t("workspace.menu.rebind_notice")}</div>
+                    <div className="text-xs text-muted-foreground">{t("workspace.menu.rebind_notice")}</div>
                   ) : null}
                 </>
               ) : (
@@ -472,7 +472,7 @@ export function ContainerTabBar() {
                   type="button"
                   onClick={() => renameTarget && revealWorkspace(renameTarget)}
                   aria-label={t("workspace.menu.reveal")}
-                  className="flex h-9 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-[0.8125rem] text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
+                  className="flex h-9 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--ds-surface-input)] px-3 text-left text-compact text-[var(--ds-text-secondary)] shadow-[var(--ds-input-shadow)] transition-shadow hover:shadow-[var(--ds-input-shadow-hover)]"
                 >
                   <FolderOpen className="size-4 shrink-0 text-[var(--ds-icon)]" strokeWidth={1.75} />
                   <span className="min-w-0 flex-1 truncate">{renameTarget?.root}</span>
@@ -597,7 +597,7 @@ function ContainerTab({
     >
       <div
         className={cn(
-          "group relative flex h-7 w-full items-center gap-1.5 pl-2.5 pr-1.5 text-[0.8125rem] font-medium transition-colors duration-150",
+          "group relative flex h-7 w-full items-center gap-1.5 pl-2.5 pr-1.5 text-compact font-medium transition-colors duration-150",
           active
             ? "rounded-t-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-primary)]"
             : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",

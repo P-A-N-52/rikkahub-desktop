@@ -15,6 +15,7 @@ import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import { UIAvatar } from "~/components/ui/ui-avatar";
 import { useAutosaveDraft } from "~/hooks/use-autosave-draft";
+import { AutosaveStatusRow } from "~/components/settings/autosave-status";
 import api from "~/services/api";
 import { confirmDialog } from "~/stores/confirm-store";
 import type { AssistantProfile, ProviderModel, Settings } from "~/types";
@@ -358,7 +359,7 @@ export function AssistantsSection({
             />
             {/* 专题11-P0:秒级时间变量每次请求都变,提示词前缀缓存全灭,就地提醒改天级 */}
             {/\{\{\s*(cur_time|cur_datetime|time)\s*\}\}/.test(textValue(draft.systemPrompt)) ? (
-              <p className="text-xs text-amber-600 dark:text-amber-500">
+              <p className="text-xs text-warning">
                 {t("settings:assistants.system_prompt_cache_hint")}
               </p>
             ) : null}
@@ -918,7 +919,10 @@ export function AssistantsSection({
               <Trash2 className="size-4" />
               {t("settings:assistants.delete")}
             </Button>
-            <div className="flex items-center px-2 text-xs text-muted-foreground">{t("settings:assistants.autosaved")}</div>
+            <AutosaveStatusRow
+              status={autosave.status}
+              onRetry={() => void autosave.saveNow()}
+            />
           </div>
         </div>
       </div>

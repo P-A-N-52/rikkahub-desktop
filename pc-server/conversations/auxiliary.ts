@@ -118,6 +118,8 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
   const maxTokens = options.maxTokens ?? null;
   const reasoningLevel = options.reasoningLevel ?? null;
   const stream = options.stream === true;
+  // 取消信号:仅压缩链路(带 signal 调用)生效,其余调用方 undefined —— 与既有不传 signal 行为逐字节一致。
+  const signal = options.signal;
   const pushDelta = (text: string) => {
     if (text) options.onDelta?.(text);
   };
@@ -153,12 +155,12 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
     if (stream) {
       const streamEndpoint = `${providerItem.baseUrl.replace(/\/+$/, "")}/models/${selectedModel}:streamGenerateContent`;
       try {
-        return cleanAuxiliaryText(await fetchGoogleAuxiliaryStream(streamEndpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta));
+        return cleanAuxiliaryText(await fetchGoogleAuxiliaryStream(streamEndpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta, signal));
       } catch {
         // Fall back to non-streaming auxiliary calls; some compatible gateways do not expose Gemini streaming.
       }
     }
-    return fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, (raw) => raw.candidates?.[0]?.content?.parts?.[0]?.text);
+    return fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, (raw) => raw.candidates?.[0]?.content?.parts?.[0]?.text, signal);
   }
   if (providerItem.type === "claude") {
     headers["x-api-key"] = providerItem.apiKey;
@@ -174,12 +176,12 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
     };
     if (stream) {
       try {
-        return cleanAuxiliaryText(await fetchClaudeAuxiliaryStream(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta));
+        return cleanAuxiliaryText(await fetchClaudeAuxiliaryStream(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta, signal));
       } catch {
         body.stream = false;
       }
     }
-    return fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, (raw) => raw.content?.map((item: { text?: string }) => item.text ?? "").join("\n"));
+    return fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, (raw) => raw.content?.map((item: { text?: string }) => item.text ?? "").join("\n"), signal);
   }
   headers.Authorization = `Bearer ${providerItem.apiKey}`;
   body = providerItem.useResponseApi
@@ -205,14 +207,14 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
       };
   if (stream) {
     try {
-      const text = await fetchOpenAiAuxiliaryStream(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta);
+      const text = await fetchOpenAiAuxiliaryStream(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, pushDelta, signal);
       if (!text || text === "(empty response)") throw new Error(`${kind} model returned empty response`);
       return text;
     } catch {
       body.stream = false;
     }
   }
-  const text = await fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, completionMessageText);
+  const text = await fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, completionMessageText, signal);
   if (!text || text === "(empty response)") throw new Error(`${kind} model returned empty response`);
   return text;
 }
@@ -463,6 +465,7 @@ export async function compressConversation(conversation: Conversation, additiona
     });
     summaries.push(cleanAuxiliaryText(await fetchAuxiliaryText(state.settings.compressModelId || state.settings.chatModelId, prompt, "compression", {
       stream: true,
+      signal,
     })));
   }
   // R7-4:落库前最后一道闸——取消后 LLM 结果作废,绝不改写会话(压缩是破坏性替换,

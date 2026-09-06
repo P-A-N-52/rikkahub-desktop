@@ -68,6 +68,15 @@ void i18n.use(initReactI18next).init({
   interpolation: {
     escapeValue: false,
   },
+  // 裸键名渲染事故的防回潮网:缺键在生产静默回退 key 本身(用户可见但不断流),
+  // dev 环境必须 console.error 暴露出来,让"键拼错/漏翻译"在开发期就红。
+  ...(import.meta.env.DEV
+    ? {
+        parseMissingKeyHandler: (key: string, defaultValue?: string) => {
+          console.error(`[i18n] missing key: ${key}`, defaultValue ?? "");
+        },
+      }
+    : {}),
 });
 
 export default i18n;
