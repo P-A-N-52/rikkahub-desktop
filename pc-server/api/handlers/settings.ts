@@ -35,6 +35,7 @@ import { deleteById, reorderByIds, uniqueStrings, upsertById, validateKnownJsonI
 import { normalizePreferredPort, normalizeProxyConfig } from "../../foundation/net";
 import { defaultSettings } from "../../app-config/defaults";
 import { DEFAULT_COMPRESS_PROMPT, DEFAULT_OCR_PROMPT, DEFAULT_PROMPT_OPTIMIZE_PROMPT, DEFAULT_SUGGESTION_PROMPT, DEFAULT_TITLE_PROMPT, DEFAULT_TRANSLATION_PROMPT } from "../../app-config/prompts";
+import { PI_COMPACTION_PROMPT } from "../../pi-engine/compaction-prompt-text";
 import { updateSettings } from "../../app-config";
 import { markProviderTestResult, providerAuthChanged } from "../../model-providers/checks";
 import { endpointFor, fetchProviderBalance, fetchProviderModels, runProviderCheck } from "../../model-providers/checks";
@@ -86,6 +87,12 @@ export function buildAssistantInjectionPatch(
 
 export async function handleSettingsRoutes(request: Request, url: URL, path: string): Promise<Response | null> {
   if (path === "settings" && request.method === "GET") return json(state.settings);
+  // 各引擎原生压缩 prompt(只读展示,设置页压缩 prompt 对话框的引擎切换标签)。
+  // chat 引擎的 prompt 可编辑、走 settings.compressPrompt,不在此列;此端点只暴露
+  // "引擎自带、不可编辑"的原生 prompt。数组形状留第三引擎拓展。
+  if (path === "settings/engine-compaction-prompts" && request.method === "GET") {
+    return json({ engines: [{ engine: "pi", prompt: PI_COMPACTION_PROMPT }] });
+  }
   // settings 快照推送已并入 /api/events 通道(settings 事件)。
   if (path === "settings/display" && request.method === "POST") {
     const body = await readJson<Record<string, JsonValue>>(request);

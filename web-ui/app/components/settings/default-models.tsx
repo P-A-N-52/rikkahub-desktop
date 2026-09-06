@@ -195,6 +195,27 @@ export function DefaultModelsSection({
     compressPrompt: textValue(settings.compressPrompt),
   } satisfies Draft);
   const [editingPrompt, setEditingPrompt] = React.useState<PromptKey | null>(null);
+  // 压缩 prompt 对话框的引擎标签(压缩 prompt 不是公共的:对话引擎可编辑,工作区
+  // 引擎 pi 用原生 prompt 只读展示)。其余 prompt 无引擎差异,不显示标签。
+  const [compressEngineTab, setCompressEngineTab] = React.useState<"chat" | "pi">("chat");
+  const [piCompactionPrompt, setPiCompactionPrompt] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    // 懒加载:首次打开压缩 prompt 对话框才取 pi 原生 prompt(静态文本,取一次缓存)。
+    if (editingPrompt !== "compressPrompt" || piCompactionPrompt !== null) return;
+    let cancelled = false;
+    api
+      .get<{ engines: Array<{ engine: string; prompt: string }> }>("settings/engine-compaction-prompts")
+      .then((data) => {
+        if (cancelled) return;
+        setPiCompactionPrompt(data.engines.find((item) => item.engine === "pi")?.prompt ?? "");
+      })
+      .catch(() => {
+        if (!cancelled) setPiCompactionPrompt("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editingPrompt, piCompactionPrompt]);
   const save = async () => {
     await api.post("settings/default-models", draft);
     onSettings({ ...settings, ...draft });
@@ -374,25 +395,55 @@ export function DefaultModelsSection({
       </div>
       <Dialog
         open={Boolean(editingPrompt)}
-        onOpenChange={(open) => !open && setEditingPrompt(null)}
+        onOpenChange={(open) => {
+          if (open) return;
+          setEditingPrompt(null);
+          setCompressEngineTab("chat");
+        }}
       >
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>{activePrompt?.title ?? "Prompt"}</DialogTitle>
             <DialogDescription>
-              {t("settings:models.variables_label")}
-              {activePrompt?.variables}
+              {editingPrompt === "compressPrompt" && compressEngineTab === "pi"
+                ? t("settings:models.compress_engine.pi_note")
+                : `${t("settings:models.variables_label")}${activePrompt?.variables ?? ""}`}
             </DialogDescription>
           </DialogHeader>
+          {editingPrompt === "compressPrompt" ? (
+            // 压缩 prompt 分引擎:对话引擎可编辑;工作区引擎(pi)原生内置、只读。
+            // 其余 prompt 无引擎差异,不显示此切换。
+            <div className="flex gap-1 rounded-lg border bg-muted/40 p-1 self-start">
+              {(["chat", "pi"] as const).map((tab) => (
+                <Button
+                  key={tab}
+                  type="button"
+                  size="sm"
+                  variant={compressEngineTab === tab ? "default" : "ghost"}
+                  onClick={() => setCompressEngineTab(tab)}
+                >
+                  {t(`settings:models.compress_engine.${tab}`)}
+                </Button>
+              ))}
+            </div>
+          ) : null}
           {editingPrompt ? (
-            <Textarea
-              value={draft[editingPrompt]}
-              onChange={(event) => setDraft({ ...draft, [editingPrompt]: event.target.value })}
-              className="h-[420px] font-mono text-xs"
-            />
+            editingPrompt === "compressPrompt" && compressEngineTab === "pi" ? (
+              <Textarea
+                value={piCompactionPrompt ?? "…"}
+                readOnly
+                className="h-[420px] font-mono text-xs opacity-80"
+              />
+            ) : (
+              <Textarea
+                value={draft[editingPrompt]}
+                onChange={(event) => setDraft({ ...draft, [editingPrompt]: event.target.value })}
+                className="h-[420px] font-mono text-xs"
+              />
+            )
           ) : null}
           <DialogFooter>
-            {editingPrompt ? (
+            {editingPrompt && !(editingPrompt === "compressPrompt" && compressEngineTab === "pi") ? (
               <Button
                 type="button"
                 variant="outline"
@@ -404,7 +455,13 @@ export function DefaultModelsSection({
                 {t("settings:models.reset_default")}
               </Button>
             ) : null}
-            <Button type="button" onClick={() => setEditingPrompt(null)}>
+            <Button
+              type="button"
+              onClick={() => {
+                setEditingPrompt(null);
+                setCompressEngineTab("chat");
+              }}
+            >
               {t("settings:models.done")}
             </Button>
           </DialogFooter>

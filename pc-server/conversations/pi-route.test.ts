@@ -22,6 +22,9 @@ const ws = await import("../workspace");
 const { defaultAssistant } = await import("../assistants");
 const { defaultState } = await import("../app-config/defaults");
 const { setState, state } = await import("../persistence/json-store");
+// 解构的 state 固化 import 时刻的值(setState 整体换对象后即 stale);命名空间对象的
+// 属性访问是 live 的,需要读"当前 state"的测试用 jsonStore.state。
+const jsonStore = await import("../persistence/json-store");
 const { model, provider } = await import("../model-providers");
 const { pendingToolApprovalCount } = await import("../inference-engine/approval-gate");
 const { handleConversationRoutes } = await import("../api/handlers/conversations");
@@ -402,6 +405,84 @@ describe("引擎判定单源(审批旁路/压缩路由收编)", () => {
     // 压缩发生点注解落在"当时的最新一条消息"(工作区路径经 applyCapturedEngineCompactions)。
     const tail = conversation.messages.at(-1)!;
     expect(tail.messages[tail.selectIndex].annotations).toContainEqual({ type: "compaction_boundary" });
+  }, 60_000);
+});
+
+// 压缩模型公共化:「设置-默认模型与提示词」是公共基础设施,配置的压缩模型对所有
+// 引擎生效——pi 的摘要生成也用它(此前 pi 压缩只认会话模型,compressModelId 仅在
+// chat 引擎的 UI 历史压缩生效)。窗口锚定/富化裁决仍按会话模型(压缩对象的视角)。
+describe("压缩模型公共化(summarizer 装配)", () => {
+  function fillLargeHistory(conversation: Conversation) {
+    // 远超手动压缩保留预算(MANUAL_COMPACT_KEEP_RECENT_TOKENS=2000,pi chars/4 口径)。
+    for (let round = 0; round < 6; round++) {
+      const filler = `第${round}轮长历史。`.repeat(2000);
+      appendUserNode(conversation, filler);
+      conversation.messages.push({
+        id: `piroute-n-a${seq}-${conversation.messages.length}`,
+        selectIndex: 0,
+        messages: [{
+          id: `piroute-m-a${seq}-${conversation.messages.length}`,
+          role: "ASSISTANT",
+          parts: [{ type: "text", text: filler }],
+          annotations: [],
+          createdAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          translation: null,
+        }],
+      } as never);
+    }
+  }
+
+  test("配置压缩模型 → pi 摘要请求全部用压缩模型(非会话模型)", async () => {
+    const server = await installUpstream([
+      { content: "压缩模型产出的摘要。" },
+      { content: "压缩模型产出的摘要。" },
+    ]);
+    // 同 provider 下第二个模型作为公共压缩模型(openai 型标准路径,可映射进 pi)。
+    const compressModel = model("compress-model", "Compress Model");
+    jsonStore.state.settings.providers[0]!.models.push(compressModel);
+    jsonStore.state.settings.compressModelId = compressModel.id;
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-compact-summarizer" });
+    const conversation = seedConversation(workspace.id);
+    fillLargeHistory(conversation);
+    const result = await compactEngineConversation(conversation, "");
+    expect(result).not.toBeNull();
+    expect(result!.summary).toContain("压缩模型产出的摘要");
+    // 主摘要与可能的分裂回合前缀摘要,所有上游请求都应打在压缩模型上。
+    expect(server.requests.length).toBeGreaterThanOrEqual(1);
+    for (const request of server.requests) {
+      expect(request.model).toBe("compress-model");
+    }
+  }, 60_000);
+
+  test("压缩模型映射不进 pi(自定义补全路径) → 回退会话模型,压缩照常完成", async () => {
+    const server = await installUpstream([
+      { content: "会话模型产出的摘要。" },
+      { content: "会话模型产出的摘要。" },
+    ]);
+    // 自定义 chatCompletionsPath 的 openai 型服务商:聊天引擎可用,pi 映射拒绝
+    // (其 OpenAI 客户端固定 /chat/completions)——正是"公共设置是偏好不是硬约束"
+    // 要兜住的场景。
+    const unmappable = model("unmappable-model", "Custom Path Model");
+    jsonStore.state.settings.providers.push(provider({
+      id: crypto.randomUUID(),
+      name: "Custom Path Provider",
+      baseUrl: server.baseUrl,
+      apiKey: "sk-test",
+      enabled: true,
+      chatCompletionsPath: "/v1/custom/completions",
+      models: [unmappable],
+    }));
+    jsonStore.state.settings.compressModelId = unmappable.id;
+    const workspace = ws.createWorkspace({ type: "managed", name: "route-compact-fallback" });
+    const conversation = seedConversation(workspace.id);
+    fillLargeHistory(conversation);
+    const result = await compactEngineConversation(conversation, "");
+    expect(result).not.toBeNull();
+    expect(server.requests.length).toBeGreaterThanOrEqual(1);
+    for (const request of server.requests) {
+      expect(request.model).toBe("fake-model");
+    }
   }, 60_000);
 });
 

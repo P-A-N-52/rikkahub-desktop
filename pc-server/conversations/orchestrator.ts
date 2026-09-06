@@ -65,6 +65,7 @@ import {
   type EngineRunContext,
 } from "../engines";
 import { MANUAL_COMPACT_KEEP_RECENT_TOKENS, runPiCompaction, runPiGeneration, type CapturedEngineCompaction } from "../pi-engine/runner";
+import { mapProviderModelToPi } from "../pi-engine/model-bridge";
 import { createPiWorkspaceTools } from "../pi-engine/workspace-tools";
 import { createPiGeneralTools } from "../pi-engine/general-tools";
 import { createPiSessionResources } from "../pi-engine/resources";
@@ -691,10 +692,26 @@ async function runPiWorkspaceCompaction(
     // 手动压缩门槛/保留窗口调低(中文 chars/4 低估问题,rationale 见 runner.ts 常量)。
     compactionKeepRecentTokens: MANUAL_COMPACT_KEEP_RECENT_TOKENS,
   });
+  // 摘要模型:公共压缩模型优先(ctx.summarizer,装配点已决策),pi 映射不进(自定义
+  // 补全路径的 openai 型服务商等)则回退会话模型——公共设置是偏好不是硬约束,
+  // 压缩必须总能进行,回退留 warn 让用户知情。注意窗口锚定/富化裁决(上方 cut/
+  // enriched)仍按 ctx.model:压缩对象是"会话模型实际看到的消息",与生成路径同一
+  // 视角,勿随摘要模型漂移。
+  let summarizer = ctx.summarizer;
+  if (summarizer.model.id !== ctx.model.id && !mapProviderModelToPi(summarizer.provider, summarizer.model).ok) {
+    reportError(
+      "provider",
+      "warn",
+      `压缩模型 ${summarizer.model.displayName || summarizer.model.modelId} 无法在工作区引擎使用,本次压缩改用会话模型`,
+      undefined,
+      "compact_summarizer_fallback",
+    );
+    summarizer = { provider: ctx.provider, model: ctx.model };
+  }
   const result = await runPiCompaction({
-    provider: ctx.provider,
-    model: ctx.model,
-    modelLimits: piModelLimitsFor(ctx.provider, ctx.model, assistant),
+    provider: summarizer.provider,
+    model: summarizer.model,
+    modelLimits: piModelLimitsFor(summarizer.provider, summarizer.model, assistant),
     reasoningLevel: assistant.reasoningLevel,
     conversationId: conversation.id,
     cwd: runtime.cwd,
@@ -726,9 +743,23 @@ export async function compactEngineConversation(
   const adapter = resolveEngine(ENGINE_REGISTRY, conversation, assistant);
   if (!adapter.compact) return null;
   const picked = findModel(assistant.chatModelId ?? state.settings.chatModelId);
+  // 压缩模型公共化(「设置-默认模型与提示词」是公共基础设施):配置了压缩模型则
+  // 所有引擎的摘要生成都用它,未配置回退会话模型。modelExists 先行:压缩模型被
+  // 删除后设置残留 id 不该改变语义(findModel 对不存在 id 会兜底 chatModelId,
+  // 那是"默认聊天模型"不是"用户指定的压缩模型",宁可回退会话模型)。
+  const summarizerPicked = modelExists(state.settings.compressModelId)
+    ? findModel(state.settings.compressModelId)
+    : picked;
   try {
     const result = await adapter.compact(
-      { conversation, assistant, provider: picked.provider, model: picked.model, customInstructions },
+      {
+        conversation,
+        assistant,
+        provider: picked.provider,
+        model: picked.model,
+        summarizer: { provider: summarizerPicked.provider, model: summarizerPicked.model },
+        customInstructions,
+      },
       (event) => {
         if (event.kind === "engine_status") broadcastEngineStatus(conversation.id, event.status);
       },

@@ -485,6 +485,11 @@
     "variables_label": "Variables: ",
     "reset_default": "Reset to default",
     "done": "Done",
+    "compress_engine": {
+      "chat": "Chat engine",
+      "pi": "Workspace engine (pi)",
+      "pi_note": "The workspace engine uses pi's native compaction. This prompt ships with the engine and is read-only. Incremental updates and oversized turns use dedicated variants of the same scheme."
+    },
     "prompt": {
       "title": "Title generation prompt",
       "translate": "Translation prompt",

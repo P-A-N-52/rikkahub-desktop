@@ -485,6 +485,11 @@
     "variables_label": "变量：",
     "reset_default": "恢复默认",
     "done": "完成",
+    "compress_engine": {
+      "chat": "对话引擎",
+      "pi": "工作区引擎 (pi)",
+      "pi_note": "工作区引擎使用 pi 原生压缩机制，此提示词随引擎内置、不可编辑。增量更新与超大回合另有同机制的专用变体。"
+    },
     "prompt": {
       "title": "标题生成 Prompt",
       "translate": "翻译 Prompt",
