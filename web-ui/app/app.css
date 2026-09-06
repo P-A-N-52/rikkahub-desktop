@@ -1237,13 +1237,13 @@
   /* 语义字号阶梯(域13-4):收编散落的任意值字号。新增三档,命名不撞 Tailwind 预设
      (text-xs/sm/base 已被全仓 700+ 处用于默认 12/14/16px,覆写会造成视觉回归)。
      micro=10px(角标/序号), mini=11px(辅助说明/时间戳), compact=13px(紧凑正文)。
-     12px 用 Tailwind 预设 text-xs;0.7rem(11.2px)孤例就近并入 mini。 */
+     12px 用 Tailwind 预设 text-xs;0.7rem(11.2px)孤例就近并入 mini。
+     不带 --line-height:收编前的任意值 text-[Nrem] 行高是 normal(~1.2×),这些档位多用于
+     标签页/选择器等固定高紧凑容器;若强行带固定行高(如 compact 带 1.25rem)会把行盒撑高、
+     文字视觉发胀——4D 内测实测标签页/选择器因此「字体变大」。保持 normal 与替换前逐像素一致。 */
   --text-micro: 0.625rem;
-  --text-micro--line-height: 1rem;
   --text-mini: 0.6875rem;
-  --text-mini--line-height: 1rem;
   --text-compact: 0.8125rem;
-  --text-compact--line-height: 1.25rem;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
