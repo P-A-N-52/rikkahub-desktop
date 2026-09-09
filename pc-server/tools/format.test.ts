@@ -4,13 +4,16 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  UNRESOLVED_TOOL_RESULT_TEXT,
   apiToolCallFromPart,
   openAiToolOutput,
   parseToolInput,
   partsToToolResultText,
   resolvedToolOutput,
+  toolArgumentsJson,
   toolExecutionErrorPayload,
   toolOutputForApproval,
+  toolResultTextForApi,
 } from "./format";
 
 describe("parseToolInput", () => {
@@ -21,6 +24,26 @@ describe("parseToolInput", () => {
     expect(parseToolInput("")).toEqual({});
     expect(parseToolInput(42)).toEqual({});
     expect(parseToolInput('["array"]')).toEqual({});
+  });
+});
+
+// 2026-09-07 内测报障(火山 MissingParameter input.arguments,第二问必炸)的归一化锁:
+// ToolPart.input 是非可选 string,"参数缺失"落库形态是空串而非 undefined —— `?? "{}"`
+// 接不住空串,会把 "" 原样发给上游。
+describe("toolArgumentsJson", () => {
+  test("空串/空白/非串一律归 \"{}\"（?? 接不住的空串正是 400 的直接触发物）", () => {
+    expect(toolArgumentsJson("")).toBe("{}");
+    expect(toolArgumentsJson("   ")).toBe("{}");
+    expect(toolArgumentsJson("\n\t")).toBe("{}");
+    expect(toolArgumentsJson(undefined)).toBe("{}");
+    expect(toolArgumentsJson(null)).toBe("{}");
+  });
+
+  test("真实参数原样保留（去首尾空白，不改结构）", () => {
+    expect(toolArgumentsJson('{"q":"x"}')).toBe('{"q":"x"}');
+    expect(toolArgumentsJson('  {"q":1}  ')).toBe('{"q":1}');
+    // 半成品 JSON 不做修复:参数解析容错归 parseToolInput,本函数只保证"非空"。
+    expect(toolArgumentsJson('{"q":')).toBe('{"q":');
   });
 });
 
@@ -70,6 +93,21 @@ describe("toolOutputForApproval / resolvedToolOutput", () => {
   });
 });
 
+// 工具结果项发上游前的兜底(与 arguments 空串同源问题):function_call 与其结果项必须成对
+// 且都有内容,空串会被严格端点(火山)按必填拒。占位文案与 pi 引擎中断补录共用常量。
+describe("toolResultTextForApi", () => {
+  test("有真实输出/审批派生输出时原样透传", () => {
+    expect(toolResultTextForApi({ output: [{ type: "text", text: "real" }] })).toBe("real");
+    expect(toolResultTextForApi({ output: [], approvalState: { type: "answered", answer: "42" } })).toBe("42");
+  });
+
+  test("既无输出又无审批派生时给确定性占位，绝不发空串", () => {
+    expect(toolResultTextForApi({ output: [], approvalState: { type: "auto" } })).toBe(UNRESOLVED_TOOL_RESULT_TEXT);
+    expect(toolResultTextForApi({})).toBe(UNRESOLVED_TOOL_RESULT_TEXT);
+    expect(toolResultTextForApi({ output: [], approvalState: { type: "pending" } }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("partsToToolResultText", () => {
   test("只取 text part 以换行拼接", () => {
     expect(
@@ -95,5 +133,9 @@ describe("apiToolCallFromPart", () => {
   test("缺 input 时回退到空对象串", () => {
     const call = apiToolCallFromPart({ toolCallId: "id2", toolName: "t" });
     expect(call.function.arguments).toBe("{}");
+  });
+
+  test("input 为空串时同样归 \"{}\"（旧 `?? \"{}\"` 会原样放行空串）", () => {
+    expect(apiToolCallFromPart({ toolCallId: "id3", toolName: "t", input: "" }).function.arguments).toBe("{}");
   });
 });

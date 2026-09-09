@@ -8,7 +8,7 @@ import { id, isRecord, reasoningFromParts, safeJsonParse, visibleReasoningFromMe
 import { MODELS_DEV_CACHE_PATH } from "../foundation/paths";
 import { fetchWithTimeout, readWithIdleTimeout } from "../foundation/net";
 import { initialApprovalState, toolNeedsApproval } from "../tools/approval";
-import { openAiToolOutput, partsToToolResultText, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
+import { partsToToolResultText, toolArgumentsJson, toolExecutionErrorPayload, toolResultTextForApi } from "../tools/format";
 import {
   apiContentText,
   claudeBlocksFromUiParts,
@@ -1018,19 +1018,22 @@ export async function fetchOpenAiText(
 
     const toolMessages = [];
     const hasPendingInBatch = toolCalls.some((toolCall: any) =>
-      toolNeedsApproval(String(toolCall?.function?.name ?? ""), assistant, hooks?.conversation, String(toolCall?.function?.arguments ?? "{}")),
+      toolNeedsApproval(String(toolCall?.function?.name ?? ""), assistant, hooks?.conversation, toolArgumentsJson(toolCall?.function?.arguments)),
     );
     const dispatchCtx = toolCallContext(hooks);
     for (const toolCall of toolCalls) {
       // R3-4:停止后剩余工具不再执行。
       if (signal?.aborted) throw new DOMException("Generation stopped", "AbortError");
+      // arguments 经 toolArgumentsJson 归一(""→"{}"):不规范上游会回空串,?? 接不住,空参
+      // 工具卡落库后在下一轮历史编码里就是严格端点 400 的弹药(见 toolArgumentsJson 头注)。
+      const toolArguments = toolArgumentsJson(toolCall.function?.arguments);
       const toolPart: ToolPart = {
         type: "tool",
         toolCallId: String(toolCall.id ?? id()),
         toolName: String(toolCall.function?.name ?? ""),
-        input: String(toolCall.function?.arguments ?? "{}"),
+        input: toolArguments,
         output: [],
-        approvalState: initialApprovalState(String(toolCall.function?.name ?? ""), assistant, hooks?.conversation, String(toolCall.function?.arguments ?? "{}")),
+        approvalState: initialApprovalState(String(toolCall.function?.name ?? ""), assistant, hooks?.conversation, toolArguments),
       };
       if (hooks?.message) {
         finishReasoningParts(hooks.message);
@@ -1053,16 +1056,18 @@ export async function fetchOpenAiText(
         toolResult = { output: [toolExecutionErrorPayload(err)] };
       }
       const outputParts = toolResult.output;
+      // 本地 toolPart 恒记录输出:sink 分支的卡在消息里(由应用器写),但下面的结果项投影
+      // 读的是这个本地对象——不写就会被当成"无输出"而落到中断占位文案。
+      toolPart.output = outputParts;
       if (hooks?.sink) {
         hooks.sink({ kind: "tool_result", toolCallId: String((toolPart as Record<string, JsonValue>).toolCallId), output: outputParts });
       } else {
-        toolPart.output = outputParts;
         touchStream(hooks);
       }
       toolMessages.push({
         role: "tool",
         tool_call_id: (toolPart as Record<string, JsonValue>).toolCallId,
-        content: openAiToolOutput(outputParts),
+        content: toolResultTextForApi(toolPart),
       });
     }
     if (hasPendingInBatch) {
@@ -1186,7 +1191,9 @@ export function responseEventToDelta(raw: any) {
       return {
         tool_calls: [{
           index: Number(raw.output_index ?? 0),
-          id: String(item.call_id ?? item.id ?? ""),
+          // 取 call_id(工具调用配对 id，spec 必填)；item.id(fc_…，输出条目 id)只作劣质
+          // 中转缺 call_id 时的兜底。真值判定而非 ??：空串也要落到兜底(同 mergeToolCallDeltas)。
+          id: String(item.call_id || item.id || ""),
           type: "function",
           function: {
             name: String(item.name ?? ""),
@@ -1218,11 +1225,18 @@ export function responseEventToDelta(raw: any) {
       };
     }
   }
+  // 参数帧只认 call_id，绝不取 item_id——Responses 的 function_call 带两个语义不同的 id
+  // (官方 OpenAPI FunctionToolCall):item.id 是【输出条目】id(fc_…，可选)，item.call_id 是
+  // 【工具调用】配对 id(call_…，必填)；而 arguments.delta/done 两帧按 spec 只带 item_id
+  // (即 fc_…)、根本没有 call_id 字段。取 item_id 当调用 id 会把已建槽的 call_… 改写成 fc_…：
+  // ①流内已建的卡(call_…)从此收不到 tool_input_delta，参数永久空；②轮末循环层按 fc_… 另
+  // 建一张卡 —— 一次调用落库两张卡，空参幽灵卡进第二轮历史编码即 400(火山 MissingParameter
+  // input.arguments，2026-09-07 内测报障)。槽位对应本就靠 output_index，id 在此帧是冗余的。
   if (type === "response.function_call_arguments.delta") {
     return {
       tool_calls: [{
         index: Number(raw.output_index ?? 0),
-        id: String(raw.item_id ?? raw.call_id ?? ""),
+        id: String(raw.call_id ?? ""),
         type: "function",
         function: { name: "", arguments: String(raw.delta ?? "") },
       }],
@@ -1232,7 +1246,7 @@ export function responseEventToDelta(raw: any) {
     return {
       tool_calls: [{
         index: Number(raw.output_index ?? 0),
-        id: String(raw.item_id ?? raw.call_id ?? ""),
+        id: String(raw.call_id ?? ""),
         type: "function",
         function: { name: "", arguments: String(raw.arguments ?? "") },
         _rikkahubSnapshot: true,
@@ -1763,7 +1777,8 @@ export async function readOpenAiResponseIntoMessage(
         } else if (itemType === "function_call") {
           mergeToolCallDeltas(toolCalls, [{
             index: toolCalls.length,
-            id: String(item.call_id ?? item.id ?? ""),
+            // 同流式路径:call_id 优先(工具调用配对 id),item.id 仅缺失时兜底。
+            id: String(item.call_id || item.id || ""),
             type: "function",
             function: { name: String(item.name ?? ""), arguments: String(item.arguments ?? "{}") },
           }], "snapshot");
@@ -1836,7 +1851,9 @@ export async function fetchOpenAiTextStreaming(
         normalized.push({
           id: rawId || id(),
           name: String(toolCall.function?.name ?? ""),
-          arguments: String(toolCall.function?.arguments ?? "{}"),
+          // 同 id 的空串问题:arguments 缺失时流帧给的是 ""(不是 undefined),?? 接不住。
+          // 归一到 "{}" —— 空串既非合法 JSON、也过不了严格端点的必填校验。
+          arguments: toolArgumentsJson(toolCall.function?.arguments),
         });
       }
       return { text: r.content, toolCalls: normalized, replay: r };
@@ -1853,8 +1870,8 @@ export async function fetchOpenAiTextStreaming(
           approvalState: initialApprovalState(call.name, assistant, hooks.conversation),
         };
         return useResponseInput
-          ? { type: "function_call_output", call_id: call.id, output: resolvedToolOutput(toolPart) }
-          : { role: "tool", tool_call_id: call.id, content: resolvedToolOutput(toolPart) };
+          ? { type: "function_call_output", call_id: call.id, output: toolResultTextForApi(toolPart) }
+          : { role: "tool", tool_call_id: call.id, content: toolResultTextForApi(toolPart) };
       });
       if (useResponseInput) {
         // 用归一化密集数组（与 toolMessages 的 call.id 同源，配对恒成立；勿用 r.toolCalls

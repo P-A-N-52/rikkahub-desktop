@@ -26,7 +26,7 @@ import {
 } from "../model-providers/request-dialect";
 import { fallbackDocumentText, readExtractedTextSync } from "../files/index";
 import { ensureExtractedTextAsync } from "../files/extraction";
-import { parseToolInput, resolvedToolOutput } from "../tools/format";
+import { UNRESOLVED_TOOL_RESULT_TEXT, parseToolInput, toolArgumentsJson, toolResultTextForApi } from "../tools/format";
 import { state } from "../persistence/json-store";
 
 export function fileEntryFromApiUrl(url: string) {
@@ -207,7 +207,11 @@ export function claudeBlocksFromUiParts(parts: ToolOutputEntry[]) {
       });
     }
   }
-  return blocks.length ? blocks : [claudeTextBlock("")];
+  // 无可投影内容时给确定性占位而非空 text block:Anthropic 明确拒空文本块(400
+  // "text content blocks must be non-empty",见下方 claudeMessagesFromApiMessages 头注),
+  // 空 tool_result 正是触发形态。占位与 OpenAI 系的 toolResultTextForApi 同一常量,
+  // 三家 provider 对"有调用无结果"的回灌表述统一。
+  return blocks.length ? blocks : [claudeTextBlock(UNRESOLVED_TOOL_RESULT_TEXT)];
 }
 
 
@@ -551,7 +555,7 @@ export function appendAssistantApiMessages(items: ApiMessage[], message: Message
           type: "function",
           function: {
             name: String(record.toolName ?? ""),
-            arguments: String(record.input ?? "{}"),
+            arguments: toolArgumentsJson(record.input),
           },
         };
       });
@@ -596,7 +600,7 @@ export function appendAssistantApiMessages(items: ApiMessage[], message: Message
         role: "tool",
         name: String(part.toolName ?? ""),
         tool_call_id: String(part.toolCallId ?? ""),
-        content: resolvedToolOutput(part),
+        content: toolResultTextForApi(part),
         _rikkahub_tool_output_parts: Array.isArray(part.output) ? part.output : [],
       });
     }
@@ -879,12 +883,12 @@ export function responseApiMessagesFromUiMessages(messages: Message[], targetMod
             type: "function_call",
             call_id: String(part.toolCallId ?? ""),
             name: String(part.toolName ?? ""),
-            arguments: String(part.input ?? "{}"),
+            arguments: toolArgumentsJson(part.input),
           });
           items.push({
             type: "function_call_output",
             call_id: String(part.toolCallId ?? ""),
-            output: resolvedToolOutput(part),
+            output: toolResultTextForApi(part),
           });
         }
       }

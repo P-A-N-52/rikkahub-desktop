@@ -6,6 +6,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   apiContentFromParts,
+  appendAssistantApiMessages,
+  claudeBlocksFromUiParts,
   claudeContentFromApiContent,
   dataUrlForMessageUrl,
   documentPartsFirst,
@@ -411,5 +413,56 @@ describe("responseApiMessagesFromUiMessages — 历史 reasoning 项方言（202
     ]);
     // 火山报障核心断言：任何项都不缺 role/type 判别字段，序列化无 null
     expect(JSON.parse(JSON.stringify(input)).every((item: unknown) => item !== null)).toBe(true);
+  });
+
+  // 2026-09-07 内测报障:第二问必报 MissingParameter input.arguments。历史库里可能残留
+  // 空参工具卡(旧版 Responses 双 id 串台产的幽灵卡),历史编码必须把它归一成 "{}" 而不是
+  // 原样发空串——否则老会话每问必炸,且用户无从修复(卡已落库)。
+  test("历史里的空参工具卡回传时归一成 \"{}\"（严格端点必填校验）", () => {
+    const withEmptyArgs = [
+      {
+        id: "a1",
+        role: "ASSISTANT",
+        parts: [
+          { type: "tool", toolCallId: "call_ghost", toolName: "lookup", input: "", output: [], approvalState: { type: "auto" } },
+          { type: "text", text: "答" },
+        ],
+        annotations: [],
+        createdAt: 1,
+      },
+      { id: "u2", role: "USER", parts: [{ type: "text", text: "第二问" }], annotations: [], createdAt: 2 },
+    ] as never[];
+    const input = responseApiMessagesFromUiMessages(withEmptyArgs) as Array<Record<string, unknown>>;
+    const call = input.find((item) => item.type === "function_call")!;
+    expect(call.arguments).toBe("{}");
+    // 配对的结果项同样不能是空串（同类必填校验）。
+    const output = input.find((item) => item.type === "function_call_output")!;
+    expect(String(output.output ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("空结果的 tool_result 在 Claude 侧不产空 text block（Anthropic 拒空块）", () => {
+    const blocks = claudeBlocksFromUiParts([]);
+    expect(blocks).toHaveLength(1);
+    expect(String((blocks[0] as { text?: string }).text ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("chat-completions 历史同纪律：空参 tool_calls 也归一成 \"{}\"", () => {
+    const items: Array<Record<string, unknown>> = [];
+    appendAssistantApiMessages(
+      items as never,
+      {
+        id: "a1",
+        role: "ASSISTANT",
+        parts: [
+          { type: "tool", toolCallId: "call_ghost", toolName: "lookup", input: "", output: [], approvalState: { type: "auto" } },
+        ],
+        annotations: [],
+        createdAt: 1,
+      } as never,
+      true,
+    );
+    const assistantTurn = items.find((item) => Array.isArray(item.tool_calls))!;
+    const toolCalls = assistantTurn.tool_calls as Array<{ function: { arguments: string } }>;
+    expect(toolCalls[0]!.function.arguments).toBe("{}");
   });
 });

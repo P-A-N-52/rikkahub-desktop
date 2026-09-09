@@ -17,6 +17,19 @@ export function parseToolInput(value: unknown): Record<string, JsonValue> {
   }
 }
 
+/** 工具卡 input → 上游 `arguments` 的唯一投影。空/空白一律归 "{}"。
+ *
+ *  必须真值判定而非 `?? "{}"`：ToolPart.input 的类型是 string（非可选），落库形态里
+ *  "参数缺失" 表现为**空串**而不是 undefined，`??` 接不住 —— 空串直接发上去，严格端点
+ *  报必填参数缺失(火山 MissingParameter input.arguments，2026-09-07 内测报障的第二问必炸)。
+ *  ""不是合法 JSON，模型侧也无法解析，故归一到零参调用的 "{}" 是唯一正确解。
+ *  历史库里已有的空参工具卡（旧版 id 串台产的幽灵卡，见 responseEventToDelta 头注）
+ *  经此归一后也能正常回传，老会话不必删档。 */
+export function toolArgumentsJson(input: unknown): string {
+  const text = typeof input === "string" ? input.trim() : "";
+  return text || "{}";
+}
+
 export function toolExecutionErrorPayload(err: unknown): ToolErrorOutput {
   if (err instanceof Error) {
     return {
@@ -50,13 +63,28 @@ export function resolvedToolOutput(part: Record<string, unknown>): string {
   return toolOutputForApproval(part);
 }
 
+/** 工具卡 → 上游工具结果项（`function_call_output.output` / `role:"tool"` 的 content）的
+ *  唯一投影。既无真实输出、又无审批派生输出时给确定性占位，绝不发空串。
+ *
+ *  Why：`function_call` 与其结果项必须成对且都要"有内容"——中断残留 / 旧版串台产的空卡
+ *  会让结果项是空串，严格端点(火山)按必填校验拒整个请求(与 arguments 空串同类，见
+ *  toolArgumentsJson)。占位文案与 pi 引擎 context-encoder 的同场景补录逐字一致：
+ *  两引擎回灌给模型的"未产出结果"表述统一，模型行为不因引擎而异。 */
+export function toolResultTextForApi(part: Record<string, unknown>): string {
+  return resolvedToolOutput(part) || UNRESOLVED_TOOL_RESULT_TEXT;
+}
+
+/** 工具调用有记录但无结果时回灌给模型的确定性文案。pi 引擎 context-encoder 的中断
+ *  补录用同一字面量——改这里必须同步改那边（跨引擎表述统一）。 */
+export const UNRESOLVED_TOOL_RESULT_TEXT = "Tool execution was interrupted before producing a result.";
+
 export function apiToolCallFromPart(part: Record<string, unknown>) {
   return {
     id: String(part.toolCallId ?? id()),
     type: "function" as const,
     function: {
       name: String(part.toolName ?? ""),
-      arguments: String(part.input ?? "{}"),
+      arguments: toolArgumentsJson(part.input),
     },
   };
 }

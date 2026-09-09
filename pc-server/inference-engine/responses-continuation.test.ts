@@ -3,6 +3,9 @@
 // chat-completions messages）必须消费归一化密集数组——洞经 JSON.stringify 变 null
 // 项，火山等严格端点 400（MissingParameter input.role）。报障场景：GLM-5.3@火山
 // plan /responses 端点，reasoning 项占 0 号槽，function_call 从 1 号起。
+// 2026-09-07 追加：Responses 的 function_call 有两个 id（item.id=fc_… 条目 id /
+// item.call_id=call_… 调用配对 id），参数帧只带 item_id ——误取会把建槽 id 从 call_
+// 改写成 fc_，一次调用落库两张卡、空参卡进第二问历史即 400 input.arguments。
 // mock.module 纪律同 tool-loop.test.ts：展开真实模块只覆盖目标导出。
 import { describe, expect, mock, test } from "bun:test";
 
@@ -12,7 +15,7 @@ import * as actualSse from "../api/sse";
 mock.module("../api/logs", () => ({ ...actualLogs, addLog: () => {} }));
 mock.module("../api/sse", () => ({ ...actualSse, touchStream: () => {} }));
 
-const { fetchOpenAiTextStreaming, responseApiToolCallItems } = await import("./providers");
+const { fetchOpenAiTextStreaming, responseApiToolCallItems, responseEventToDelta } = await import("./providers");
 
 function sse(frames: string[]): Response {
   return new Response(frames.map((frame) => `data: ${frame}\n\n`).join(""), {
@@ -75,6 +78,86 @@ describe("Responses API 工具续传（火山 input.role 400 回归）", () => {
     expect(responseApiToolCallItems([{ id: "c1", name: "t", arguments: "{}" }])).toEqual([
       { type: "function_call", call_id: "c1", name: "t", arguments: "{}" },
     ]);
+  });
+
+  // ── 2026-09-07 内测报障：第二问必炸 MissingParameter input.arguments ──────────
+  // Responses 的 function_call 带两个语义不同的 id（官方 OpenAPI FunctionToolCall）：
+  //   item.id      = 输出【条目】id（fc_…，可选）
+  //   item.call_id = 工具【调用】配对 id（call_…，必填，回传时必须用它）
+  // 而 arguments.delta/done 两帧按 spec 只带 item_id（= fc_…）、无 call_id 字段。
+  // 旧写法 `item_id ?? call_id` 把建槽 id 从 call_ 改写成 fc_，一次调用落库两张卡
+  // （空参的 call_ 卡 + 有参的 fc_ 卡），空参卡进第二问历史编码即 400。
+  describe("function_call 双 id 不得串台（第二问 input.arguments 400）", () => {
+    test("responseEventToDelta：added 取 call_id；参数帧不得拿 item_id 当调用 id", () => {
+      const added = responseEventToDelta({
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "lookup", arguments: "" },
+      }) as { tool_calls: Array<{ id: string }> };
+      expect(added.tool_calls[0]!.id).toBe("call_1");
+
+      for (const frame of [
+        { type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_1", delta: "{}" },
+        { type: "response.function_call_arguments.done", output_index: 1, item_id: "fc_1", arguments: "{}" },
+      ]) {
+        const delta = responseEventToDelta(frame) as { tool_calls: Array<{ id: string }> };
+        // 空串即"本帧无调用 id"，由 mergeToolCallDeltas 的真值判定保留已建槽的 call_id。
+        expect(delta.tool_calls[0]!.id).toBe("");
+      }
+    });
+
+    test("整链：官方双 id 形态只产一张卡，参数完整；续传与历史编码均无空参项", async () => {
+      const captured: Array<Record<string, any>> = [];
+      const created: Array<Record<string, unknown>> = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (_url: unknown, init: any) => {
+        captured.push(JSON.parse(String(init?.body ?? "{}")));
+        if (captured.length === 1) {
+          return sse([
+            JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_1" } }),
+            JSON.stringify({
+              type: "response.output_item.added",
+              output_index: 1,
+              item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "lookup", arguments: "" },
+            }),
+            // 参数帧只带 item_id（官方 spec 形态，无 call_id）。
+            JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_1", delta: '{"q":' }),
+            JSON.stringify({ type: "response.function_call_arguments.done", output_index: 1, item_id: "fc_1", arguments: '{"q":1}' }),
+            "[DONE]",
+          ]);
+        }
+        return sse([JSON.stringify({ type: "response.output_text.delta", delta: "done" }), "[DONE]"]);
+      }) as never;
+      try {
+        const hooks = {
+          conversation: { id: "c4", title: "t" },
+          node: { id: "n1" },
+          message: { id: "m1", role: "ASSISTANT", parts: [] as unknown[], annotations: [], createdAt: 0, finishedAt: null },
+          sink: (event: Record<string, unknown>) => {
+            if (event.kind === "tool_call_created") created.push(event);
+          },
+          executeTool: async () => ({ output: [{ type: "text", text: "ok" }] }),
+        } as never;
+        await fetchOpenAiTextStreaming(
+          "https://ark.cn-beijing.volces.com/api/plan/v3/responses",
+          { "Content-Type": "application/json" },
+          { model: "deepseek-v4-flash", stream: true, input: [{ role: "user", content: "hi" }] },
+          { id: "p1", name: "火山引擎", type: "openai" } as never,
+          { id: "a1", mcpServers: [] } as never,
+          hooks,
+        );
+        // 一次调用只建一张卡（旧行为：call_1 空参卡 + fc_1 有参卡＝两张）。
+        expect([...new Set(created.map((event) => event.toolCallId))]).toEqual(["call_1"]);
+        const input = captured[1].input as Array<Record<string, any>>;
+        const calls = input.filter((item) => item?.type === "function_call");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ call_id: "call_1", arguments: '{"q":1}' });
+        // 空 arguments 是第二问 400 的直接触发物——回传体里一个都不许有。
+        expect(calls.every((call) => String(call.arguments ?? "").trim().length > 0)).toBe(true);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
   });
 
   test("arguments.done 帧缺 item_id/call_id 时不得抹掉已建槽的 call_id；帧全程无 id 时归一化兜底非空", async () => {

@@ -51,7 +51,7 @@ import {
   streamStartedMessages,
 } from "../inference-engine/parts";
 import { createGenerationEventApplier } from "./generation-apply";
-import { apiToolCallFromPart, resolvedToolOutput, toolExecutionErrorPayload } from "../tools/format";
+import { apiToolCallFromPart, toolExecutionErrorPayload, toolResultTextForApi } from "../tools/format";
 import { conversationFunctionTools } from "../tools/bound";
 import { executeToolCall, realizeToolResult, toolResultToParts } from "../tools/execution";
 import type { WorkspaceRuntime } from "../workspace/runtime";
@@ -356,8 +356,8 @@ export async function resumeApprovedToolParts(
     changed = true;
     toolMessages.push(
       useResponseInput
-        ? { type: "function_call_output", call_id: String(part.toolCallId ?? ""), output: resolvedToolOutput(part) }
-        : { role: "tool", tool_call_id: String(part.toolCallId ?? ""), content: resolvedToolOutput(part) },
+        ? { type: "function_call_output", call_id: String(part.toolCallId ?? ""), output: toolResultTextForApi(part) }
+        : { role: "tool", tool_call_id: String(part.toolCallId ?? ""), content: toolResultTextForApi(part) },
     );
   }
   if (changed) {

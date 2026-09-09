@@ -55,7 +55,7 @@ import type {
 } from "../../pi/packages/ai/src/types.ts";
 import type { JsonValue, Message, MessagePart, Model, ToolOutputEntry } from "../foundation/types";
 import { isRecord } from "../foundation/utils";
-import { openAiToolOutput } from "../tools/format";
+import { UNRESOLVED_TOOL_RESULT_TEXT, openAiToolOutput } from "../tools/format";
 import { parseDataUrl } from "../inference-engine/message-builder";
 import { piPromptInputFromParts } from "./attachments";
 
@@ -174,11 +174,12 @@ function toolResultOf(part: ToolPartView, timestamp: number): ToolResultMessage 
   }
   if (!output.length) {
     // 中断残留:有调用无结果。合成确定性占位保证配对(与 pi 中断轮自身的补录语义等价)。
+    // 文案常量与聊天引擎的 toolResultTextForApi 同源——两引擎回灌模型的表述必须一致。
     return {
       role: "toolResult",
       toolCallId: part.toolCallId,
       toolName: part.toolName,
-      content: [{ type: "text", text: "Tool execution was interrupted before producing a result." }],
+      content: [{ type: "text", text: UNRESOLVED_TOOL_RESULT_TEXT }],
       isError: true,
       timestamp,
     };

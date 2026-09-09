@@ -953,6 +953,13 @@ async function runConversation(useResponseApi: boolean) {
   assert(streamEvents.some((item) => item.event === "node_update"), "conversation SSE did not emit node_update events");
   assert(streamEvents.some((item) => item.event === "snapshot" && item.data?.conversation?.isGenerating === false), "conversation SSE did not emit final non-generating snapshot");
   assert(assistantMessage.parts.some((part: AnyRecord) => part.type === "tool" && part.toolName === "get_time_info" && Array.isArray(part.output) && part.output.length > 0), "tool result was not persisted in assistant parts");
+  // 一次调用一张卡:Responses 的 function_call 带两个 id(item.id=fc_… / call_id=call_…),
+  // 参数帧只带 item_id。误把 item_id 当调用 id 会落库两张卡(空参的 call_ 卡 + 有参的 fc_ 卡),
+  // 空参卡进下一问历史即 400 input.arguments(2026-09-07 内测报障)。上面那条"有输出的卡存在"
+  // 断言对幽灵卡免疫,故必须单独锁卡数与参数非空。
+  const timeToolParts = assistantMessage.parts.filter((part: AnyRecord) => part.type === "tool" && part.toolName === "get_time_info");
+  assert(timeToolParts.length === 1, `expected exactly 1 get_time_info tool card, got ${timeToolParts.length} (ghost card from tool-call id mix-up?)`);
+  assert(String(timeToolParts[0]?.input ?? "").trim().length > 0, "tool card input must not be empty (empty arguments 400s on strict endpoints)");
   assert(textFromParts(assistantMessage.parts).includes("继续回复"), "assistant final text missing");
   const captured = requests.slice(beforeCount);
   const streamCaptured = captured.filter((item) => item.body?.stream === true);
@@ -965,6 +972,15 @@ async function runConversation(useResponseApi: boolean) {
     assert(Array.isArray(follow?.input), "Response API follow-up input missing");
     assert(follow.input.some((item: AnyRecord) => item.type === "function_call"), "Response API follow-up missing function_call history item");
     assert(follow.input.some((item: AnyRecord) => item.type === "function_call_output"), "Response API follow-up missing function_call_output item");
+    // 回传的 call_id 必须是模型给的 call_…(工具调用配对 id),不能是 fc_…(输出条目 id);
+    // arguments 必须非空。两者皆为火山等严格端点 400 的直接触发物。
+    for (const item of follow.input.filter((entry: AnyRecord) => entry.type === "function_call")) {
+      assert(String(item.call_id ?? "") === "call_time_response_1", `function_call call_id must be the model call id, got ${String(item.call_id)}`);
+      assert(String(item.arguments ?? "").trim().length > 0, "function_call arguments must not be empty");
+    }
+    for (const item of follow.input.filter((entry: AnyRecord) => entry.type === "function_call_output")) {
+      assert(String(item.call_id ?? "") === "call_time_response_1", `function_call_output call_id must pair with the call, got ${String(item.call_id)}`);
+    }
   } else {
     const first = streamCaptured.find((item) => item.path === "/v1/chat/completions")?.body;
     const follow = streamCaptured.filter((item) => item.path === "/v1/chat/completions").at(-1)?.body;
