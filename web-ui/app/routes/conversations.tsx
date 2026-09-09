@@ -71,12 +71,16 @@ import { ContainerTabBar } from "~/components/workspace/container-tab-bar";
 import { WindowControlsBar } from "~/components/window-controls";
 import { ConversationTabStrip } from "~/components/workspace/conversation-tab-strip";
 import { EngineStatusBar } from "~/components/workspace/engine-status-bar";
+import { PaneContainerProvider } from "~/components/workspace/pane-container-context";
 import { WorkspaceEmptyState } from "~/components/workspace/workspace-empty-state";
 import { useCompressStore, useConversationCompressing } from "~/stores/compress-store";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import {
   CHAT_CONTAINER,
-  type ConversationPane,
+  MAX_PANES,
+  flattenColumns,
+  type ContainerKey,
+  type PaneColumn,
   useContainerTabsStore,
 } from "~/stores/container-tabs-store";
 import { useTabDragStore } from "~/stores/tab-drag-store";
@@ -425,6 +429,7 @@ function buildEditedParts(session: EditingSession, draftParts: UIMessagePart[]):
 }
 
 function useDraftInputController({
+  container,
   activeId,
   isHomeRoute,
   homeDraftId,
@@ -433,6 +438,8 @@ function useDraftInputController({
   navigate,
   refreshList,
 }: {
+  /** 本列所属容器:新会话的归属(workspaceId)由它决定,不读全局激活容器。 */
+  container: ContainerKey;
   activeId: string | null;
   isHomeRoute: boolean;
   homeDraftId: string;
@@ -442,9 +449,9 @@ function useDraftInputController({
   refreshList: () => void;
 }) {
   const draftKey = activeId ?? (isHomeRoute ? homeDraftId : null);
-  // 刻意不在这里订阅 drafts[draftKey] 的内容:本 hook 由 ConversationsPageInner 调用,
-  // 一旦订阅草稿,每次打字都会让整个巨型组件(侧边栏/对话框/面板组)一起重渲染,造成
-  // 输入卡顿。草稿内容订阅下沉到 ChatInputArea——只有输入区随打字重渲染。
+  // 刻意不在这里订阅 drafts[draftKey] 的内容:一旦订阅草稿,每次打字都会让整个窗格
+  // (消息列表/对话框/工具条)一起重渲染,造成输入卡顿。草稿内容订阅下沉到
+  // ChatInputArea——只有输入区随打字重渲染。
   const setDraftText = useChatInputStore((state) => state.setText);
   const addDraftParts = useChatInputStore((state) => state.addParts);
   const getSubmitParts = useChatInputStore((state) => state.getSubmitParts);
@@ -468,9 +475,9 @@ function useDraftInputController({
     // Send the message BEFORE setting activeId so the detail fetcher doesn't race
     // (`POST /messages` calls ensureConversation on the server; only then does the
     // subsequent `GET /api/conversations/{id}` succeed).
-    // 双层标签(M2-1):新会话归属当前激活容器——工作区容器时把 workspaceId 一并送给
-    // ensureConversation,服务端据此挂载工作区工具与提示词段。
-    const container = useContainerTabsStore.getState().activeTab;
+    // 双层标签(M2-1):新会话归属发起它的那一列的容器——工作区容器时把 workspaceId
+    // 一并送给 ensureConversation,服务端据此挂载工作区工具与提示词段。并排后必须用
+    // 列的容器而不是全局激活容器,否则在非聚焦列发第一句会挂到邻列的工作区上。
     await api.post<{ status: string }>(
       `conversations/${conversationId}/messages`,
       container !== CHAT_CONTAINER ? { parts, workspaceId: container } : { parts },
@@ -484,6 +491,7 @@ function useDraftInputController({
   }, [
     activeId,
     clearDraft,
+    container,
     draftKey,
     getSubmitParts,
     navigate,
@@ -1319,21 +1327,27 @@ export default function ConversationsPage() {
   );
 }
 
-// ===== J 轮分栏:每窗格一份的会话视图 =====
+// ===== 分栏:每列一份的会话视图 =====
 // 订阅/选择器/草稿/编辑态/三个会话级对话框全部收进本组件,以 conversationId 为参数——
 // 双栏/三栏 = 渲染多个实例。流订阅(entries 多路)与草稿(drafts 按会话键)天然隔离,
-// 打字/流式只重渲染所属窗格。页面层只保留侧栏、容器标签、热键、工作台等全局职责。
-
-const DEFAULT_PANES: ConversationPane[] = [{ tabs: [], active: null }];
+// 打字/流式只重渲染所属列。页面层只保留侧栏、容器标签、热键、工作台等全局职责。
+// K 轮一级并排:列 = (容器, 容器内窗格下标),故容器归属由 props 显式传入。
 
 type CurrentAssistantValue = ReturnType<typeof useCurrentAssistant>["currentAssistant"];
 
 interface ConversationPaneViewProps {
+  /** 本列所属容器(一级并排:同屏可有多个容器)。 */
+  container: ContainerKey;
+  /** 本列在所属容器内的窗格下标。 */
   paneIndex: number;
-  /** 是否聚焦窗格:路由 /c/:id、侧栏高亮、全局拖放与热键都跟随聚焦窗格。 */
+  /** 本列是否为聚焦列(路由/侧栏跟随它)。 */
   focused: boolean;
-  /** 本窗格的会话:聚焦窗格由路由权威(null = "新对话"态);非聚焦窗格 = 窗格激活标签。 */
+  /** 分栏中(≥2 列)才需要标出焦点;单列时整个界面就是它,无需额外装饰。 */
+  splitMode: boolean;
+  /** 本列的会话:聚焦列由路由权威(null = "新对话"态);非聚焦列 = 窗格激活标签。 */
   conversationId: string | null;
+  /** 并排多容器时在标签行标出列归属(单容器时不显示,视觉与并排前一致)。 */
+  showContainerChip: boolean;
   isHomeRoute: boolean;
   homeDraftId: string;
   setHomeDraftId: React.Dispatch<React.SetStateAction<string>>;
@@ -1346,13 +1360,17 @@ interface ConversationPaneViewProps {
   currentAssistantId: ReturnType<typeof useCurrentAssistant>["currentAssistantId"];
   currentAssistant: CurrentAssistantValue;
   onRenameConversation: (conversationId: string, title: string) => Promise<void>;
-  onFocusPane: (index: number) => void;
+  onFocusPane: (container: ContainerKey, index: number) => void;
+  onExitSplit: (container: ContainerKey) => void;
 }
 
 const ConversationPaneView = React.memo(function ConversationPaneView({
+  container,
   paneIndex,
   focused,
+  splitMode,
   conversationId,
+  showContainerChip,
   isHomeRoute,
   homeDraftId,
   setHomeDraftId,
@@ -1366,10 +1384,11 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   currentAssistant,
   onRenameConversation,
   onFocusPane,
+  onExitSplit,
 }: ConversationPaneViewProps) {
   const { t } = useTranslation("page");
   const activeId = conversationId;
-  // 非聚焦窗格永远有会话(多窗格不变量:空窗格即收起),"新对话"态只属于聚焦窗格。
+  // 非聚焦列永远有会话(多窗格不变量:空窗格即收起),"新对话"态只属于聚焦列。
   const paneIsHome = focused && isHomeRoute;
 
   const [editingSession, setEditingSession] = React.useState<EditingSession | null>(null);
@@ -1435,6 +1454,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     clearCurrentDraft,
     getCurrentSubmitParts,
   } = useDraftInputController({
+    container,
     activeId,
     isHomeRoute: paneIsHome,
     homeDraftId,
@@ -1484,11 +1504,10 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     setEditingSession(null);
   }, [activeId]);
 
-  /** 交互改路由前先聚焦本窗格(fork/新建等依赖"路由同步进聚焦窗格"的语义)。 */
+  /** 交互改路由前先聚焦本列(fork/新建等依赖"路由同步进聚焦列"的语义)。 */
   const focusSelf = React.useCallback(() => {
-    const store = useContainerTabsStore.getState();
-    store.focusPane(store.activeTab, paneIndex);
-  }, [paneIndex]);
+    useContainerTabsStore.getState().focusPane(container, paneIndex);
+  }, [container, paneIndex]);
 
   const handleToolApproval = React.useCallback(
     async (toolCallId: string, approved: boolean, reason: string, answer?: string) => {
@@ -1823,9 +1842,12 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     [activeAssistantForConversation?.allowConversationSystemPrompt, activeId, refreshList],
   );
 
-  // J 轮拖拽分栏:拖动会话标签悬停内容区时三分区高亮——左/右 = 拖出为左/右侧新窗格,
-  // 中 = 移入本窗格。落点动作与高亮都读内存 store(dataTransfer 在 dragover 读不到)。
-  const draggingConversation = useTabDragStore((state) => state.draggingId);
+  // 拖拽落点(J 轮二级 + K 轮一级统一到一套三分区):拖动标签悬停内容区时
+  // 左/中/右 三区高亮 —— 左/右 = 在本列左/右侧开新列,中 = 并入本列。
+  // 二级载荷(会话标签)在本容器内分栏/移动;一级载荷(容器)整块并排进布局,
+  // 中区语义退化为"独占显示本容器"(把它换到聚焦列),因为容器不能并入别的容器。
+  // 落点动作与高亮都读内存 store(dataTransfer 在 dragover 阶段读不到)。
+  const dragPayload = useTabDragStore((state) => state.dragging);
   const [dropZone, setDropZone] = React.useState<"left" | "center" | "right" | null>(null);
 
   const resolveDropZone = (event: React.DragEvent<HTMLDivElement>): "left" | "center" | "right" => {
@@ -1836,35 +1858,93 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
 
   const handleZoneDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const draggingId = useTabDragStore.getState().draggingId;
+    const payload = useTabDragStore.getState().dragging;
     setDropZone(null);
     useTabDragStore.getState().setDragging(null);
-    if (!draggingId) return;
+    if (!payload) return;
     const store = useContainerTabsStore.getState();
-    const container = store.activeTab;
     const zone = resolveDropZone(event);
+
+    if (payload.kind === "container") {
+      if (payload.container === container) return; // 拖回自己:无操作
+      if (zone === "center") {
+        store.focusContainerExclusive(payload.container);
+      } else if (
+        !store.addContainerToLayout(payload.container, container, zone === "left" ? "left" : "right")
+      ) {
+        // 可见列已满:说明原因,别静默吞掉用户的操作。
+        toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
+        return;
+      }
+      // 落定后按新状态取该容器的停留会话(state 已被 set 替换,须重新读)。
+      const next = useContainerTabsStore.getState();
+      const panes = next.panes[payload.container] ?? [];
+      const focus = Math.max(
+        0,
+        Math.min(next.focusedPane[payload.container] ?? 0, panes.length - 1),
+      );
+      const target = panes[focus]?.active ?? null;
+      navigate(target ? `/c/${target}` : "/");
+      return;
+    }
+
+    // 会话标签只在自己的容器内挪(跨容器等于改会话归属,不是布局操作)。
+    if (payload.container !== container) return;
     if (zone === "center") {
-      store.moveConversationToPane(container, draggingId, paneIndex);
+      store.moveConversationToPane(container, payload.conversationId, paneIndex);
     } else {
       const ok = store.splitConversation(
         container,
-        draggingId,
+        payload.conversationId,
         zone === "left" ? paneIndex : paneIndex + 1,
       );
-      // 分栏被拒(已达 MAX_PANES / 源窗格只剩一个标签)→ 退化为移入本窗格。
-      if (!ok) store.moveConversationToPane(container, draggingId, paneIndex);
+      // 分栏被拒(可见列已满 / 源窗格只剩一个标签)→ 退化为移入本列。
+      if (!ok) store.moveConversationToPane(container, payload.conversationId, paneIndex);
     }
-    navigate(`/c/${draggingId}`);
+    navigate(`/c/${payload.conversationId}`);
   };
 
+  // 本列是否接受当前拖拽:决定落点覆盖层挂不挂(不接受时不拦截指针、也不高亮)。
+  const dropActive =
+    dragPayload !== null &&
+    (dragPayload.kind === "container"
+      ? dragPayload.container !== container
+      : dragPayload.container === container);
+  // 覆盖层的上边界:拖会话标签时让开标签行(它自己是"并入本列"的落点);拖容器时
+  // 标签行对它没有语义,铺满整列免留死区。
+  const hasTabStrip = useContainerTabsStore(
+    (state) => showContainerChip || (state.panes[container]?.[paneIndex]?.tabs.length ?? 0) > 0,
+  );
+  const overlayTop = dragPayload?.kind === "conversation" && hasTabStrip ? "top-9" : "top-0";
+
   return (
+    <PaneContainerProvider container={container}>
     <div
       className="relative flex h-full min-h-0 flex-1 flex-col"
-      // 点击非聚焦窗格任意处 → 聚焦并把路由切到它的激活会话。
-      onMouseDownCapture={focused ? undefined : () => onFocusPane(paneIndex)}
+      // 点击非聚焦列任意处 → 聚焦并把路由切到它的激活会话。会话标签自己会导航到它指定
+      // 的会话(data-tab-nav),不能让这里先抢一次焦点切换,否则先跳本列旧会话、
+      // 再跳目标会话,中间闪一帧。
+      onMouseDownCapture={
+        focused
+          ? undefined
+          : (event) => {
+              if ((event.target as HTMLElement).closest("[data-tab-nav]")) return;
+              onFocusPane(container, paneIndex);
+            }
+      }
     >
+      {/* 分栏时标出焦点列:顶缘一道品牌色细线。焦点决定路由、侧栏、热键与全局拖放的
+          落点,用户必须随时知道"我现在在哪一栏";用发丝线而非底色/描边,才不会与
+          面板本身的层次语言打架。单列时整屏就是焦点,不画。 */}
+      {splitMode && focused ? (
+        <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[2px] rounded-full bg-[var(--ds-brand-primary)]/60" />
+      ) : null}
       <ConversationTabStrip
+        container={container}
         paneIndex={paneIndex}
+        focused={focused}
+        showContainerChip={showContainerChip}
+        onExitSplit={() => onExitSplit(container)}
         conversations={conversations}
         onRename={onRenameConversation}
         trailing={
@@ -1964,9 +2044,11 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         </div>
       </div>
 
-      {draggingConversation ? (
+      {dropActive ? (
+        // 落点提示层:三区等分,命中区亮起品牌色薄底 + 描边,并给一句"放手会发生什么"。
+        // 只在本列接受当前拖拽时挂载 —— 不接受时既不拦指针也不亮,用户能看出此处不可放。
         <div
-          className="absolute inset-x-0 bottom-0 top-9 z-30"
+          className={cn("absolute inset-x-0 bottom-0 z-30", overlayTop)}
           onDragOver={(event) => {
             event.preventDefault();
             setDropZone(resolveDropZone(event));
@@ -1974,24 +2056,34 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
           onDragLeave={() => setDropZone(null)}
           onDrop={handleZoneDrop}
         >
-          <div
-            className={cn(
-              "pointer-events-none absolute inset-y-1 left-1 w-1/4 rounded-xl transition-colors duration-150",
-              dropZone === "left" && "bg-primary/10 ring-1 ring-primary/30",
-            )}
-          />
-          <div
-            className={cn(
-              "pointer-events-none absolute inset-y-1 left-1/4 right-1/4 rounded-xl transition-colors duration-150",
-              dropZone === "center" && "bg-primary/10 ring-1 ring-primary/30",
-            )}
-          />
-          <div
-            className={cn(
-              "pointer-events-none absolute inset-y-1 right-1 w-1/4 rounded-xl transition-colors duration-150",
-              dropZone === "right" && "bg-primary/10 ring-1 ring-primary/30",
-            )}
-          />
+          {(["left", "center", "right"] as const).map((zone) => (
+            <div
+              key={zone}
+              className={cn(
+                "pointer-events-none absolute inset-y-1 flex items-center justify-center rounded-xl transition-all duration-150",
+                zone === "left" && "left-1 w-1/4",
+                zone === "center" && "left-1/4 right-1/4",
+                zone === "right" && "right-1 w-1/4",
+                dropZone === zone
+                  ? "bg-primary/10 ring-1 ring-primary/30"
+                  : "ring-1 ring-transparent",
+              )}
+            >
+              {dropZone === zone ? (
+                <span className="rounded-full bg-[var(--ds-surface-100)] px-2.5 py-1 text-mini font-medium text-[var(--ds-text-secondary)] shadow-[var(--ds-elevation-100)]">
+                  {t(
+                    zone === "center"
+                      ? dragPayload?.kind === "container"
+                        ? "workspace.tabs.drop_hint_container_focus"
+                        : "workspace.tabs.drop_hint_merge"
+                      : dragPayload?.kind === "container"
+                        ? "workspace.tabs.drop_hint_container_split"
+                        : "workspace.tabs.drop_hint_split",
+                  )}
+                </span>
+              ) : null}
+            </div>
+          ))}
         </div>
       ) : null}
 
@@ -2157,6 +2249,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         </DialogContent>
       </Dialog>
     </div>
+    </PaneContainerProvider>
   );
 });
 
@@ -2189,9 +2282,15 @@ function ConversationsPageInner() {
     useContainerTabsStore.getState().openConversation(workspaceId ?? CHAT_CONTAINER, activeId);
   }, [activeId, activeConversation, detailWorkspaceId]);
   const activeContainer = useContainerTabsStore((state) => state.activeTab);
-  // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)
-  const activeWorkspace = useWorkspaceStore((state) =>
-    activeContainer === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeContainer),
+  // M3-6:工作区容器的首屏空态需要工作区实体(名称/类型/root)。并排后按列取——
+  // 每列显示自己容器的空态,而不是聚焦列容器的。
+  const workspaces = useWorkspaceStore((state) => state.workspaces);
+  const workspaceOf = React.useCallback(
+    (container: ContainerKey) =>
+      container === CHAT_CONTAINER
+        ? undefined
+        : workspaces.find((item) => item.id === container),
+    [workspaces],
   );
   // 侧栏语义随容器切换(方案 §3.1):只列当前容器的会话;完整列表仍用于标题查找等。
   const containerConversations = React.useMemo(
@@ -2204,22 +2303,41 @@ function ConversationsPageInner() {
     [activeContainer, conversations],
   );
 
-  // J 轮分栏:窗格列表 + 聚焦窗格。聚焦窗格的会话以路由为权威,非聚焦窗格用窗格激活标签。
-  const containerPanes = useContainerTabsStore((state) => state.panes[state.activeTab]);
-  const paneList = containerPanes && containerPanes.length > 0 ? containerPanes : DEFAULT_PANES;
+  // 分栏(K 轮):屏幕列 = 并排容器 × 各自窗格,摊平后左→右渲染。聚焦列的会话以路由
+  // 为权威,其余列用各自窗格的激活标签。
+  // 订阅整个 panes(而非只订阅激活容器的):并排后同屏有多个容器的窗格,都要参与摊平。
+  // 代价可忽略——panes 只在用户开/关/拖标签时变,那些动作本就伴随导航重渲染。
+  const layout = useContainerTabsStore((state) => state.layout);
+  const panesRecord = useContainerTabsStore((state) => state.panes);
+  const columns = React.useMemo(() => flattenColumns(layout, panesRecord), [layout, panesRecord]);
   const focusedPaneIndex = useContainerTabsStore((state) => {
     const count = state.panes[state.activeTab]?.length ?? 1;
     return Math.max(0, Math.min(state.focusedPane[state.activeTab] ?? 0, count - 1));
   });
+  // 单容器时不显示列归属徽记:视觉与并排前完全一致(纯二级分栏不该多出一枚标签)。
+  const showContainerChip = layout.length > 1;
 
   const handleFocusPane = React.useCallback(
-    (index: number) => {
+    (container: ContainerKey, index: number) => {
       const store = useContainerTabsStore.getState();
-      const container = store.activeTab;
       const count = store.panes[container]?.length ?? 1;
       const current = Math.max(0, Math.min(store.focusedPane[container] ?? 0, count - 1));
-      if (current === index) return;
+      if (store.activeTab === container && current === index) return;
       const target = store.focusPane(container, index);
+      setActiveId(target);
+      navigate(target ? `/c/${target}` : "/");
+    },
+    [navigate, setActiveId],
+  );
+
+  const handleExitSplit = React.useCallback(
+    (container: ContainerKey) => {
+      const store = useContainerTabsStore.getState();
+      if (!store.removeContainerFromLayout(container)) return;
+      const next = useContainerTabsStore.getState();
+      const panes = next.panes[next.activeTab] ?? [];
+      const focused = Math.max(0, Math.min(next.focusedPane[next.activeTab] ?? 0, panes.length - 1));
+      const target = panes[focused]?.active ?? null;
       setActiveId(target);
       navigate(target ? `/c/${target}` : "/");
     },
@@ -2449,26 +2567,48 @@ function ConversationsPageInner() {
     activeId ? (state.entries[activeId]?.error ?? null) : null,
   );
 
-  const renderPane = (pane: ConversationPane, index: number) => (
-    <ConversationPaneView
-      paneIndex={index}
-      focused={index === focusedPaneIndex}
-      conversationId={index === focusedPaneIndex ? activeId : pane.active}
-      isHomeRoute={isHomeRoute}
-      homeDraftId={homeDraftId}
-      setHomeDraftId={setHomeDraftId}
-      setActiveId={setActiveId}
-      navigate={navigate}
-      refreshList={refreshList}
-      settings={settings}
-      conversations={conversations}
-      activeWorkspace={activeWorkspace}
-      currentAssistantId={currentAssistantId}
-      currentAssistant={currentAssistant}
-      onRenameConversation={handleUpdateConversationTitle}
-      onFocusPane={handleFocusPane}
-    />
-  );
+  // 路由会话属于哪一列(若它已在某列开着)。点非聚焦列的标签时,路由先变、下一拍才由
+  // 同步效应把焦点挪过去;这一帧里旧聚焦列若无条件采用 activeId,就会闪一下别人的会话。
+  // 反之,会话尚未落到任何列时(侧栏点击/新建)聚焦列必须立刻采用 activeId,否则每次
+  // 切会话都慢一帧。二者的分界正是"是否已被别的列占着"。
+  const routeColumnOwner = React.useMemo(() => {
+    if (!activeId) return null;
+    return columns.find((column) => column.pane.tabs.includes(activeId)) ?? null;
+  }, [activeId, columns]);
+
+  const renderColumn = (column: PaneColumn) => {
+    const focused = column.container === activeContainer && column.paneIndex === focusedPaneIndex;
+    const routeOwned =
+      routeColumnOwner === null ||
+      (routeColumnOwner.container === column.container &&
+        routeColumnOwner.paneIndex === column.paneIndex);
+    return (
+      <ConversationPaneView
+        container={column.container}
+        paneIndex={column.paneIndex}
+        focused={focused}
+        splitMode={columns.length > 1}
+        conversationId={focused && routeOwned ? activeId : column.pane.active}
+        // 徽记只挂在容器的首列:同容器的相邻列已由窄缝连成一体,再重复一次容器名是噪音;
+        // 容器之间则有宽缝 + 首列徽记,归属一眼可辨。
+        showContainerChip={showContainerChip && column.paneIndex === 0}
+        isHomeRoute={isHomeRoute}
+        homeDraftId={homeDraftId}
+        setHomeDraftId={setHomeDraftId}
+        setActiveId={setActiveId}
+        navigate={navigate}
+        refreshList={refreshList}
+        settings={settings}
+        conversations={conversations}
+        activeWorkspace={workspaceOf(column.container)}
+        currentAssistantId={currentAssistantId}
+        currentAssistant={currentAssistant}
+        onRenameConversation={handleUpdateConversationTitle}
+        onFocusPane={handleFocusPane}
+        onExitSplit={handleExitSplit}
+      />
+    );
+  };
 
   return (
     <SidebarProvider defaultOpen className="h-svh overflow-hidden">
@@ -2527,22 +2667,35 @@ function ConversationsPageInner() {
           </div>
           {/* 白色圆角内容面板:surface-200 底 + elevation-100,盖住撞色带主体,
               激活页签经连接条与面板连体;底部圆角与 wrapper 的 18px 对齐。
-              J 轮分栏:面板内是 1..MAX_PANES 个会话窗格 + 工作台面板的横向可调组。 */}
+              分栏:面板内是 1..MAX_PANES 个会话列(可跨容器)+ 工作台面板的横向可调组。 */}
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[16px] rounded-b-[18px] bg-[var(--ds-surface-200)] shadow-[var(--ds-elevation-100)]">
             {!isMobile ? (
               <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-                {paneList.map((pane, index) => (
-                  <React.Fragment key={`pane-${index}`}>
-                    {index > 0 ? <ResizableHandle /> : null}
-                    <ResizablePanel
-                      id={`conversation-pane-${index}`}
-                      minSize="18%"
-                      className="flex min-h-0 flex-col"
-                    >
-                      {renderPane(pane, index)}
-                    </ResizablePanel>
-                  </React.Fragment>
-                ))}
+                {columns.map((column, index) => {
+                  // 容器边界要比容器内分栏更"重":不同工作区之间是两个世界,同容器内的
+                  // 分栏只是同一世界的两个视图。前者用画布色宽缝(像面板之间露出底色),
+                  // 后者沿用 1px 细线。
+                  const crossContainer =
+                    index > 0 && columns[index - 1]!.container !== column.container;
+                  return (
+                    <React.Fragment key={`${column.container}:${column.paneIndex}`}>
+                      {index > 0 ? (
+                        <ResizableHandle
+                          className={cn(
+                            crossContainer && "w-[3px] bg-[var(--ds-on-surface)]",
+                          )}
+                        />
+                      ) : null}
+                      <ResizablePanel
+                        id={`conversation-column-${column.container}-${column.paneIndex}`}
+                        minSize="18%"
+                        className="flex min-h-0 flex-col"
+                      >
+                        {renderColumn(column)}
+                      </ResizablePanel>
+                    </React.Fragment>
+                  );
+                })}
                 <ResizableHandle
                   withHandle
                   className={cn(!hasWorkbenchPanel && "pointer-events-none opacity-0")}
@@ -2569,7 +2722,13 @@ function ConversationsPageInner() {
                 </ResizablePanel>
               </ResizablePanelGroup>
             ) : (
-              renderPane(paneList[focusedPaneIndex] ?? paneList[0]!, focusedPaneIndex)
+              // 窄屏不并排:只渲染聚焦列(其它列的状态保留,回宽屏即恢复)。
+              renderColumn(
+                columns.find(
+                  (column) =>
+                    column.container === activeContainer && column.paneIndex === focusedPaneIndex,
+                ) ?? columns[0]!,
+              )
             )}
 
             {isMobile && panel ? (

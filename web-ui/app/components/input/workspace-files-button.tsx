@@ -4,17 +4,20 @@ import { FolderTree } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { useOptionalWorkbench } from "~/components/workbench/workbench-context";
+import { usePaneContainer } from "~/components/workspace/pane-container-context";
 import { cn } from "~/lib/utils";
-import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-store";
+import { CHAT_CONTAINER } from "~/stores/container-tabs-store";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 
 /** 文件面板入口(M3-5):仅工作区容器内显示,开关 Workbench 的 workspace-files 面板。 */
 export function WorkspaceFilesButton({ className }: { className?: string }) {
   const { t } = useTranslation();
   const workbench = useOptionalWorkbench();
-  const activeTab = useContainerTabsStore((state) => state.activeTab);
+  const container = usePaneContainer();
   const workspace = useWorkspaceStore((state) =>
-    activeTab === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeTab),
+    container === CHAT_CONTAINER
+      ? undefined
+      : state.workspaces.find((item) => item.id === container),
   );
 
   if (!workspace || !workbench) return null;

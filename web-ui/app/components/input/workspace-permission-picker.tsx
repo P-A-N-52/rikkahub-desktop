@@ -13,7 +13,8 @@ import {
 import { extractErrorMessage } from "~/lib/error";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
-import { CHAT_CONTAINER, useContainerTabsStore } from "~/stores/container-tabs-store";
+import { usePaneContainer } from "~/components/workspace/pane-container-context";
+import { CHAT_CONTAINER } from "~/stores/container-tabs-store";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
@@ -34,9 +35,11 @@ const PRESETS: Array<{ value: Preset; icon: typeof Shield }> = [
 
 export function WorkspacePermissionPicker({ className }: { className?: string }) {
   const { t } = useTranslation("input");
-  const activeTab = useContainerTabsStore((state) => state.activeTab);
+  const container = usePaneContainer();
   const workspace = useWorkspaceStore((state) =>
-    activeTab === CHAT_CONTAINER ? undefined : state.workspaces.find((item) => item.id === activeTab),
+    container === CHAT_CONTAINER
+      ? undefined
+      : state.workspaces.find((item) => item.id === container),
   );
   const refresh = useWorkspaceStore((state) => state.refresh);
   const [saving, setSaving] = React.useState(false);

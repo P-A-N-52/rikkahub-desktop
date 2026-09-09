@@ -1,7 +1,20 @@
 import * as React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, FolderSearch, MessageSquare, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import {
+  Columns2,
+  Folder,
+  FolderOpen,
+  FolderSearch,
+  MessageSquare,
+  PanelLeft,
+  PanelRight,
+  Pencil,
+  Plus,
+  Trash2,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
@@ -38,9 +51,11 @@ import {
 import api from "~/services/api";
 import {
   CHAT_CONTAINER,
+  MAX_PANES,
   useContainerTabsStore,
   type ContainerKey,
 } from "~/stores/container-tabs-store";
+import { useTabDragStore } from "~/stores/tab-drag-store";
 import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
@@ -48,12 +63,14 @@ import type { WorkspaceDto } from "~/types";
 // 激活标签白底(bg-card)上圆角,与下方白色内容面板连成一体;非激活为画布上的
 // 幽灵态。中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚+右端渐隐。
 // 所在行是内容列撞色带顶部的纯交互行(原生标题栏负责窗控/拖拽,见 conversations.tsx)。
+// K 轮:标签可拖进内容区左/右缘 → 该容器"带着"自己的会话标签整块并排(见
+// conversations.tsx 的落点区);并排中的容器标签同时高亮为"在场",聚焦列的那个更实。
 
 /** 点击/循环切换容器:激活并导航到该容器上次停留的会话(无则回"新对话"首页)。 */
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {
   const store = useContainerTabsStore.getState();
   store.activateContainer(key);
-  // J 轮分栏后:容器的"上次停留会话" = 聚焦窗格的激活会话。
+  // 容器的"上次停留会话" = 聚焦窗格的激活会话。
   const panes = store.panes[key] ?? [];
   const focused = Math.max(0, Math.min(store.focusedPane[key] ?? 0, panes.length - 1));
   const conversationId = panes[focused]?.active ?? null;
@@ -68,6 +85,7 @@ export function ContainerTabBar() {
   const refresh = useWorkspaceStore((state) => state.refresh);
   const openTabs = useContainerTabsStore((state) => state.openTabs);
   const activeTab = useContainerTabsStore((state) => state.activeTab);
+  const layout = useContainerTabsStore((state) => state.layout);
   const [dragKey, setDragKey] = React.useState<ContainerKey | null>(null);
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false);
   // 信任门目标 + 拒绝语义:创建流拒绝=删除记录;重开已有未信任工作区拒绝=仅关门。
@@ -121,11 +139,36 @@ export function ContainerTabBar() {
     [navigate],
   );
 
-  // G4 右键批量关闭:store 更新后按新 activeTab 导航(可能落回原容器,导航幂等)。
+  // G4 右键菜单批量关闭:store 更新后按新 activeTab 导航(可能落回原容器,导航幂等)。
   const closeTabsBatch = React.useCallback(
     (scope: "others" | "right" | "all", anchor: ContainerKey) => {
       useContainerTabsStore.getState().closeContainersBatch(scope, anchor);
       navigateToContainer(useContainerTabsStore.getState().activeTab, navigate);
+    },
+    [navigate],
+  );
+
+  // K 轮:把容器并排到当前聚焦列的左/右侧(右键菜单入口;拖拽入口在内容区落点区)。
+  // 拒绝 = 可见列已满,给出可行动提示而不是静默失败。
+  const splitContainerBeside = React.useCallback(
+    (key: ContainerKey, side: "left" | "right") => {
+      const store = useContainerTabsStore.getState();
+      const anchor = store.activeTab;
+      if (key === anchor) return;
+      if (!store.addContainerToLayout(key, anchor, side)) {
+        toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
+        return;
+      }
+      navigateToContainer(key, navigate);
+    },
+    [navigate, t],
+  );
+
+  const unsplitContainer = React.useCallback(
+    (key: ContainerKey) => {
+      if (useContainerTabsStore.getState().removeContainerFromLayout(key)) {
+        navigateToContainer(useContainerTabsStore.getState().activeTab, navigate);
+      }
     },
     [navigate],
   );
@@ -267,15 +310,22 @@ export function ContainerTabBar() {
             workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
             width={tabWidthCalc}
             active={key === activeTab}
+            /** K 轮:在并排布局中但非聚焦列 —— 标签显示为"在场但未聚焦"。 */
+            inLayout={layout.includes(key)}
             closable={openTabs.length > 1}
             hasOthers={openTabs.length > 1}
             hasRight={index < openTabs.length - 1}
+            splitable={openTabs.length > 1 && key !== activeTab}
+            unsplitable={layout.length > 1 && layout.includes(key)}
             dragging={dragKey === key}
             onActivate={() => activateGuarded(key)}
             onClose={() => closeTab(key)}
             onCloseOthers={() => closeTabsBatch("others", key)}
             onCloseRight={() => closeTabsBatch("right", key)}
             onCloseAll={() => closeTabsBatch("all", key)}
+            onSplitRight={() => splitContainerBeside(key, "right")}
+            onSplitLeft={() => splitContainerBeside(key, "left")}
+            onUnsplit={() => unsplitContainer(key)}
             onEdit={
               key === CHAT_CONTAINER
                 ? undefined
@@ -292,8 +342,15 @@ export function ContainerTabBar() {
                     if (workspace) revealWorkspace(workspace);
                   }
             }
-            onDragStart={() => setDragKey(key)}
-            onDragEnd={() => setDragKey(null)}
+            onDragStart={() => {
+              setDragKey(key);
+              // K 轮:载荷入内存 store,内容区左/右缘落点据此把本容器并排进布局。
+              useTabDragStore.getState().setDragging({ kind: "container", container: key });
+            }}
+            onDragEnd={() => {
+              setDragKey(null);
+              useTabDragStore.getState().setDragging(null);
+            }}
             onDragOverTab={() => {
               if (dragKey && dragKey !== key) {
                 useContainerTabsStore.getState().reorderContainer(dragKey, index);
@@ -516,15 +573,21 @@ function ContainerTab({
   workspace,
   width,
   active,
+  inLayout,
   closable,
   hasOthers,
   hasRight,
+  splitable,
+  unsplitable,
   dragging,
   onActivate,
   onClose,
   onCloseOthers,
   onCloseRight,
   onCloseAll,
+  onSplitLeft,
+  onSplitRight,
+  onUnsplit,
   onEdit,
   onReveal,
   onDragStart,
@@ -535,15 +598,22 @@ function ContainerTab({
   workspace: WorkspaceDto | null;
   width: string;
   active: boolean;
+  /** 在并排布局中(可能非聚焦列):标签保持"在场"底色,弱于聚焦态。 */
+  inLayout: boolean;
   closable: boolean;
   hasOthers: boolean;
   hasRight: boolean;
+  splitable: boolean;
+  unsplitable: boolean;
   dragging: boolean;
   onActivate: () => void;
   onClose: () => void;
   onCloseOthers: () => void;
   onCloseRight: () => void;
   onCloseAll: () => void;
+  onSplitLeft: () => void;
+  onSplitRight: () => void;
+  onUnsplit: () => void;
   onEdit?: () => void;
   onReveal?: () => void;
   onDragStart: () => void;
@@ -556,9 +626,14 @@ function ContainerTab({
     ? t("workspace.tabs.chat")
     : (workspace?.name ?? t("workspace.tabs.missing"));
   const Icon = isChat ? MessageSquare : workspace?.type === "folder" ? FolderOpen : Folder;
-  // NewMax WorkspaceTab 原样移植:28px 高页签,激活态与下方面板(surface-200)连体——
+  // NewMax WorkspaceTab 原样移植:28px 高页签,聚焦态与下方面板(surface-200)连体——
   // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
+  // K 轮并排的三态:连体(聚焦列)> 面板色胶囊(在场未聚焦,即它的列也在屏上)>
+  // 幽灵(只开着标签)。连体造型只给聚焦列一份:反圆角要向两侧各溢出 13px,而 layout
+  // 是 openTabs 的子序列(中间可能夹着幽灵标签),多份连体会把面板色渗到夹在中间的
+  // 幽灵标签底下;胶囊态无溢出,任意排布都干净。
   const TAB_CORNER_R = 13;
+  const docked = inLayout && !active;
   return (
     <ContextMenu>
       <Tooltip delayDuration={800}>
@@ -600,7 +675,9 @@ function ContainerTab({
           "group relative flex h-7 w-full items-center gap-1.5 pl-2.5 pr-1.5 text-compact font-medium transition-colors duration-150",
           active
             ? "rounded-t-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-primary)]"
-            : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
+            : docked
+              ? "rounded-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-secondary)] shadow-[var(--ds-elevation-100)]"
+              : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
         )}
       >
         <Icon className="size-4 shrink-0" strokeWidth={1.75} />
@@ -672,6 +749,26 @@ function ContainerTab({
             <ContextMenuSeparator />
           </>
         ) : null}
+        {/* K 轮并排:键鼠/无障碍等价路径(拖拽是主交互,但不能是唯一交互)。
+            "并排到左/右" 以当前聚焦列为锚点;本容器已在并排中则改为"退出并排"。 */}
+        {unsplitable ? (
+          <ContextMenuItem onSelect={onUnsplit}>
+            <Columns2 className="size-4" strokeWidth={1.75} />
+            {t("workspace.tabs.ctx_unsplit")}
+          </ContextMenuItem>
+        ) : (
+          <>
+            <ContextMenuItem disabled={!splitable} onSelect={onSplitLeft}>
+              <PanelLeft className="size-4" strokeWidth={1.75} />
+              {t("workspace.tabs.ctx_split_left")}
+            </ContextMenuItem>
+            <ContextMenuItem disabled={!splitable} onSelect={onSplitRight}>
+              <PanelRight className="size-4" strokeWidth={1.75} />
+              {t("workspace.tabs.ctx_split_right")}
+            </ContextMenuItem>
+          </>
+        )}
+        <ContextMenuSeparator />
         <ContextMenuItem disabled={!closable} onSelect={onClose}>
           {t("workspace.tabs.ctx_close")}
         </ContextMenuItem>

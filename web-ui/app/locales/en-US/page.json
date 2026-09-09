@@ -142,7 +142,16 @@
       "rename_title": "Rename Conversation",
       "rename_placeholder": "Enter a new title…",
       "rename_failed": "Rename failed",
-      "cache_hit_rate": "Session cache hit rate: {{rate}}%"
+      "cache_hit_rate": "Session cache hit rate: {{rate}}%",
+      "unsplit": "Exit split view",
+      "ctx_split_left": "Split to the Left",
+      "ctx_split_right": "Split to the Right",
+      "ctx_unsplit": "Exit Split View",
+      "split_full": "At most {{max}} columns side by side — close one first",
+      "drop_hint_split": "Open a new column here",
+      "drop_hint_merge": "Move into this column",
+      "drop_hint_container_split": "Place this workspace here",
+      "drop_hint_container_focus": "Show only this workspace"
     },
     "create": {
       "managed": "Default workspace",
