@@ -1,8 +1,8 @@
 {
   "message_parts": {
     "tool_step_hint": "[工具步骤应在思维链中渲染]",
-    "collapse_thinking": "收起思考过程",
-    "expand_thinking_steps": "展开 {{count}} 条思考步骤",
+    "collapse_work_steps": "收起工作过程",
+    "expand_work_steps": "展开 {{count}} 条工作步骤",
     "deep_thinking": "深度思考",
     "thinking_seconds": "思考了 {{seconds}} 秒",
     "elapsed_running_seconds": "已运行 {{seconds}} 秒",

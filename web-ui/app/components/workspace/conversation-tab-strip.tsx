@@ -202,7 +202,7 @@ export function ConversationTabStrip({
                     }}
                     onDragEnd={() => useTabDragStore.getState().setDragging(null)}
                   >
-                    <span className="min-w-0 truncate">{title}</span>
+                    <span className="min-w-0 flex-1 truncate">{title}</span>
                     <TabApprovalDot conversationId={conversationId} />
                     <span
                       role="button"

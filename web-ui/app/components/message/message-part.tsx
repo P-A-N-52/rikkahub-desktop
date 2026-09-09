@@ -187,9 +187,9 @@ export const MessageParts = React.memo(
                 key={`thinking-${blockKey}`}
                 expandKey={`${messageId ?? "msg"}:${blockKey}`}
                 className="my-1"
-                collapseLabel={t("message_parts.collapse_thinking")}
+                collapseLabel={t("message_parts.collapse_work_steps")}
                 showMoreLabel={(hiddenCount) =>
-                  t("message_parts.expand_thinking_steps", { count: hiddenCount })
+                  t("message_parts.expand_work_steps", { count: hiddenCount })
                 }
                 steps={block.steps}
                 renderStep={(step, stepIndex, { isFirst, isLast }) => {

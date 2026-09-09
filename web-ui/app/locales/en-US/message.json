@@ -1,8 +1,8 @@
 {
   "message_parts": {
     "tool_step_hint": "[Tool step should render in chain-of-thought]",
-    "collapse_thinking": "Collapse thinking",
-    "expand_thinking_steps": "Expand {{count}} thinking step(s)",
+    "collapse_work_steps": "Collapse work steps",
+    "expand_work_steps": "Expand {{count}} work step(s)",
     "deep_thinking": "Deep Thinking",
     "thinking_seconds": "Thought for {{seconds}} seconds",
     "elapsed_running_seconds": "Running for {{seconds}}s",
