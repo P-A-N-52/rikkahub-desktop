@@ -32,6 +32,7 @@ const { startFakeOpenAiSse } = await import("../test-utils/fake-openai-sse");
 
 import type { Conversation, State } from "../foundation/types";
 import type { FakeOpenAiSseServer, FakeSseTurn } from "../test-utils/fake-openai-sse";
+import { DEFAULT_OUTPUT_TOKENS } from "../model-providers/request-dialect";
 
 const priorState = state;
 const db = conversations.openConversationsDb();
@@ -215,7 +216,14 @@ describe("generateAnswer P3 路由", () => {
     expect(roles).toContain("system");
     expect(roles).not.toContain("developer");
     expect(request?.max_completion_tokens).toBeUndefined();
-    expect(request?.max_tokens).toBeGreaterThan(0);
+    // 上限**数值**也要锁死,不能只锁"大于 0"。pi 的模型配置要求必须给出 maxTokens
+    // (ProviderConfigInput.models[].maxTokens 是必填 number,且 buildBaseOptions 用
+    // `options?.maxTokens ?? model.maxTokens` 兜底),所以工作区恒发这个字段——这是与
+    // 聊天引擎的**已知结构性差异**:OpenAI 兼容协议下上限可省略,聊天引擎在用户未配置时
+    // 就不发。既然省不掉,数值就必须来自 requiredOutputCap 单源。假上游是未知 host、
+    // 测试环境无 models.dev 缓存,故落方言兜底 DEFAULT_OUTPUT_TOKENS。
+    // 若将来有人让脏目录值或魔数漏进这条路(2026-09-09 GLM-5.3 1210 报障的形态),此断言先红。
+    expect(request?.max_tokens).toBe(DEFAULT_OUTPUT_TOKENS);
   }, 30_000);
 
   test("跨引擎请求方言平价:chat 与 pi 对同一第三方上游,系统角色/上限字段/上限数值逐字一致(T4.7)", async () => {
@@ -254,6 +262,22 @@ describe("generateAnswer P3 路由", () => {
       // store 平价:聊天引擎从不发,pi 经 supportsStore:false 压制。
       expect(request.store).toBeUndefined();
     }
+  }, 30_000);
+
+  test("助手未配置上限时:OpenAI 兼容协议下聊天引擎**不发**上限字段(2026-09-09 1210 报障纪律)", async () => {
+    // 能省则省:OpenAI completions/responses 与 Google 的上限字段是可选的,不发 =
+    // 用服务端默认 = 恒合法;发一个"我们猜的数"才是 400 的来源(报障即此)。
+    // 安卓同语义(ChatCompletionsAPI.kt `if (params.maxTokens != null) put(...)`)。
+    // Anthropic 协议例外——max_tokens 是必填,那条路由 requiredOutputCap 给真值,
+    // 由 model-providers/model-limits.test.ts 覆盖。
+    const server = await installUpstream([{ content: "无上限配置回答" }]);
+    const conversation = seedConversation(null);
+    await generateAnswer(conversation);
+
+    expect(partsText(conversation)).toContain("无上限配置回答");
+    const request = server.requests[0] as { max_tokens?: number; max_completion_tokens?: number };
+    expect(request.max_tokens).toBeUndefined();
+    expect(request.max_completion_tokens).toBeUndefined();
   }, 30_000);
 
   test("非工作区会话走聊天引擎原路:零 pi 痕迹", async () => {

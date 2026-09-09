@@ -888,7 +888,8 @@
       "hygiene_installers_cleaned": "Data directory cleanup: removed {{count}} outdated update installer leftovers",
       "hygiene_legacy_snapshot_cleaned": "Data directory cleanup: removed a legacy migration snapshot",
       "orphan_stats": "Attachment stats: {{orphans}} entries no longer referenced (~{{orphanMb}} MB); {{untracked}} untracked files (~{{untrackedMb}} MB). Nothing is deleted automatically; back up first if you want to clean up",
-      "hygiene_failed": "Data directory cleanup task failed; harmless, will retry on next launch"
+      "hygiene_failed": "Data directory cleanup task failed; harmless, will retry on next launch",
+      "output_limit_unknown": "The maximum output length for {{model}} is unknown; sent the conservative default {{fallback}}. If this model rejects it with an invalid max_tokens error, set the max output length manually in the assistant settings"
     }
   },
   "model_edit": {

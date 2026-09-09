@@ -19,6 +19,7 @@ import {
   jsonBody,
   textBody,
 } from "../model-providers";
+import { contextWindowFor } from "../model-providers/model-limits";
 import { addLog } from "../api/logs";
 import { touchStream } from "../api/sse";
 import { MAX_TOOL_STEPS, mergeTokenUsage, runStreamingToolLoop, toolCallContext, STREAM_IDLE_TIMEOUT_MS, type ProviderRoundAdapter, type NormalizedToolCall } from "./tool-loop";
@@ -110,58 +111,10 @@ export async function loadModelsDev(force = false): Promise<void> {
   return modelsDevLoading;
 }
 
-// 按 provider type + modelId 查 context limit。匹配不到返回 null。
-// ① 精确:provider type → models.dev provider key(claude→anthropic),modelId 精确匹配;
-// ② 版本后缀前缀:claude-3-5-sonnet → claude-3-5-sonnet-20241022(models.dev 用带日期的 id,
-//    用户常用简短 id)。用 `modelId + "-"` 锚定,避免 gpt-4 误匹配 gpt-4o;
-// ③ 跨 provider:中转站可能 type=openai 但实际模型(如 deepseek)在别的 provider下;
-// ④ 都没有 → null(前端只显示分子)。
-function lookupModelLimit(
-  catalog: Record<string, any> | null,
-  providerType: string,
-  modelId: string,
-  field: "context" | "output",
-): number | null {
-  if (!catalog || !modelId) return null;
-  const providerKey = providerType === "claude" ? "anthropic" : providerType;
-  const limitOf = (models: any): number | null => {
-    if (!models) return null;
-    const exact = models[modelId]?.limit?.[field];
-    if (typeof exact === "number" && exact > 0) return exact;
-    for (const key of Object.keys(models)) {
-      if (key.startsWith(`${modelId}-`) || key.startsWith(`${modelId}.`)) {
-        const v = models[key]?.limit?.[field];
-        if (typeof v === "number" && v > 0) return v;
-      }
-    }
-    return null;
-  };
-  const primary = limitOf(catalog[providerKey]?.models);
-  if (primary) return primary;
-  for (const key of Object.keys(catalog)) {
-    const v = limitOf(catalog[key]?.models);
-    if (v) return v;
-  }
-  return null;
-}
-
-export function lookupContextLimit(
-  catalog: Record<string, any> | null,
-  providerType: string,
-  modelId: string,
-): number | null {
-  return lookupModelLimit(catalog, providerType, modelId, "context");
-}
-
-// 按同一套匹配规则查模型输出上限(models.dev limit.output)。P5:pi 引擎请求 max_tokens
-// 与自动压缩预算需要真实值,查不到由调用方给保守默认。
-export function lookupOutputLimit(
-  catalog: Record<string, any> | null,
-  providerType: string,
-  modelId: string,
-): number | null {
-  return lookupModelLimit(catalog, providerType, modelId, "output");
-}
+// 模型极限查表已迁至 model-providers/model-limits.ts(按端点身份取值 + 输出上限自洽性
+// 校验)。此前这里按"provider type + 名字搜全目录"命中第一个,决定统计行分母时无害,
+// 成为出站 max_tokens 来源后就是硬 400 的来源(2026-09-09 智谱 GLM-5.3 报障)。
+// 本文件保留 fillContextLimit —— 它是 usage 回填,依赖 findModel/modelsDevCache。
 
 // 给 message.usage 填充 contextLimit(基于 msg.modelId 查 models.dev)。cache 未加载或
 // 匹配不到时填 null(降级:前端只显示分子)。已填则跳过,避免重复 findModel。
@@ -178,7 +131,7 @@ export function fillContextLimit(msg: Message) {
     usage.contextLimit = null;
     return;
   }
-  usage.contextLimit = lookupContextLimit(modelsDevCache, found.provider.type, found.model.modelId);
+  usage.contextLimit = contextWindowFor(modelsDevCache, found.provider, found.model.modelId);
 }
 
 export function appendUsageFromRaw(msg: Message | undefined, raw: any) {

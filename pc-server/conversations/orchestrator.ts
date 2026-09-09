@@ -6,13 +6,13 @@ import { bumpAnalyticsErrCount } from "../app-config/analytics";
 import type { GenerationEventSink, StreamHooksWithSink, ToolExecutor } from "../inference-engine/events";
 import { id, isRecord, message, textFromParts } from "../foundation/utils";
 import { classifyProxyError } from "../foundation/net";
-import { classifyContextOverflowError, classifyRateLimitError } from "../inference-engine/provider-errors";
+import { classifyContextOverflowError, classifyOutputCapError, classifyRateLimitError } from "../inference-engine/provider-errors";
 import { state } from "../persistence/json-store";
 import { addLog } from "../api/logs";
 import { broadcastConversation, broadcastEngineStatus, broadcastList, broadcastNodeUpdate, touchStream } from "../api/sse";
 import { applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { DEFAULT_OUTPUT_TOKENS, openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
+import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
 import {
   claudeCacheControlEphemeral,
   claudeMessagesFromApiMessages,
@@ -39,12 +39,11 @@ import {
   fetchOpenAiText,
   fetchOpenAiTextStreaming,
   fetchText,
-  lookupContextLimit,
-  lookupOutputLimit,
   modelsDevCache,
   streamClaudeChatWithTools,
   streamGoogleChatWithTools,
 } from "../inference-engine/providers";
+import { contextWindowFor, requiredOutputCap } from "../model-providers/model-limits";
 import {
   finishReasoningParts,
   setMessageLoading,
@@ -153,9 +152,12 @@ export async function callProvider(
     const canStream = hooks?.message != null;
     body = {
       model: selectedModel,
-      // 上限三级兜底:助手设置>模型目录输出上限>方言兜底(与工作区 piModelLimitsFor
-      // 同源;此前写死 64000,对输出上限更小的模型是潜在 400,对 K3 类则截短一半)。
-      max_tokens: assistant.maxTokens ?? lookupOutputLimit(modelsDevCache, providerItem.type, picked.model.modelId) ?? DEFAULT_OUTPUT_TOKENS,
+      // 上限四级(requiredOutputCap 单源,与工作区引擎同一函数):助手设置 > 目录真实
+      // 输出上限(按端点身份查,拒 output≥context 的占位行)> 方言兜底,再收进窗口。
+      // Anthropic 协议 max_tokens 必填,所以这条路必须给数——但绝不能给"名字撞来的"数:
+      // 2026-09-09 智谱 GLM-5.3 的 1210 报障就是旧查表在 213 个目录里撞到某转售商的
+      // {context:1048576, output:1048576} 占位行,把窗口尺寸当输出上限发了出去。
+      max_tokens: requiredOutputCap(modelsDevCache, providerItem, picked.model.modelId, assistant.maxTokens),
       stream: canStream,
       system: claudeSystemContent(systemContent, providerItem),
       messages: claudeMessagesFromApiMessages(messages, providerItem),
@@ -475,12 +477,13 @@ async function runPostGenerationTasks(conversationId: string, snapshot: Conversa
 }
 
 /** pi 模型极限取值(P5 统计与压缩对齐):contextWindow 从 models.dev 查真实窗口
- *  (决定 pi 自动压缩阈值),max_tokens 沿用助手配置(与聊天引擎同源),没配则查
- *  models.dev 输出上限;都查不到时 model-bridge 用保守默认并在 max>窗口时收紧。 */
+ *  (决定 pi 自动压缩阈值),maxTokens 走 requiredOutputCap —— 与聊天引擎 Claude 分支
+ *  **同一个函数**,不是"同源口径"的口头约定。pi 的模型配置要求必须给出 maxTokens
+ *  (它会恒发上限字段),所以这里同样属于"协议逼我给数"的场合。 */
 function piModelLimitsFor(provider: Provider, model: Model, assistant: Assistant) {
   return {
-    contextWindow: lookupContextLimit(modelsDevCache, provider.type, model.modelId),
-    maxTokens: assistant.maxTokens ?? lookupOutputLimit(modelsDevCache, provider.type, model.modelId),
+    contextWindow: contextWindowFor(modelsDevCache, provider, model.modelId),
+    maxTokens: requiredOutputCap(modelsDevCache, provider, model.modelId, assistant.maxTokens),
   };
 }
 
@@ -953,7 +956,12 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
     bumpAnalyticsErrCount();
     const rawContent = err instanceof Error ? err.message : String(err);
     const proxyHint = classifyProxyError(err, state.settings.proxyConfig);
-    const failureText = proxyHint ?? classifyContextOverflowError(err) ?? classifyRateLimitError(err) ?? `请求失败：${rawContent}`;
+    const failureText =
+      proxyHint
+      ?? classifyContextOverflowError(err)
+      ?? classifyOutputCapError(err)
+      ?? classifyRateLimitError(err)
+      ?? `请求失败：${rawContent}`;
     // P2-1(N-7 归宿):失败文本除了落在消息注解上(仅会话内可见),还上报全局通道——
     // 用户不在该会话页时也能收到通知(批2 接前端 toast)。
     reportError("provider", "error", failureText, err);

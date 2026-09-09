@@ -6,14 +6,16 @@ import { basename, join } from "node:path";
 import { customFontsDir, dataDir } from "../../foundation/paths";
 import { saveState, state } from "../../persistence/json-store";
 import { APP_VERSION } from "../../updates/index";
-import { loadModelsDev, lookupContextLimit, modelsDevCache } from "../../inference-engine/providers";
+import { loadModelsDev, modelsDevCache } from "../../inference-engine/providers";
+import { findModel } from "../../model-providers";
+import { contextWindowFor } from "../../model-providers/model-limits";
 import { error, json, readJson } from "../request";
 import { isLoopbackRequest } from "../net-context";
 import { appClients, openSse } from "../sse";
 import { memoryStore } from "../../memory/index";
 import { recentAppErrors } from "../../observability/app-errors";
 import { computeStats } from "../../conversations/stats";
-import { DEFAULT_PROMPT_OPTIMIZE_PROMPT } from "../../app-config/prompts";
+import { DEFAULT_PROMPT_OPTIMIZE_PROMPT, PROMPT_OPTIMIZE_OUTPUT_TOKENS } from "../../app-config/prompts";
 import { markUiActivity } from "../../app-config/analytics";
 import { fetchAuxiliaryText } from "../../conversations/auxiliary";
 import { serveAIIcon } from "../../assets/icons";
@@ -185,8 +187,10 @@ export async function handleSystemRoutes(request: Request, url: URL, path: strin
   if (path === "context-limit" && request.method === "GET") {
     // 查询某模型的 context window 上限(来自 models.dev)。前端切换当前模型时调用,
     // 让统计行分母跟随"当前选中模型"而非"生成时模型"。匹配不到返回 null。
+    // modelId 收我们的模型 id(UUID 优先,findModel 也接上游 modelId):目录查表按
+    // **端点身份**(baseUrl 主机)取值,provider 必须由 findModel 解析——它会展开
+    // providerOverwrite,故按模型覆写走别家网关的模型也能查对。
     const mid = url.searchParams.get("modelId");
-    const ptype = url.searchParams.get("providerType") ?? "";
     if (!mid) return json({ contextLimit: null });
     // 首次启动时前端可能赶在 models.dev 加载完之前发请求。await 一下:已加载则立即返回
     // (常态),还在加载则等它完(loadModelsDev 内部有 10s fetch timeout 兜底)。这样 null 的
@@ -194,7 +198,8 @@ export async function handleSystemRoutes(request: Request, url: URL, path: strin
     // 缓存永久当真。loadModelsDev 对并发调用做了去重,多个请求共用同一个 in-flight promise。
     await loadModelsDev();
     if (!modelsDevCache) return json({ contextLimit: null });
-    return json({ contextLimit: lookupContextLimit(modelsDevCache, ptype, mid) });
+    const found = findModel(mid);
+    return json({ contextLimit: contextWindowFor(modelsDevCache, found.provider, found.model.modelId) });
   }
   if (path === "prompt/optimize" && request.method === "POST") {
     // 用户在对话输入框点"优化提示词":把原文(+可选的最近几轮对话上下文)+ meta-prompt
@@ -218,10 +223,12 @@ export async function handleSystemRoutes(request: Request, url: URL, path: strin
     prompt += `\n\n请优化以下提示词,直接输出优化后的版本:\n\n<original_prompt>\n${text}\n</original_prompt>`;
     try {
       // temperature 0.5:既要能找到更好的措辞,又不能偏离原意乱发挥。
-      // maxTokens 4096:优化后的提示词可能比原文长(结构化展开),给足余量避免截断。
+      // 输出预算 PROMPT_OPTIMIZE_OUTPUT_TOKENS:优化结果可能比原文长(结构化展开),给足
+      // 余量避免截断;这是我们给任务定的数,fetchAuxiliaryText 会经 internalOutputCap
+      // 收进模型真实上限(见 model-limits 头注)。
       // reasoningLevel 不设(用模型默认,跟上下文压缩一致)——提示词优化是重写润色,不是推理任务。
       const optimized = await fetchAuxiliaryText(modelId, prompt, "prompt-optimize", {
-        maxTokens: 4096,
+        maxTokens: PROMPT_OPTIMIZE_OUTPUT_TOKENS,
         temperature: 0.5,
       });
       return json({ text: optimized });

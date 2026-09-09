@@ -4,6 +4,13 @@
 export const TITLE_CHARACTER_LIMIT = 15;
 export const SUGGESTION_CHARACTER_LIMIT = 18;
 
+// 内部任务的输出预算(不是用户的选择,故必须经 internalOutputCap 收进模型真实上限——
+// 目录里存在输出上限低于这些常数的现役对话模型,硬发就是自找 400)。
+/** OCR:抽一张图上的文字,几千 token 足够。 */
+export const OCR_OUTPUT_TOKENS = 2048;
+/** 提示词优化:优化结果可能比原文长(结构化展开),给足余量避免截断。 */
+export const PROMPT_OPTIMIZE_OUTPUT_TOKENS = 4096;
+
 export const DEFAULT_TITLE_PROMPT = `I will give you some dialogue content in the \`<content>\` block.
 You need to summarize the conversation between user and assistant into a short title.
 1. The title language should be consistent with the user's primary language

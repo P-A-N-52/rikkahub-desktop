@@ -114,10 +114,60 @@ export function budgetTokensFor(level: string): number {
   return THINKING_BUDGET_BY_LEVEL[level] ?? 8_000;
 }
 
-/** 方言事实：输出上限的最终兜底(助手未设且模型目录无输出上限时)。Anthropic 协议
- *  max_tokens 必填,安卓对齐取 64000;聊天引擎 Claude 分支、辅助任务、工作区引擎
- *  model-bridge 共用,禁止各处魔数。 */
+/** 方言事实：输出上限的最终兜底(助手未设、方言无登记、模型目录也无可信输出上限时)。
+ *  Anthropic 协议 max_tokens 必填,安卓对齐取 64000;聊天引擎 Claude 分支、辅助任务、
+ *  工作区引擎 model-bridge 共用,禁止各处魔数。 */
 export const DEFAULT_OUTPUT_TOKENS = 64_000;
+
+// ===== 输出上限的方言登记表(模型级事实,一手文档实证)=====
+// 为什么需要它:models.dev 是社区维护的聚合目录,对**输出上限**这个字段既有滞后
+// (新模型未收录)也有错误(同名模型跨 213 个 provider 的 output 中位相差 2 倍、p90 28 倍,
+// 15.6% 的行直接把 output 填成 context)。查表的自洽性校验(model-limits 的 usableLimit)
+// 能挡掉"填成 context"那类,但挡不住"形状合法、数值就是错"的那类——那只能靠一手文档。
+//
+// **登记规程(新模型上限未知时的标准动作,勿凭印象填)**:
+//   1. 查厂商官方 API 文档的模型页,拿到"最大输出 Tokens";只认厂商自己的文档,
+//      聚合站/第三方转售页不算实证(它们本身就是目录数据的来源)。
+//   2. 有真实 400 报文更好——严格端点会在报错里直接给出合法区间
+//      (如智谱 `[1210][max_tokens参数非法：限制数值范围[1,131072]]`),这是最硬的证据。
+//   3. 按**模型级正则**登记(与本文件 Kimi/GLM 代际谓词同哲学):同一模型经官方口、
+//      中转站、云托管都是同一个上限,按 provider 逐个登记必然漏。
+//   4. 注释里写清出处与日期;后续该模型的目录数据被社区修对了,本条目**不必删**——
+//      它是我们核实过的权威值,存在的意义正是不随社区目录漂移。
+//   5. 只登记"厂商公布了独立输出上限"的模型。像 Kimi 系官方明示"输入+输出合计不超过
+//      上下文窗口"、不单独公布输出上限的,**不要编一个数**——让它落 DEFAULT_OUTPUT_TOKENS
+//      兜底(恒小于窗口,安全),并由未登记告警持续提醒。
+//
+// 未登记且目录也查不到时,model-limits 会发一条 info 级 reportError(错误中心可见,
+// 不打扰用户),这是"该去查文档了"的机械化信号——不依赖谁记得住。
+export interface OutputLimitFact {
+  /** 模型级判定(跨渠道成立)。 */
+  match: (modelId: string) => boolean;
+  /** 厂商公布的最大输出 tokens。 */
+  cap: number;
+  /** 出处:文档地址/报文原文 + 核实日期。 */
+  source: string;
+}
+
+export const OUTPUT_LIMIT_FACTS: readonly OutputLimitFact[] = [
+  {
+    // 2026-09-09 用户实测报障的模型:智谱 Anthropic 兼容口发 1048576 被拒,
+    // 报文直接给出合法区间。官方文档同口径,故此值有文档+报文双证。
+    match: isZhipuGlm53Model,
+    cap: 131_072,
+    source:
+      "docs.bigmodel.cn GLM-5.3 模型页「支持 1M 上下文窗口，最大输出 Tokens 为 128K」"
+      + " + 上游报文 [1210][max_tokens参数非法：限制数值范围[1,131072]](2026-09-09 核实)",
+  },
+];
+
+/** 方言登记的输出上限;未登记返回 null(调用方继续查目录)。 */
+export function registeredOutputLimit(modelId: string): number | null {
+  for (const fact of OUTPUT_LIMIT_FACTS) {
+    if (fact.match(modelId)) return fact.cap;
+  }
+  return null;
+}
 
 /** 档位归一化（方言事实：用户档位值域的入口收拢）——安卓对齐的大写枚举（AUTO/OFF/
  *  MINIMAL/…/MAX）统一小写，off/none 归并为 off。聊天引擎全部拼装分支、auxiliary、

@@ -4,7 +4,7 @@
 // 三家 provider 的报错各说各话,原文透传给用户就是天书。这里只做识别与换文案,
 // 不改任何错误处理流程;模式刻意保守——误判(把正常报错说成限流/超上下文,误导用户
 // 白折腾)比漏判(用户看到原文)更糟。调用点在 orchestrator 的生成失败分支,
-// 与 classifyProxyError 串成 代理 ?? 超上下文 ?? 限流 ?? 原文 的分类链。
+// 与 classifyProxyError 串成 代理 ?? 超上下文 ?? 输出上限 ?? 限流 ?? 原文 的分类链。
 
 export const CONTEXT_OVERFLOW_MESSAGE = "超出模型最大上下文窗口，建议压缩对话或切换窗口更大的模型";
 
@@ -55,4 +55,35 @@ export function classifyRateLimitError(err: unknown): string | null {
   if (!text) return null;
   if (!RATE_LIMIT_PATTERNS.some((re) => re.test(text))) return null;
   return `${RATE_LIMIT_MESSAGE}\n[原始错误] ${text}`;
+}
+
+export const OUTPUT_CAP_MESSAGE =
+  "本次请求的「最大输出长度」超出该模型允许的范围。请在助手设置里把它调小或清空（清空＝交由服务商决定）";
+
+// 「输出上限本身非法」——与超上下文是两类不同的错误,别混:
+//   超上下文 = 输入太长(prompt 塞不进窗口),用户该压缩/换大窗口模型;
+//   本类     = max_tokens 这个数字本身越界(与输入长度无关),用户该改设置项。
+// 上游文案各说各话,故按"提到上限字段名 + 提到范围/超限"的组合命中,不靠单一关键词。
+const OUTPUT_CAP_PATTERNS: RegExp[] = [
+  // 智谱 GLM(2026-09-09 报障原文):[1210][max_tokens参数非法：限制数值范围[1,131072]]
+  /max_tokens\s*参数非法/i,
+  // 通用中文表述(国内生态常见变体:参数错误/取值范围/不合法)
+  /max[_-]?(?:tokens|output[_-]?tokens|completion[_-]?tokens)[^\n]{0,24}(?:参数错误|不合法|非法|取值范围|超出范围)/i,
+  // Anthropic:"max_tokens: 200000 > 64000, which is the maximum allowed number of output tokens"
+  /max_tokens[^\n]{0,80}maximum allowed/i,
+  // OpenAI 系:"max_tokens is too large" / "Invalid value for 'max_output_tokens'"
+  /max[_-]?(?:tokens|output[_-]?tokens|completion[_-]?tokens)\D{0,20}(?:is too large|must be (?:less|at most|between)|exceeds the maximum)/i,
+  /(?:invalid value|unsupported value)[^\n]{0,40}max[_-]?(?:tokens|output[_-]?tokens|completion[_-]?tokens)/i,
+];
+
+/** 命中"输出上限数值非法"时返回可行动文案(附原文,含上游给出的合法区间),否则 null。
+ *
+ *  必须排在 classifyContextOverflowError **之后**:Anthropic 的
+ *  "input length and `max_tokens` exceed context limit" 也提到 max_tokens,但那是
+ *  输入太长的复合表述,归超上下文才对(它的正则先命中,本函数不会被问到)。 */
+export function classifyOutputCapError(err: unknown): string | null {
+  const text = err instanceof Error ? err.message : String(err ?? "");
+  if (!text) return null;
+  if (!OUTPUT_CAP_PATTERNS.some((re) => re.test(text))) return null;
+  return `${OUTPUT_CAP_MESSAGE}\n[原始错误] ${text}`;
 }

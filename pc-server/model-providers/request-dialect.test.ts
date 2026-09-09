@@ -22,6 +22,7 @@ import {
   isOfficialOpenAiHost,
   openAiMaxTokensField,
   openAiThinkingSwitchProtocol,
+  registeredOutputLimit,
   responsesHistoryReasoningAllowed,
   SILICONFLOW_THINKING_MODELS,
   ZHIPU_GLM53_EFFORT_BY_LEVEL,
@@ -52,6 +53,18 @@ describe("request-dialect 统一请求方言", () => {
     expect(openAiMaxTokensField("ark.cn-beijing.volces.com")).toBe("max_tokens");
     expect(openAiMaxTokensField("dashscope.aliyuncs.com")).toBe("max_tokens");
     expect(openAiMaxTokensField("127.0.0.1")).toBe("max_tokens");
+  });
+
+  it("输出上限登记表:GLM-5.3 系 131072(2026-09-09 报障的一手实证值)", () => {
+    // 登记表是"新模型上限未知时去查官方文档"这条纪律的落点(见 OUTPUT_LIMIT_FACTS 头注)。
+    // 它优先于 models.dev——目录对输出上限既滞后又常错,一手文档才是权威。
+    expect(registeredOutputLimit("glm-5.3")).toBe(131_072);
+    expect(registeredOutputLimit("glm-5.3-flash")).toBe(131_072);
+    expect(registeredOutputLimit("GLM-5.3")).toBe(131_072);
+    // 未登记的模型返回 null,交由目录/兜底处理——不许在这里编数。
+    expect(registeredOutputLimit("glm-5.2")).toBeNull();
+    expect(registeredOutputLimit("gpt-5")).toBeNull();
+    expect(registeredOutputLimit("")).toBeNull();
   });
 
   it("历史 reasoning 项:仅官方主机回传(火山 400 内测实证 2026-09-05,第二轮必炸根因)", () => {

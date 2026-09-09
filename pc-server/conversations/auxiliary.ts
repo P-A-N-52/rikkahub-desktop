@@ -7,7 +7,8 @@ import { state } from "../persistence/json-store";
 import { broadcastConversation, broadcastEngineStatus } from "../api/sse";
 import { DEFAULT_AUTO_MODEL_ID, applyCustomBody, applyRequestHeaders, findModel } from "../model-providers";
 import { endpointFor } from "../model-providers/checks";
-import { DEFAULT_OUTPUT_TOKENS, openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
+import { openAiMaxTokensField, reasoningLevelNormalized } from "../model-providers/request-dialect";
+import { internalOutputCap, requiredOutputCap } from "../model-providers/model-limits";
 import {
   auxiliaryReasoningPayloadForProvider,
   claudeThinkingPayload,
@@ -24,12 +25,14 @@ import {
   fetchGoogleAuxiliaryStream,
   fetchOpenAiAuxiliaryStream,
   fetchText,
+  modelsDevCache,
 } from "../inference-engine/providers";
 import {
   DEFAULT_COMPRESS_PROMPT,
   DEFAULT_OCR_PROMPT,
   DEFAULT_SUGGESTION_PROMPT,
   DEFAULT_TITLE_PROMPT,
+  OCR_OUTPUT_TOKENS,
   SUGGESTION_CHARACTER_LIMIT,
   TITLE_CHARACTER_LIMIT,
 } from "../app-config/prompts";
@@ -167,7 +170,16 @@ export async function fetchAuxiliaryText(modelId: string, prompt: string, kind: 
     headers["anthropic-version"] = "2023-06-01";
     body = {
       model: selectedModel,
-      max_tokens: maxTokens ?? DEFAULT_OUTPUT_TOKENS,
+      // Anthropic 协议 max_tokens 必填。两种来源分开处理:调用方给了 maxTokens 的
+      // (提示词优化 4096)那是**我们的**任务预算,须收进模型真实上限(internalOutputCap);
+      // 没给的(标题/建议/翻译/压缩)走与主生成路径同一个 requiredOutputCap 单源。
+      // 此前是 `maxTokens ?? DEFAULT_OUTPUT_TOKENS` —— 后者恒 64000,对输出上限低于
+      // 此值的模型(claude-3-haiku 4096、cohere command-r 4000)Anthropic 直接 400,
+      // 与本次 1210 报障同类,只是触发面在辅助任务、更难被注意到。
+      max_tokens:
+        maxTokens != null
+          ? internalOutputCap(modelsDevCache, providerItem, modelItem.modelId, maxTokens)
+          : requiredOutputCap(modelsDevCache, providerItem, modelItem.modelId, null),
       messages: [{ role: "user", content: prompt }],
       stream,
       ...(options.temperature != null && (!reasoningLevel || !reasoningEnabled(reasoningLevel)) ? { temperature: options.temperature } : {}),
@@ -237,20 +249,23 @@ async function fetchAuxiliaryOcrText(imageUrl: string) {
   const providerItem = picked.provider;
   const modelItem = picked.model;
   const selectedModel = modelItem.modelId === "auto" ? "gpt-4o-mini" : modelItem.modelId;
+  const prompt = state.settings.ocrPrompt || DEFAULT_OCR_PROMPT;
+  const dataUrl = dataUrlForMessageUrl(imageUrl);
+  // OCR 的 2048 是我们给这个任务定的预算,不是用户的选择:收进模型真实上限,免得对
+  // 输出上限更低的模型硬发大数(见 internalOutputCap 头注)。三个协议 + assistant 共用。
+  const ocrCap = internalOutputCap(modelsDevCache, providerItem, modelItem.modelId, OCR_OUTPUT_TOKENS);
   const assistant = {
     ...findAssistant(state.settings.assistantId),
     chatModelId: modelItem.id,
     systemPrompt: "",
     temperature: 0,
     topP: null,
-    maxTokens: 2048,
+    maxTokens: ocrCap,
     streamOutput: false,
     enabledSkills: [],
     mcpServers: [],
     localTools: [],
   } as Assistant;
-  const prompt = state.settings.ocrPrompt || DEFAULT_OCR_PROMPT;
-  const dataUrl = dataUrlForMessageUrl(imageUrl);
   const headers = applyRequestHeaders({ "Content-Type": "application/json" }, assistant, providerItem, modelItem);
   let endpoint = endpointFor(providerItem);
   let body: Record<string, any>;
@@ -279,7 +294,7 @@ async function fetchAuxiliaryOcrText(imageUrl: string) {
     headers["anthropic-version"] = "2023-06-01";
     body = {
       model: selectedModel,
-      max_tokens: 2048,
+      max_tokens: ocrCap,
       messages: [{
         role: "user",
         content: [
@@ -302,7 +317,7 @@ async function fetchAuxiliaryOcrText(imageUrl: string) {
             { type: "input_image", image_url: dataUrl },
           ],
         }],
-        max_output_tokens: 2048,
+        max_output_tokens: ocrCap,
       }
     : {
         model: selectedModel,
@@ -314,7 +329,7 @@ async function fetchAuxiliaryOcrText(imageUrl: string) {
           ],
         }],
         // 上限字段名走统一请求方言（o 系官方口同样具备视觉能力，恒发 max_tokens 会 400）。
-        [openAiMaxTokensField(hostOfProvider(providerItem))]: 2048,
+        [openAiMaxTokensField(hostOfProvider(providerItem))]: ocrCap,
         temperature: isModelAllowTemperature(modelItem) ? 0 : undefined,
       };
   return cleanAuxiliaryText(await fetchText(endpoint, headers, applyCustomBody(body, assistant, modelItem), providerItem, completionMessageText));

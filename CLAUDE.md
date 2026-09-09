@@ -125,6 +125,18 @@ the runtime will.
   watchdog for the clock. Callers that pass an explicit `init.timeout` are respected (guard),
   and `Request`-object inputs (Bun.serve inbound forwards) are skipped. Locked by
   `scripts/proxy-behavior-smoke.ts` §D. Runtime pins Bun 1.4.0 (ci / build-linux / Dockerfile / @types/bun).
+- **输出上限（`max_tokens` 家族）只有一个来源**：`model-providers/model-limits.ts`。两条纪律：
+  ①**协议允许省略时就不发这个字段** —— OpenAI completions/responses 与 Google 的上限是可选的，
+  用户没在助手里配就整个字段不出现（不发＝用服务端默认＝恒合法；发一个猜来的数就是 400 的
+  来源，安卓同语义）。②**协议必填时**（Anthropic 的 `max_tokens`、pi 的 `ProviderConfigInput`）
+  数值走 `requiredOutputCap`：用户配置 > 方言登记表 > models.dev 真值（按端点 host 身份查、
+  丢弃 `output >= context` 的占位行、同 host 多条取 min）> `DEFAULT_OUTPUT_TOKENS`。
+  我们自己定的内部预算（OCR、提示词优化、连通性测试）走 `internalOutputCap` 收进模型真实上限。
+  **新模型上限未知时**：`requiredOutputCap` 会发一条 `output_limit_unknown` 的 info 级
+  `reportError`（错误中心可见）——看到它就去查厂商官方 API 文档的模型页，把
+  「最大输出 Tokens」按模型级正则登记进 `request-dialect.ts` 的 `OUTPUT_LIMIT_FACTS`
+  （注释写清出处与核实日期；只认厂商自己的文档，聚合站不算实证；厂商未单独公布输出上限的
+  就别编数，让它落兜底）。两道防线锁在 `model-providers/model-limits.test.ts`。
 
 ## Common tasks
 

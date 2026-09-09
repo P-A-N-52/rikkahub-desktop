@@ -188,61 +188,52 @@ function formatNumber(value: number): string {
 // 原实现每条消息各自 useState + useEffect,切模型时 N 条消息 = N 个 effect 重跑 + 2N 次
 // setState(undefined→v)抖动。改为单一 module 状态 + 订阅:切模型只在第一个消费者触发时
 // 算一次,结果广播给所有 NerdLineRow,避免 N 条消息各自抖动。
+// 传的是模型的**本地 UUID**(不是上游 modelId):后端按 findModel 解析出生效 provider,
+// 再按其 baseUrl 主机查目录 —— 同一个上游模型名在不同服务商下窗口不同,必须能区分,
+// 且 providerOverwrite(按模型改服务商)也只有走 findModel 才展开得到。
 const contextLimitCache = new Map<string, Promise<number | null>>();
 type ContextLimitState = {
-  modelId: string;
-  providerType: string;
+  modelKey: string;
   limit: number | null | undefined;
 };
-let sharedContextLimit: ContextLimitState = { modelId: "", providerType: "", limit: undefined };
+let sharedContextLimit: ContextLimitState = { modelKey: "", limit: undefined };
 const contextLimitListeners = new Set<() => void>();
 function notifyContextLimit() {
   for (const listener of contextLimitListeners) listener();
 }
-function ensureContextLimit(modelId: string, providerType: string) {
-  if (
-    sharedContextLimit.modelId === modelId &&
-    sharedContextLimit.providerType === providerType
-  ) {
+function ensureContextLimit(modelKey: string) {
+  if (sharedContextLimit.modelKey === modelKey) {
     return;
   }
   // 切到新模型:分母先回退到 undefined(getNerdStats 回退到 usage.contextLimit 快照),避免
   // 短暂显示上一个模型的 live 值。然后异步取新模型的 limit。
-  sharedContextLimit = { modelId, providerType, limit: undefined };
+  sharedContextLimit = { modelKey, limit: undefined };
   notifyContextLimit();
-  if (!modelId || !providerType) return;
-  const cacheKey = `${providerType}/${modelId}`;
+  if (!modelKey) return;
   // 首次查才发请求,后续(含同 tick 其他消息)复用同一 Promise。后端 context-limit 路由
   // 会 await models.dev 加载完,所以 null 的语义是确定的"models.dev 里查不到"——可安全缓存。
-  let p = contextLimitCache.get(cacheKey);
+  let p = contextLimitCache.get(modelKey);
   if (!p) {
     p = api
-      .get<{ contextLimit: number | null }>(
-        `context-limit?modelId=${encodeURIComponent(modelId)}&providerType=${encodeURIComponent(providerType)}`,
-      )
+      .get<{ contextLimit: number | null }>(`context-limit?modelId=${encodeURIComponent(modelKey)}`)
       .then((res) => res.contextLimit ?? null)
       .catch(() => null);
-    contextLimitCache.set(cacheKey, p);
+    contextLimitCache.set(modelKey, p);
   }
   void p.then((v) => {
     // 结果到达时仍要确认没再切模型,否则会覆盖更新的查询。
-    if (
-      sharedContextLimit.modelId === modelId &&
-      sharedContextLimit.providerType === providerType
-    ) {
+    if (sharedContextLimit.modelKey === modelKey) {
       sharedContextLimit = { ...sharedContextLimit, limit: v };
       notifyContextLimit();
     }
   });
 }
 function useCurrentContextLimit(): number | null | undefined {
-  const { currentModel, currentProvider } = useCurrentModel();
-  const modelId = currentModel?.modelId ?? "";
-  // currentProvider.type 经 ProviderProfile 的索引签名返回 unknown,显式窄化为 string。
-  const providerType = typeof currentProvider?.type === "string" ? currentProvider.type : "";
+  const { currentModelId } = useCurrentModel();
+  const modelKey = currentModelId ?? "";
   React.useEffect(() => {
-    ensureContextLimit(modelId, providerType);
-  }, [modelId, providerType]);
+    ensureContextLimit(modelKey);
+  }, [modelKey]);
   return React.useSyncExternalStore(
     (onStoreChange) => {
       contextLimitListeners.add(onStoreChange);

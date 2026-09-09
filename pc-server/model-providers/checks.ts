@@ -10,7 +10,11 @@ import { addLog } from "../api/logs";
 import { findAssistant } from "../assistants";
 import { applyCustomBody, jsonBody, modelsEndpointFor, normalizeFetchedModels, applyRequestHeaders, providerHeaders, providerTestCorePassed, providerTestModel, textBody } from "./index";
 import { hostOfProvider } from "../inference-engine/message-builder";
-import { deltaReasoningContent, deltaTextContent, parseSseChunks, responseEventToDelta, upstreamHttpError } from "../inference-engine/providers";
+import { deltaReasoningContent, deltaTextContent, modelsDevCache, parseSseChunks, responseEventToDelta, upstreamHttpError } from "../inference-engine/providers";
+import { internalOutputCap } from "./model-limits";
+
+/** 连通性测试的输出预算(我们的探测,不是用户的选择;经 internalOutputCap 收进模型上限)。 */
+const PROVIDER_TEST_OUTPUT_TOKENS = 4096;
 
 export function endpointFor(providerItem: Provider) {
   const base = providerItem.baseUrl.replace(/\/+$/, "");
@@ -177,7 +181,10 @@ function providerTestPayload(providerItem: Provider, mode: "non_stream" | "strea
   if (providerItem.type === "claude") {
     const body: any = {
       model: selectedModel,
-      max_tokens: 4096,
+      // Anthropic 协议 max_tokens 必填。连通性测试只要一句 "hello",4096 是我们给这个
+      // 探测定的预算(不是用户的选择)——经 internalOutputCap 收进模型真实上限,否则对
+      // 输出上限低于 4096 的模型(目录里有 cohere command-r 系 4000)测试会假失败。
+      max_tokens: internalOutputCap(modelsDevCache, providerItem, selectedModel, PROVIDER_TEST_OUTPUT_TOKENS),
       stream: mode === "stream",
       system: "You are a helpful assistant",
       messages: [{ role: "user", content: mode === "tools" ? "Use the get_current_time tool." : "hello" }],

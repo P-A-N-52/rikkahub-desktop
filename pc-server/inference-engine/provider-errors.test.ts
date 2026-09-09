@@ -5,8 +5,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONTEXT_OVERFLOW_MESSAGE,
+  OUTPUT_CAP_MESSAGE,
   RATE_LIMIT_MESSAGE,
   classifyContextOverflowError,
+  classifyOutputCapError,
   classifyRateLimitError,
 } from "./provider-errors";
 
@@ -82,5 +84,56 @@ describe("classifyRateLimitError", () => {
   test("非 Error 输入不炸", () => {
     expect(classifyRateLimitError(null)).toBeNull();
     expect(classifyRateLimitError(undefined)).toBeNull();
+  });
+});
+
+// 2026-09-09 用户实测:智谱 GLM-5.3 两个模式都发出 100 万级 max_tokens 被拒。修因之外
+// 还要修"看不懂":原文只有一串错误码,用户无从判断该改哪个设置项。
+describe("classifyOutputCapError", () => {
+  const capSamples = [
+    // 智谱(报障原文,Anthropic 兼容口)
+    'Claude 400: {"type":"error","error":{"type":"invalid_request_error","code":"1210","message":"[1210][max_tokens参数非法：限制数值范围[1,131072]][202609092146352c28dbfec858417b]"}}',
+    // Anthropic 官方
+    'Claude 400: {"type":"error","error":{"message":"max_tokens: 200000 > 64000, which is the maximum allowed number of output tokens"}}',
+    // OpenAI 系
+    "OpenAI 400: max_tokens is too large: 200000. This model supports at most 128000 completion tokens",
+    'OpenAI 400: {"error":{"message":"Invalid value for \'max_output_tokens\': must be between 16 and 128000"}}',
+    // 国内生态的其他中文变体
+    "Ark 400: max_tokens 参数错误,取值范围为 [1, 32768]",
+  ];
+  test.each(capSamples)("命中:%s", (sample) => {
+    const result = classifyOutputCapError(new Error(sample));
+    expect(result).toStartWith(OUTPUT_CAP_MESSAGE);
+    // 原文要附带——上游通常在报文里给出合法区间,那是用户填新值的依据。
+    expect(result).toContain(sample);
+  });
+
+  const normalSamples = [
+    "OpenAI 401: Incorrect API key provided",
+    "OpenAI 429: Rate limit reached for tokens per min (TPM)",
+    "OpenAI 400: context_length_exceeded",
+    "fetch failed: ECONNRESET",
+    // 正常讨论 max_tokens 的文本不该命中(本函数只吃 Error,防御性验证)
+    "assistant explaining what max_tokens means in an answer",
+  ];
+  test.each(normalSamples)("不命中:%s", (sample) => {
+    expect(classifyOutputCapError(new Error(sample))).toBeNull();
+  });
+
+  test("不抢超上下文的归类:含 max_tokens 的复合超限表述归超上下文", () => {
+    // Anthropic 的这条同时提到 max_tokens,但根因是输入太长(该压缩/换模型),
+    // 不是上限数值非法(该改设置项)。orchestrator 的分类链顺序保证超上下文先命中;
+    // 这里锁住"顺序不可换"这件事本身。
+    const compound =
+      'Claude 400: {"type":"error","error":{"message":"input length and `max_tokens` exceed context limit: 195000 + 8192 > 200000"}}';
+    expect(classifyContextOverflowError(new Error(compound))).toBe(CONTEXT_OVERFLOW_MESSAGE);
+    const chained = classifyContextOverflowError(new Error(compound)) ?? classifyOutputCapError(new Error(compound));
+    expect(chained).toBe(CONTEXT_OVERFLOW_MESSAGE);
+  });
+
+  test("非 Error 输入不炸", () => {
+    expect(classifyOutputCapError(null)).toBeNull();
+    expect(classifyOutputCapError(undefined)).toBeNull();
+    expect(classifyOutputCapError("max_tokens参数非法：限制数值范围[1,131072]")).toStartWith(OUTPUT_CAP_MESSAGE);
   });
 });
