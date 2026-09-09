@@ -2,7 +2,7 @@
 // 纪律：纯函数，只负责把工具 part / 输出转成 API 消息可用的字符串或对象。
 
 import { id, isRecord, textFromParts } from "../foundation/utils";
-import type { JsonValue, TextPart, ToolErrorOutput, ToolOutputEntry } from "../foundation/types";
+import type { JsonValue, ToolErrorOutput, ToolOutputEntry } from "../foundation/types";
 
 export function parseToolInput(value: unknown): Record<string, JsonValue> {
   if (isRecord(value)) return value as Record<string, JsonValue>;
@@ -87,12 +87,4 @@ export function apiToolCallFromPart(part: Record<string, unknown>) {
       arguments: toolArgumentsJson(part.input),
     },
   };
-}
-
-export function partsToToolResultText(parts: ToolOutputEntry[]): string {
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .map((part) => (isRecord(part) && part.type === "text" ? String((part as TextPart).text ?? "") : ""))
-    .filter(Boolean)
-    .join("\n");
 }

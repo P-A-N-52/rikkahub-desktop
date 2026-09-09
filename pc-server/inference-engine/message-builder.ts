@@ -720,26 +720,6 @@ export function apiContentText(content: unknown) {
 }
 
 
-export function responseApiContent(content: unknown, role: string) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return apiContentText(content);
-  return content
-    .map((part) => {
-      if (!isRecord(part)) return null;
-      const text = String(part.text ?? part.content ?? "");
-      if (text) {
-        return {
-          type: role === "assistant" ? "output_text" : "input_text",
-          text,
-        };
-      }
-      if (part.type === "image_url") return part;
-      return null;
-    })
-    .filter(Boolean);
-}
-
-
 export function responseApiContentFromUiParts(parts: JsonValue[], role: string) {
   const content = documentPartsFirst(parts)
     .map((part) => {
@@ -913,50 +893,6 @@ export function responseApiMessagesFromUiMessages(messages: Message[], targetMod
     if (hasContent) items.push({ role, content });
   }
   return items;
-}
-
-
-export function responseApiMessages(messagesForApi: ApiMessage[]) {
-  const items: ApiMessage[] = [];
-  for (const item of messagesForApi) {
-    if (item.role === "system") continue;
-    if (item.role === "assistant") {
-      const content = responseApiContent(item.content, "assistant");
-      if ((typeof content === "string" && content.trim()) || (Array.isArray(content) && content.length)) {
-        items.push({ role: "assistant", content });
-      }
-      const toolCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
-      for (const toolCall of toolCalls) {
-        const fn = toolCall?.function ?? {};
-        items.push({
-          type: "function_call",
-          call_id: String(toolCall.id ?? ""),
-          name: String(fn.name ?? ""),
-          arguments: String(fn.arguments ?? ""),
-        });
-      }
-      continue;
-    }
-    if (item.role === "tool") {
-      items.push({
-        type: "function_call_output",
-        call_id: String(item.tool_call_id ?? ""),
-        output: apiContentText(item.content),
-      });
-      continue;
-    }
-    items.push({ role: item.role, content: responseApiContent(item.content, String(item.role ?? "user")) });
-  }
-  return items;
-}
-
-
-export function responseApiInstructions(messagesForApi: ApiMessage[]) {
-  return messagesForApi
-    .filter((item) => item.role === "system")
-    .map((item) => apiContentText(item.content))
-    .filter(Boolean)
-    .join("\n");
 }
 
 

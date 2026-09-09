@@ -8,9 +8,8 @@ import { id, isRecord, reasoningFromParts, safeJsonParse, visibleReasoningFromMe
 import { MODELS_DEV_CACHE_PATH } from "../foundation/paths";
 import { fetchWithTimeout, readWithIdleTimeout } from "../foundation/net";
 import { initialApprovalState, toolNeedsApproval } from "../tools/approval";
-import { partsToToolResultText, toolArgumentsJson, toolExecutionErrorPayload, toolResultTextForApi } from "../tools/format";
+import { toolArgumentsJson, toolExecutionErrorPayload, toolResultTextForApi } from "../tools/format";
 import {
-  apiContentText,
   claudeBlocksFromUiParts,
 } from "./message-builder";
 import { ensureReasoningPart, finishReasoningParts, normalizeGeneratedImageUrl } from "./parts";
@@ -942,8 +941,12 @@ export async function streamGoogleChatWithTools(
     },
     encodeNextTurn(result, toolResults) {
       const round = result.replay as GoogleStreamRoundResult;
+      // result 文本经 toolResultTextForApi(工具结果的唯一投影,同 OpenAI/Claude 两系):
+      // ①空输出给确定性占位而非空串——Gemini 不像火山那样按必填拒,但"有调用无结果"
+      // 回灌给模型的表述必须与另两系逐字一致(否则模型行为随 provider 漂移);②无 text
+      // part 的输出(纯图片等)不再退化成空串,由 openAiToolOutput 兜底序列化。
       const responseParts = toolResults.map(({ call, output }) => ({
-        functionResponse: { name: call.name, response: { result: apiContentText(partsToToolResultText(output)) } },
+        functionResponse: { name: call.name, response: { result: toolResultTextForApi({ output }) } },
       }));
       // Gemini 要求把模型这轮的 parts（含 functionCall）原样回放，再追加 user 的 functionResponse。
       contents = [
@@ -1658,22 +1661,25 @@ export function compactAssistantToolMessage(content: string, toolCalls: any[], r
 // 原始条目缺 id 时与工具结果项的兜底 id 配对断裂。readRound 归一化已过滤洞/无名
 // 并兜底 id，续传两分支一律经下面两个投影函数消费它，原始 replay 数组不得进续传体。
 
-/** Responses API 续传的 function_call 回放项。 */
+/** Responses API 续传的 function_call 回放项。arguments 再经 toolArgumentsJson:
+ *  readRound 归一化已做过一次(幂等),这里重做一次是为了让"上线的 function_call 项
+ *  恒非空参"成为本函数的局部性质——未来新 provider 若自建 NormalizedToolCall 而漏了
+ *  归一化,也不会从这条路把空串送上去。 */
 export function responseApiToolCallItems(toolCalls: NormalizedToolCall[]) {
   return toolCalls.map((call) => ({
     type: "function_call",
     call_id: call.id,
     name: call.name,
-    arguments: call.arguments,
+    arguments: toolArgumentsJson(call.arguments),
   }));
 }
 
-/** chat-completions 续传的 tool_calls 回放（OpenAI 嵌套形态）。 */
+/** chat-completions 续传的 tool_calls 回放（OpenAI 嵌套形态）。arguments 同上归一。 */
 export function chatToolCallsFromNormalized(toolCalls: NormalizedToolCall[]) {
   return toolCalls.map((call) => ({
     id: call.id,
     type: "function",
-    function: { name: call.name, arguments: call.arguments },
+    function: { name: call.name, arguments: toolArgumentsJson(call.arguments) },
   }));
 }
 

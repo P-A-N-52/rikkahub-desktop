@@ -8,7 +8,6 @@ import {
   apiToolCallFromPart,
   openAiToolOutput,
   parseToolInput,
-  partsToToolResultText,
   resolvedToolOutput,
   toolArgumentsJson,
   toolExecutionErrorPayload,
@@ -105,18 +104,6 @@ describe("toolResultTextForApi", () => {
     expect(toolResultTextForApi({ output: [], approvalState: { type: "auto" } })).toBe(UNRESOLVED_TOOL_RESULT_TEXT);
     expect(toolResultTextForApi({})).toBe(UNRESOLVED_TOOL_RESULT_TEXT);
     expect(toolResultTextForApi({ output: [], approvalState: { type: "pending" } }).length).toBeGreaterThan(0);
-  });
-});
-
-describe("partsToToolResultText", () => {
-  test("只取 text part 以换行拼接", () => {
-    expect(
-      partsToToolResultText([
-        { type: "text", text: "a" },
-        { type: "image", url: "u" },
-        { type: "text", text: "b" },
-      ]),
-    ).toBe("a\nb");
   });
 });
 
