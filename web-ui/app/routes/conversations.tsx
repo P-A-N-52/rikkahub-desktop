@@ -1352,8 +1352,6 @@ interface ConversationPaneViewProps {
   paneIndex: number;
   /** 本列是否为聚焦列(路由/侧栏跟随它)。 */
   focused: boolean;
-  /** 分栏中(≥2 列)才需要标出焦点;单列时整个界面就是它,无需额外装饰。 */
-  splitMode: boolean;
   /** 本列的会话:焦点列由路由权威(null = "新对话"态);非焦点列 = 窗格激活标签。 */
   conversationId: string | null;
   isHomeRoute: boolean;
@@ -1375,7 +1373,6 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   container,
   paneIndex,
   focused,
-  splitMode,
   conversationId,
   isHomeRoute,
   homeDraftId,
@@ -1960,12 +1957,6 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
             }
       }
     >
-      {/* 分栏时标出焦点列:顶缘一道品牌色细线。焦点决定路由、侧栏、热键与全局拖放的
-          落点,用户必须随时知道"我现在在哪一栏";用发丝线而非底色/描边,才不会与
-          面板本身的层次语言打架。单列时整屏就是焦点,不画。 */}
-      {splitMode && focused ? (
-        <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[2px] rounded-full bg-[var(--ds-brand-primary)]/60" />
-      ) : null}
       <ConversationTabStrip
         container={container}
         paneIndex={paneIndex}
@@ -2638,7 +2629,6 @@ function ConversationsPageInner() {
         container={column.container}
         paneIndex={column.paneIndex}
         focused={focused}
-        splitMode={columns.length > 1}
         conversationId={focused && routeOwned ? activeId : column.pane.active}
         isHomeRoute={isHomeRoute}
         homeDraftId={homeDraftId}
