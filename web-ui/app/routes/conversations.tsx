@@ -2683,8 +2683,10 @@ function ConversationsPageInner() {
             组间由画布色缝隙分隔 —— "两个组"是比"同组两列"更重的边界。 */}
         {groups.length === 1 || isMobile ? (
           <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
-            {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。 */}
-            <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
+            {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。
+                z-[3] 压过白面板的 elevation-100 外环阴影(NewMax 同款层级):否则那道
+                0.5px 暗环会横穿焦点标签与面板的连接处,连体处凭空多出一条缝。 */}
+            <div className="relative z-[3] flex h-[31px] shrink-0 items-end gap-1 px-1">
               <CollapsedSidebarTrigger />
               <div className="relative flex h-full min-w-0 flex-1 items-end">
                 <ContainerTabBar
@@ -2786,7 +2788,8 @@ function ConversationsPageInner() {
                     className="flex min-h-0 flex-col"
                   >
                     <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
-                      <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
+                      {/* z-[3] 同单组分支:压过面板阴影外环,连体处不出缝(见上方注释) */}
+                      <div className="relative z-[3] flex h-[31px] shrink-0 items-end gap-1 px-1">
                         <div className="relative flex h-full min-w-0 flex-1 items-end">
                           <ContainerTabBar
                             group={group}
