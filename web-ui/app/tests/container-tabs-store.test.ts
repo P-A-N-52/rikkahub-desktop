@@ -9,6 +9,7 @@ import {
   CHAT_CONTAINER,
   MAX_PANES,
   flattenColumns,
+  groupSiblingOf,
   sanitizePersistedTabs,
   useContainerTabsStore,
 } from "~/stores/container-tabs-store";
@@ -389,6 +390,33 @@ describe("一级容器分栏(L 轮分区模型)", () => {
     // 跨组:chat 挪到 ws1 右侧
     expect(store().moveContainerBeside(CHAT_CONTAINER, "ws1", "right")).toBe(true);
     expect(store().groups).toEqual([["ws2", "ws1", CHAT_CONTAINER]]);
+  });
+
+  test("焦点标签拖出本组 = 以同组兄弟为锚点拆新组(拖拽落点的实际调用序)", () => {
+    store().openContainer("ws1");
+    store().openContainer("ws2");
+    // 一个组三枚标签,焦点是 ws2(最后打开的);屏上只有一列,归 ws2 所有
+    expect(store().groups).toEqual([[CHAT_CONTAINER, "ws1", "ws2"]]);
+    expect(store().activeTab).toBe("ws2");
+    // 焦点标签落到自己那列的右缘:锚点只能取同组兄弟,拿自己当锚点会被 key===anchor 挡掉
+    const sibling = groupSiblingOf(store().groups, "ws2");
+    expect(sibling).not.toBeNull();
+    expect(store().splitContainerBeside("ws2", sibling!, "right")).toBe(true);
+    expect(store().groups).toEqual([[CHAT_CONTAINER, "ws1"], ["ws2"]]);
+    expect(store().activeTab).toBe("ws2");
+  });
+
+  test("groupSiblingOf:组里只剩它自己 = null(已是独立组,无处可拆)", () => {
+    store().openConversation(CHAT_CONTAINER, "a1");
+    store().openConversation("ws1", "c1");
+    store().splitContainerBeside(CHAT_CONTAINER, "ws1", "left");
+    expect(store().groups).toEqual([[CHAT_CONTAINER], ["ws1"]]);
+    expect(groupSiblingOf(store().groups, CHAT_CONTAINER)).toBeNull();
+    expect(groupSiblingOf(store().groups, "ws1")).toBeNull();
+    // 幽灵态(不在任何组)同样无兄弟
+    store().openContainer("ws2");
+    store().unsplitContainer("ws2");
+    expect(groupSiblingOf(store().groups, "ws2")).toBeNull();
   });
 
   test("unsplitContainer 移出分栏回幽灵态;唯一组时拒绝", () => {

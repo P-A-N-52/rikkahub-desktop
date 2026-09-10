@@ -80,6 +80,7 @@ import {
   CHAT_CONTAINER,
   MAX_PANES,
   flattenColumns,
+  groupSiblingOf,
   type ContainerKey,
   type PaneColumn,
   useContainerTabsStore,
@@ -1851,6 +1852,9 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   // 二级载荷(会话标签)在本容器内分栏/移动;一级载荷(容器)拆出/并入"组"——
   // 与二级完全同构:中区 = 并入本组(组焦点换成它),左右 = 带着自己的会话标签
   // 成独立新组。落点动作与高亮都读内存 store(dataTransfer 在 dragover 阶段读不到)。
+  // 屏上的列都属于各组焦点容器,所以拖焦点标签时"目标列 = 自己的列"是常态,不是异常:
+  // 落到自己列的左右缘 = 把自己从本组拆出去(与二级"把会话标签拖出本窗格"同构),
+  // 少了这条,焦点标签就成了唯一拖不出分栏的标签。
   const dragPayload = useTabDragStore((state) => state.dragging);
   const [dropZone, setDropZone] = React.useState<"left" | "center" | "right" | null>(null);
 
@@ -1870,7 +1874,9 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     const zone = resolveDropZone(event);
 
     if (payload.kind === "container") {
-      if (payload.container === container) return; // 拖回本组:无操作
+      const selfDrag = payload.container === container;
+      // 中区 = 并入本组;拖的是本组焦点容器时它已在本组,无动作。
+      if (selfDrag && zone === "center") return;
       if (zone === "center") {
         // 并入本组 = 激活它(已在屏上 = 换本组焦点;不在屏上 = 接替本组席位)。
         // 激活前先聚焦本列:被接替的是本组,不是旧的全局焦点组。
@@ -1878,7 +1884,11 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         store.activateContainer(payload.container);
       } else {
         // 拖出成新组:从原组移除(原组空了即消失)再落到本组左/右。
-        if (!store.splitContainerBeside(payload.container, container, zone === "left" ? "left" : "right")) {
+        // 拖本组焦点容器时锚点取同组另一成员 —— 屏上的列都属于各组焦点容器,单组时
+        // 它悬停到的唯一目标就是自己的列,不接这一手它就成了唯一拆不出去的标签。
+        const anchor = selfDrag ? groupSiblingOf(store.groups, container) : container;
+        if (anchor === null) return; // 本组只有它自己:已是独立组,无可拆
+        if (!store.splitContainerBeside(payload.container, anchor, zone === "left" ? "left" : "right")) {
           // 可见列已满:说明原因,别静默吞掉用户的操作。
           toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
           return;
@@ -1913,10 +1923,16 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   };
 
   // 本列是否接受当前拖拽:决定落点覆盖层挂不挂(不接受时不拦截指针、也不高亮)。
+  // 一级载荷落到"自己这列"是常态而非异常(屏上的列都属于各组焦点容器),接与不接看
+  // 本组是否还有别人接手这一组:有 = 可拆出去;只剩它自己 = 已是独立组,无处可拆。
+  const selfContainerDrag = dragPayload?.kind === "container" && dragPayload.container === container;
+  const selfSplittable = useContainerTabsStore(
+    (state) => groupSiblingOf(state.groups, container) !== null,
+  );
   const dropActive =
     dragPayload !== null &&
     (dragPayload.kind === "container"
-      ? dragPayload.container !== container
+      ? dragPayload.container !== container || selfSplittable
       : dragPayload.container === container);
   // 覆盖层的上边界:拖会话标签时让开标签行(它自己是"并入本列"的落点);拖容器时
   // 标签行对它没有语义,铺满整列免留死区。
@@ -2056,8 +2072,15 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         <div
           className={cn("absolute inset-x-0 bottom-0 z-30", overlayTop)}
           onDragOver={(event) => {
+            const zone = resolveDropZone(event);
+            // 拖本组焦点容器落回自己的中区 = 并入它已在的组,什么都不会发生:既不亮也不
+            // 拦指针(光标保持"不可放"),别承诺一个空动作。左右缘才是"拆出去"。
+            if (selfContainerDrag && zone === "center") {
+              setDropZone(null);
+              return;
+            }
             event.preventDefault();
-            setDropZone(resolveDropZone(event));
+            setDropZone(zone);
           }}
           onDragLeave={() => setDropZone(null)}
           onDrop={handleZoneDrop}
