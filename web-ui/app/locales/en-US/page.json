@@ -143,15 +143,13 @@
       "rename_placeholder": "Enter a new title…",
       "rename_failed": "Rename failed",
       "cache_hit_rate": "Session cache hit rate: {{rate}}%",
-      "unsplit": "Exit split view",
+      "unsplit": "Merge back into the tab bar",
       "ctx_split_left": "Split to the Left",
       "ctx_split_right": "Split to the Right",
-      "ctx_unsplit": "Exit Split View",
+      "ctx_unsplit": "Merge back into the tab bar",
       "split_full": "At most {{max}} columns side by side — close one first",
       "drop_hint_split": "Open a new column here",
-      "drop_hint_merge": "Move into this column",
-      "drop_hint_container_split": "Place this workspace here",
-      "drop_hint_container_focus": "Show only this workspace"
+      "drop_hint_merge": "Move into this column"
     },
     "create": {
       "managed": "Default workspace",

@@ -10,13 +10,12 @@ import {
   PanelLeft,
   PanelRight,
   Pencil,
-  Plus,
-  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Input } from "~/components/ui/input";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -26,15 +25,6 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "~/components/ui/dropdown-menu";
-import { Input } from "~/components/ui/input";
-import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -42,7 +32,6 @@ import {
   ContextMenuTrigger,
 } from "~/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { confirmDialog } from "~/stores/confirm-store";
 import { cn } from "~/lib/utils";
 import {
   CreateFolderWorkspaceDialog,
@@ -60,11 +49,14 @@ import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
 // 一层容器标签栏(工作区 M2-1;前端重构A1 复刻 NewMax 浏览器式页签):
-// 激活标签白底(bg-card)上圆角,与下方白色内容面板连成一体;非激活为画布上的
-// 幽灵态。中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚+右端渐隐。
-// 所在行是内容列撞色带顶部的纯交互行(原生标题栏负责窗控/拖拽,见 conversations.tsx)。
-// K 轮:标签可拖进内容区左/右缘 → 该容器"带着"自己的会话标签整块并排(见
-// conversations.tsx 的落点区);并排中的容器标签同时高亮为"在场",聚焦列的那个更实。
+// 组焦点标签白底上圆角,与下方组内容面板连成一体;同组的非焦点标签为该组面板色
+// 胶囊(淡一个层级);不在任何组的标签是画布上的幽灵态。中键/×关闭(仅收起);
+// 拖拽排序;Ctrl+Tab 循环;溢出横滚。
+// K 轮组模型:每个组分栏各挂一条本组件(container = 该组焦点容器),标签栏只高亮
+// 自己组的成员 —— 与二级分栏"每列一条会话标签栏"同构。新建入口只在全局焦点组
+// (activeTab 所在组)的条上渲染,其余组收到 null。
+// 拖拽:在标签上悬停 = 组内重排;落进组的空白处 = 并入该组;落到组内容区边缘 =
+// 拆出新组(落点区在 conversations.tsx)。
 
 /** 点击/循环切换容器:激活并导航到该容器上次停留的会话(无则回"新对话"首页)。 */
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {
@@ -77,15 +69,47 @@ function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) 
   navigate(conversationId ? `/c/${conversationId}` : "/");
 }
 
-export function ContainerTabBar() {
+/** 组焦点容器被并入邻组(或换成别的容器)后,把路由/会话选择交还给全局焦点列。 */
+function navigateToActiveContainer(navigate: (to: string) => void) {
+  const store = useContainerTabsStore.getState();
+  const key = store.activeTab;
+  const panes = store.panes[key] ?? [];
+  const focused = Math.max(0, Math.min(store.focusedPane[key] ?? 0, panes.length - 1));
+  const conversationId = panes[focused]?.active ?? null;
+  navigate(conversationId ? `/c/${conversationId}` : "/");
+}
+
+/** 把 key 移到 anchor 的左/右侧(anchor 不在列表内则原样返回拷贝)。 */
+function moveBeside(
+  list: readonly ContainerKey[],
+  key: ContainerKey,
+  anchor: ContainerKey,
+  side: "left" | "right",
+): ContainerKey[] {
+  const rest = list.filter((item) => item !== key);
+  const at = rest.indexOf(anchor);
+  if (at < 0) return [...list];
+  rest.splice(side === "left" ? at : at + 1, 0, key);
+  return rest;
+}
+
+export function ContainerTabBar({
+  container,
+  headerTrailing = null,
+}: {
+  /** 本标签栏所属组的焦点容器(组模型:每组分栏一条标签栏)。 */
+  container: ContainerKey;
+  /** 行尾动作位(全局焦点组挂"新建"入口,其余组为 null)。 */
+  headerTrailing?: React.ReactNode;
+}) {
   const { t } = useTranslation("page");
   const navigate = useNavigate();
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const loaded = useWorkspaceStore((state) => state.loaded);
   const refresh = useWorkspaceStore((state) => state.refresh);
   const openTabs = useContainerTabsStore((state) => state.openTabs);
-  const activeTab = useContainerTabsStore((state) => state.activeTab);
-  const layout = useContainerTabsStore((state) => state.layout);
+  const groups = useContainerTabsStore((state) => state.groups);
+  const groupIndex = groups.indexOf(container);
   const [dragKey, setDragKey] = React.useState<ContainerKey | null>(null);
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false);
   // 信任门目标 + 拒绝语义:创建流拒绝=删除记录;重开已有未信任工作区拒绝=仅关门。
@@ -128,7 +152,6 @@ export function ContainerTabBar() {
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
     [workspaces],
   );
-
   const closeTab = React.useCallback(
     (key: ContainerKey) => {
       const store = useContainerTabsStore.getState();
@@ -148,26 +171,27 @@ export function ContainerTabBar() {
     [navigate],
   );
 
-  // K 轮:把容器并排到当前聚焦列的左/右侧(右键菜单入口;拖拽入口在内容区落点区)。
-  // 拒绝 = 可见列已满,给出可行动提示而不是静默失败。
+  // K 轮组模型:把容器拆到本组左/右侧成新组(右键菜单入口;拖拽入口在内容区落点区)。
+  // 已在屏上的容器先脱离原位再落位(横移);拒绝 = 可见列已满,给出可行动提示。
   const splitContainerBeside = React.useCallback(
     (key: ContainerKey, side: "left" | "right") => {
       const store = useContainerTabsStore.getState();
-      const anchor = store.activeTab;
-      if (key === anchor) return;
-      if (!store.addContainerToLayout(key, anchor, side)) {
+      if (key === container) return;
+      store.mergeContainer(key); // 已在屏上 → 先脱离原组,再落到目标侧
+      if (!store.splitContainerBeside(key, container, side)) {
         toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
         return;
       }
       navigateToContainer(key, navigate);
     },
-    [navigate, t],
+    [container, navigate, t],
   );
 
-  const unsplitContainer = React.useCallback(
+  // 合并:容器退出分栏、回到标签栏里,由邻组接管显示(标签不关、二层状态保留)。
+  const mergeContainerTab = React.useCallback(
     (key: ContainerKey) => {
-      if (useContainerTabsStore.getState().removeContainerFromLayout(key)) {
-        navigateToContainer(useContainerTabsStore.getState().activeTab, navigate);
+      if (useContainerTabsStore.getState().mergeContainer(key)) {
+        navigateToActiveContainer(navigate);
       }
     },
     [navigate],
@@ -183,30 +207,6 @@ export function ContainerTabBar() {
         });
     },
     [t],
-  );
-
-  const createManagedWorkspace = React.useCallback(async () => {
-    try {
-      const res = await api.post<{ workspace: WorkspaceDto }>("workspaces", { type: "managed" });
-      await refresh();
-      useContainerTabsStore.getState().openContainer(res.workspace.id);
-      navigate("/");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("workspace.create.failed"));
-    }
-  }, [navigate, refresh, t]);
-
-  // R7:从菜单激活已有工作区——folder 型未信任先过信任门,其余直接开标签并导航。
-  const openWorkspaceFromMenu = React.useCallback(
-    (workspace: WorkspaceDto) => {
-      if (workspace.type === "folder" && workspace.trustedAt == null) {
-        setTrustTarget({ workspace, fromCreate: false });
-        return;
-      }
-      useContainerTabsStore.getState().openContainer(workspace.id);
-      navigateToContainer(workspace.id, navigate);
-    },
-    [navigate],
   );
 
   const submitRename = React.useCallback(async () => {
@@ -234,30 +234,6 @@ export function ContainerTabBar() {
       setRenameSaving(false);
     }
   }, [refresh, renameTarget, renameValue, renameRoot, t]);
-
-  // 删除仅移除工作区记录与会话索引,不碰磁盘文件(folder 型的真实目录保持原样)。
-  const deleteWorkspace = React.useCallback(
-    async (workspace: WorkspaceDto) => {
-      const ok = await confirmDialog({
-        title: t("workspace.menu.delete_confirm_title", { name: workspace.name }),
-        description: t("workspace.menu.delete_confirm_desc"),
-        danger: true,
-      });
-      if (!ok) return;
-      try {
-        await api.delete(`workspaces/${workspace.id}`);
-        await refresh();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : t("workspace.menu.delete_failed"));
-      }
-    },
-    [refresh, t],
-  );
-
-  const openChatContainer = React.useCallback(() => {
-    useContainerTabsStore.getState().openContainer(CHAT_CONTAINER);
-    navigateToContainer(CHAT_CONTAINER, navigate);
-  }, [navigate]);
 
   // B6-①b:打开编辑对话时同步名称与路径草稿(folder 型路径可重绑)。
   const openEditDialog = React.useCallback((workspace: WorkspaceDto) => {
@@ -302,21 +278,39 @@ export function ContainerTabBar() {
       style={{ containerType: "inline-size" }}
     >
       {/* I6:pl-[13px] 给首标签让出激活态左侧反圆角(R=13)的渲染空间(NewMax 同款右挪) */}
-      <div className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto pl-[13px] [scrollbar-width:none]">
+      <div
+        className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto pl-[13px] [scrollbar-width:none]"
+        onDragOver={(event) => {
+          // 落进本组空白处 = 并入本组(组焦点换成它);等效于点标签,只是顺手一放。
+          // 标签自身的 onDragOver 处理组内重排,已 stopPropagation 不会走到这里。
+          const dragging = useTabDragStore.getState().dragging;
+          if (dragging?.kind === "container" && dragging.container !== container) {
+            event.preventDefault();
+          }
+        }}
+        onDrop={(event) => {
+          const dragging = useTabDragStore.getState().dragging;
+          if (dragging?.kind !== "container" || dragging.container === container) return;
+          event.preventDefault();
+          useTabDragStore.getState().setDragging(null);
+          setDragKey(null);
+          navigateToContainer(dragging.container, navigate);
+        }}
+      >
         {openTabs.map((key, index) => (
           <ContainerTab
             key={key}
             containerKey={key}
             workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
             width={tabWidthCalc}
-            active={key === activeTab}
-            /** K 轮:在并排布局中但非聚焦列 —— 标签显示为"在场但未聚焦"。 */
-            inLayout={layout.includes(key)}
+            active={key === container}
+            /** 本组的非焦点标签:组面板色胶囊(它的列也在屏上),弱于焦点态。 */
+            inGroup={key !== container && groupIndex >= 0 && groups[groupIndex] === key}
             closable={openTabs.length > 1}
             hasOthers={openTabs.length > 1}
             hasRight={index < openTabs.length - 1}
-            splitable={openTabs.length > 1 && key !== activeTab}
-            unsplitable={layout.length > 1 && layout.includes(key)}
+            splitable={key !== container}
+            unsplitable={groupIndex >= 0 && groups[groupIndex] === key && groups.length > 1}
             dragging={dragKey === key}
             onActivate={() => activateGuarded(key)}
             onClose={() => closeTab(key)}
@@ -325,7 +319,7 @@ export function ContainerTabBar() {
             onCloseAll={() => closeTabsBatch("all", key)}
             onSplitRight={() => splitContainerBeside(key, "right")}
             onSplitLeft={() => splitContainerBeside(key, "left")}
-            onUnsplit={() => unsplitContainer(key)}
+            onUnsplit={() => mergeContainerTab(key)}
             onEdit={
               key === CHAT_CONTAINER
                 ? undefined
@@ -344,129 +338,30 @@ export function ContainerTabBar() {
             }
             onDragStart={() => {
               setDragKey(key);
-              // K 轮:载荷入内存 store,内容区左/右缘落点据此把本容器并排进布局。
+              // 载荷入内存 store(dataTransfer 在 dragover 阶段读不到):落到组内容区
+              // 边缘 = 拆新组;落到组标签栏空白处 = 并入该组(见 conversations.tsx)。
               useTabDragStore.getState().setDragging({ kind: "container", container: key });
             }}
             onDragEnd={() => {
               setDragKey(null);
               useTabDragStore.getState().setDragging(null);
             }}
-            onDragOverTab={() => {
-              if (dragKey && dragKey !== key) {
-                useContainerTabsStore.getState().reorderContainer(dragKey, index);
+            onDragOverTab={(event) => {
+              // 组内重排只在本组成员间发生;事件就地消化,不冒泡成"并入本组"。
+              if (groupIndex < 0) return;
+              const member = groups[groupIndex]!;
+              if (!dragKey || dragKey === key || dragKey === container || dragKey === member) {
+                return;
               }
+              event.stopPropagation();
+              const to = moveBeside(openTabs, dragKey, member, index > groupIndex ? "right" : "left");
+              useContainerTabsStore.getState().setOpenTabsOrder(to);
             }}
           />
         ))}
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={t("workspace.tabs.new_container")}
-            className="mb-[5px] flex size-7 shrink-0 items-center justify-center rounded-full text-[var(--ds-icon)] transition-colors duration-150 hover:bg-[var(--ds-on-surface)] hover:text-foreground"
-          >
-            <Plus className="size-[18px]" strokeWidth={1.75} />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-64">
-          {/* R7:已有工作区列表——点击激活;行尾悬浮出重命名/删除(阻断 item 选中) */}
-          {workspaces.length > 0 ? (
-            <>
-              <DropdownMenuLabel>{t("workspace.menu.existing")}</DropdownMenuLabel>
-              {workspaces.map((workspace) => {
-                const WsIcon = workspace.type === "folder" ? FolderOpen : Folder;
-                return (
-                  <DropdownMenuItem
-                    key={workspace.id}
-                    className="group/ws"
-                    data-active={workspace.id === activeTab || undefined}
-                    onSelect={() => openWorkspaceFromMenu(workspace)}
-                  >
-                    <WsIcon className="size-4" strokeWidth={1.75} />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="flex items-center gap-1.5 truncate">
-                        <span className="truncate">{workspace.name}</span>
-                        {workspace.status === "missing" ? (
-                          <span className="flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 py-px text-micro font-medium text-warning">
-                            <TriangleAlert className="size-2.5" strokeWidth={2} />
-                            {t("workspace.menu.missing_badge")}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="truncate text-mini leading-4 text-[var(--ds-text-tertiary)]">
-                        {workspace.root}
-                      </span>
-                    </span>
-                    <span
-                      className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/ws:opacity-100"
-                      onPointerDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-foreground"
-                            onClick={() => openEditDialog(workspace)}
-                          >
-                            <Pencil className="size-3.5" strokeWidth={1.75} />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>{t("workspace.menu.rename")}</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex size-6 items-center justify-center rounded-full text-[var(--ds-icon)] hover:bg-[var(--ds-on-surface-active)] hover:text-destructive"
-                            onClick={() => void deleteWorkspace(workspace)}
-                          >
-                            <Trash2 className="size-3.5" strokeWidth={1.75} />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>{t("workspace.menu.delete")}</TooltipContent>
-                      </Tooltip>
-                    </span>
-                  </DropdownMenuItem>
-                );
-              })}
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
-          <DropdownMenuItem onSelect={() => void createManagedWorkspace()}>
-            <Folder className="size-4" />
-            <div className="min-w-0">
-              <div className="text-sm">{t("workspace.create.managed")}</div>
-              <div className="truncate text-xs text-muted-foreground">
-                {t("workspace.create.managed_hint")}
-              </div>
-            </div>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)}>
-            <FolderOpen className="size-4" />
-            <div className="min-w-0">
-              <div className="text-sm">{t("workspace.create.folder")}</div>
-              <div className="truncate text-xs text-muted-foreground">
-                {t("workspace.create.folder_hint")}
-              </div>
-            </div>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={openChatContainer}>
-            <MessageSquare className="size-4" />
-            <div className="min-w-0">
-              <div className="text-sm">{t("workspace.create.chat")}</div>
-              <div className="truncate text-xs text-muted-foreground">
-                {t("workspace.create.chat_hint")}
-              </div>
-            </div>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {headerTrailing}
 
       {/* G3 编辑工作区(NewMax 对位):名称可编辑,路径只读可点选(资源管理器中显示) */}
       <Dialog
@@ -573,7 +468,7 @@ function ContainerTab({
   workspace,
   width,
   active,
-  inLayout,
+  inGroup,
   closable,
   hasOthers,
   hasRight,
@@ -597,9 +492,10 @@ function ContainerTab({
   containerKey: ContainerKey;
   workspace: WorkspaceDto | null;
   width: string;
+  /** 本组的焦点标签:与组内容面板连体。 */
   active: boolean;
-  /** 在并排布局中(可能非聚焦列):标签保持"在场"底色,弱于聚焦态。 */
-  inLayout: boolean;
+  /** 本组的非焦点标签:组面板色胶囊,弱于焦点态。 */
+  inGroup: boolean;
   closable: boolean;
   hasOthers: boolean;
   hasRight: boolean;
@@ -618,7 +514,7 @@ function ContainerTab({
   onReveal?: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
-  onDragOverTab: () => void;
+  onDragOverTab: (event: React.DragEvent<HTMLElement>) => void;
 }) {
   const { t } = useTranslation("page");
   const isChat = containerKey === CHAT_CONTAINER;
@@ -626,14 +522,13 @@ function ContainerTab({
     ? t("workspace.tabs.chat")
     : (workspace?.name ?? t("workspace.tabs.missing"));
   const Icon = isChat ? MessageSquare : workspace?.type === "folder" ? FolderOpen : Folder;
-  // NewMax WorkspaceTab 原样移植:28px 高页签,聚焦态与下方面板(surface-200)连体——
+  // NewMax WorkspaceTab 原样移植:28px 高页签,焦点标签与下方组面板(surface-200)连体——
   // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
-  // K 轮并排的三态:连体(聚焦列)> 面板色胶囊(在场未聚焦,即它的列也在屏上)>
-  // 幽灵(只开着标签)。连体造型只给聚焦列一份:反圆角要向两侧各溢出 13px,而 layout
-  // 是 openTabs 的子序列(中间可能夹着幽灵标签),多份连体会把面板色渗到夹在中间的
-  // 幽灵标签底下;胶囊态无溢出,任意排布都干净。
+  // 组模型的三态:连体(本组焦点)> 面板色胶囊(本组成员,它的列也在屏上)> 幽灵。
+  // 连体造型每组只有一份,且组焦点标签恒为本组首枚,其左侧必是本组面板的左缘——
+  // 反圆角溢出的 13px 永远落在自己组的面板上,不会渗进别组的幽灵标签底下。
   const TAB_CORNER_R = 13;
-  const docked = inLayout && !active;
+  const docked = inGroup;
   return (
     <ContextMenu>
       <Tooltip delayDuration={800}>
@@ -656,8 +551,7 @@ function ContainerTab({
       }}
       onDragEnd={onDragEnd}
       onDragOver={(event) => {
-        event.preventDefault();
-        onDragOverTab();
+        onDragOverTab(event);
       }}
       className={cn("relative shrink-0 select-none pb-[3px]", dragging && "opacity-60")}
       style={{
@@ -749,8 +643,8 @@ function ContainerTab({
             <ContextMenuSeparator />
           </>
         ) : null}
-        {/* K 轮并排:键鼠/无障碍等价路径(拖拽是主交互,但不能是唯一交互)。
-            "并排到左/右" 以当前聚焦列为锚点;本容器已在并排中则改为"退出并排"。 */}
+        {/* K 轮组模型:键鼠/无障碍等价路径(拖拽是主交互,但不能是唯一交互)。
+            "分栏到左/右" 以本组焦点容器为锚点;本标签是组焦点时改为"合并回标签栏"。 */}
         {unsplitable ? (
           <ContextMenuItem onSelect={onUnsplit}>
             <Columns2 className="size-4" strokeWidth={1.75} />

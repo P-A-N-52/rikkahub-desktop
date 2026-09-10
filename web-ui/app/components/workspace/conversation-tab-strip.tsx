@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, MessageSquare, Pencil, Plus, X } from "lucide-react";
+import { Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
@@ -22,14 +22,9 @@ import {
 import { Input } from "~/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import {
-  CHAT_CONTAINER,
-  useContainerTabsStore,
-  type ContainerKey,
-} from "~/stores/container-tabs-store";
+import { useContainerTabsStore, type ContainerKey } from "~/stores/container-tabs-store";
 import { useConversationStore } from "~/stores/conversation-store";
 import { useTabDragStore } from "~/stores/tab-drag-store";
-import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { ConversationListDto } from "~/types";
 
 // 二层会话标签(工作区 M2-1;前端重构A1 复刻 NewMax):白色内容面板的顶缘胶囊行,
@@ -38,8 +33,8 @@ import type { ConversationListDto } from "~/types";
 // 路由 /c/:id 是权威,这里只发导航,由路由同步效应回写状态。
 // G4:右键菜单五项(重命名/关闭/关闭其他/关闭右侧/关闭全部,NewMax 对位);
 // G5:悬停用自定义 Tooltip 展示完整标题(替代原生 title)。
-// K 轮一级并排:同屏可有多个容器的标签行,故容器归属由 props 显式传入,不再读全局
-// activeTab —— 非聚焦列的标签行也要能正确寻址自己的窗格。
+// K 轮组模型:一级分栏后同屏有多个容器的标签行,容器归属由 props 显式传入,
+// 不读全局 activeTab —— 非聚焦列的标签行也要能正确寻址自己的窗格。
 
 const EMPTY_TABS: string[] = [];
 
@@ -94,82 +89,21 @@ function TabTooltipBody({ conversationId, title }: { conversationId: string; tit
   );
 }
 
-/** 并排时的列归属徽记(K 轮):同屏多容器时,每列标签行首端标出它属于哪个容器——
-    否则两排会话标签看不出各属哪个工作区。× = 该容器退出并排(一级标签仍开着)。 */
-function ColumnContainerChip({
-  container,
-  focused,
-  onExitSplit,
-}: {
-  container: ContainerKey;
-  focused: boolean;
-  onExitSplit: () => void;
-}) {
-  const { t } = useTranslation("page");
-  const workspace = useWorkspaceStore((state) =>
-    container === CHAT_CONTAINER
-      ? undefined
-      : state.workspaces.find((item) => item.id === container),
-  );
-  const label =
-    container === CHAT_CONTAINER
-      ? t("workspace.tabs.chat")
-      : (workspace?.name ?? t("workspace.tabs.missing"));
-  const Icon =
-    container === CHAT_CONTAINER
-      ? MessageSquare
-      : workspace?.type === "folder"
-        ? FolderOpen
-        : Folder;
-  return (
-    <div
-      className={cn(
-        "group/chip flex h-[22px] min-w-0 max-w-36 shrink-0 items-center gap-1 rounded-md pl-1.5 pr-1 text-mini transition-colors duration-150",
-        focused
-          ? "bg-[var(--ds-on-surface-active)] font-medium text-[var(--ds-text-primary)]"
-          : "text-[var(--ds-text-tertiary)]",
-      )}
-    >
-      <Icon className="size-3 shrink-0" strokeWidth={1.75} />
-      <span className="min-w-0 truncate">{label}</span>
-      <span
-        role="button"
-        aria-label={t("workspace.tabs.unsplit")}
-        title={t("workspace.tabs.unsplit")}
-        data-tab-nav="1"
-        onClick={(event) => {
-          event.stopPropagation();
-          onExitSplit();
-        }}
-        className="flex size-3.5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity duration-150 hover:bg-[var(--ds-on-surface-active)] group-hover/chip:opacity-70"
-      >
-        <X className="size-2.5" strokeWidth={2} />
-      </span>
-    </div>
-  );
-}
-
 export function ConversationTabStrip({
   container,
   conversations,
   paneIndex,
   focused,
-  showContainerChip,
-  onExitSplit,
   trailing,
   onRename,
 }: {
-  /** 本标签行所属容器(K 轮并排:同屏可有多个容器)。 */
+  /** 本标签行所属容器(K 轮组模型:同屏可有多个容器)。 */
   container: ContainerKey;
   conversations: ConversationListDto[];
   /** 本标签行在所属容器内的窗格下标。 */
   paneIndex: number;
-  /** 本列是否为聚焦列(路由/侧栏跟随它)。 */
+  /** 本列是否为焦点列(路由/侧栏跟随它)。 */
   focused: boolean;
-  /** 并排多容器时标出列归属;单容器(含纯二层分栏)不显示,视觉与之前一致。 */
-  showContainerChip?: boolean;
-  /** 退出并排(把本容器移出并排布局)。 */
-  onExitSplit?: () => void;
   trailing?: React.ReactNode;
   /** 重命名会话(G4 右键菜单):由路由层注入 PATCH title 的实现。 */
   onRename?: (conversationId: string, title: string) => Promise<void>;
@@ -223,9 +157,8 @@ export function ConversationTabStrip({
     }
   };
 
-  // 无标签且无需标注列归属(= 单容器的首启"新对话"态):整行不渲染,首屏保持干净。
-  // 并排时即使某列暂无标签也保留本行——它承载列归属徽记与"＋",消失会让列头错位。
-  if (tabs.length === 0 && !showContainerChip) return null;
+  // 无标签 = 本列的"新对话"态:整行不渲染,首屏保持干净。
+  if (tabs.length === 0) return null;
 
   return (
     <div
@@ -248,9 +181,6 @@ export function ConversationTabStrip({
         navigate(`/c/${dragging.conversationId}`);
       }}
     >
-      {showContainerChip && onExitSplit ? (
-        <ColumnContainerChip container={container} focused={focused} onExitSplit={onExitSplit} />
-      ) : null}
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
       {tabs.map((conversationId, index) => {
         const active = conversationId === activeConversation;

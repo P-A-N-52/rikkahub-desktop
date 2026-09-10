@@ -1,26 +1,25 @@
 import { create } from "zustand";
 
-// ===== 双层标签页导航状态(工作区 M2-1;J 轮窗格分栏;K 轮一级容器并排) =====
+// ===== 双层标签页导航状态(工作区 M2-1;J 轮窗格分栏;K 轮组模型一级分栏) =====
 // 一层标签 = 容器("chat" 固定键 = 对话模式;其余键 = workspaceId);
 // 二层标签 = 各容器内已打开的会话,按"窗格"分组:每容器有自己的窗格组与激活会话。
-// K 轮起一级容器自身也能并排:layout = 当前左右并排显示的容器(有序),每个容器
-// "带着"自己的窗格组整块出现——屏幕上的列 = Σ 各并排容器的窗格数,与二层分栏共用
-// 同一个 MAX_PANES 上限。单容器时退化为 J 轮的纯二层分栏,行为逐字不变。
+// K 轮起一级容器分栏与二级同构:屏幕被切成若干"组"(tag group),每组拥有自己的
+// 一级标签栏与内容区,各组各自有焦点标签 —— 就像二级分栏后每列有自己的会话标签栏。
+// 屏幕列 = Σ(各组焦点容器的窗格数),一级与二级共用同一个 MAX_PANES 上限。
 // 纯前端 UI 状态,localStorage 持久化——服务端只关心 conversation.workspaceId 归属。
 //
 // 不变量:
-// - openTabs 非空、无重复;layout 非空、无重复、⊆ openTabs,且次序恒与 openTabs 一致
-//   (单一排序源:一级标签的左右次序就是列的左右次序,不存在两套次序打架);
-//   activeTab ∈ layout —— 聚焦列所属容器,即路由 /c/:id、侧栏、热键的作用域。
-// - 可见总列数 Σ|panes[c]|(c ∈ layout)≤ MAX_PANES。
+// - openTabs 非空、无重复;groups 非空、无重复、⊆ openTabs;activeTab ∈ groups。
+//   (屏幕顺序 = 标签顺序:亮的标签从左到右就是屏幕上的列,不存在两套次序。)
+// - 可见总列数 Σ|panes[c]|(c ∈ groups)≤ MAX_PANES。
 // - 每容器窗格数 1..MAX_PANES;同一会话在一个容器内只出现一次(跨窗格去重);
 //   空窗格只允许在该容器窗格数为 1 时存在(多窗格下最后一个标签关闭即收起该窗格)。
 // - focusedPane[c] ∈ [0, |panes[c]|)。
-// 关闭 ≠ 删除:容器收起(或仅移出并排)后其二层状态保留,重开即恢复。
+// 关闭 ≠ 删除:容器收起(或仅移出分栏)后其二层状态保留,重开即恢复。
 
 export const CHAT_CONTAINER = "chat";
 
-/** 可见列数上限(= Σ 并排容器的窗格数):双栏是常规交互,三栏留给宽屏。 */
+/** 可见列数上限(= Σ 各组焦点容器的窗格数):双栏是常规交互,三栏留给宽屏。 */
 export const MAX_PANES = 3;
 
 export type ContainerKey = string;
@@ -30,7 +29,7 @@ export interface ConversationPane {
   active: string | null;
 }
 
-/** 屏幕上的一列:某容器的某个窗格。列的左右顺序 = layout 顺序 × 容器内窗格顺序。 */
+/** 屏幕上的一列:某容器的某个窗格。列的左右顺序 = groups 顺序 × 容器内窗格顺序。 */
 export interface PaneColumn {
   container: ContainerKey;
   /** 容器内窗格下标(不是全局列号)——所有 store 方法都按容器内下标寻址。 */
@@ -40,40 +39,26 @@ export interface PaneColumn {
 
 interface ContainerTabsState {
   openTabs: ContainerKey[];
-  /** 并排显示的容器(左→右;顺序由 openTabs 派生)。 */
-  layout: ContainerKey[];
-  /** 聚焦列所属容器。 */
+  /** 各组的焦点容器(左→右;屏幕顺序恒为 openTabs 顺序的子序列)。组数 >1 即分栏。 */
+  groups: ContainerKey[];
+  /** 全局焦点容器 = 所在组的焦点标签;路由 /c/:id、侧栏、热键跟随它。 */
   activeTab: ContainerKey;
   /** 容器 → 窗格数组(有序,左→右)。缺省视作单个空窗格。 */
   panes: Record<ContainerKey, ConversationPane[]>;
-  /** 容器 → 聚焦窗格下标(路由/侧栏/快捷键跟随聚焦列)。 */
+  /** 容器 → 聚焦窗格下标(路由/侧栏/快捷键跟随焦点列)。 */
   focusedPane: Record<ContainerKey, number>;
 
   activateContainer: (key: ContainerKey) => void;
-  /** 打开并激活容器(已开则仅激活;未在并排布局中则占用当前焦点列)。 */
+  /** 打开并激活容器(已开则仅激活;不在屏上则接替焦点组)。 */
   openContainer: (key: ContainerKey) => void;
   /** 收起容器标签。若关闭的是激活容器,激活其右邻(无则左邻);关到最后一个时回落到对话模式。 */
   closeContainer: (key: ContainerKey) => void;
   /** 批量收起容器标签(右键菜单):others=只留 anchor;right=关 anchor 右侧;all=全关(回落对话模式)。 */
   closeContainersBatch: (scope: "others" | "right" | "all", anchor: ContainerKey) => void;
-  reorderContainer: (key: ContainerKey, toIndex: number) => void;
+  /** 整体替换标签次序(组模型拖拽重排:方向感知的移动在调用方合成);组次序随之归一化。 */
+  setOpenTabsOrder: (next: ContainerKey[]) => void;
 
-  /** K 轮一级并排:把容器并排到 anchor 容器的左/右侧并聚焦。可见列超上限、
-      容器未打开、anchor 不在并排中时拒绝;已在并排中则仅调整左右位置。
-      返回是否成功。 */
-  addContainerToLayout: (
-    key: ContainerKey,
-    anchor: ContainerKey,
-    side: "left" | "right",
-  ) => boolean;
-  /** 并排是否放得下该容器(拖拽中用于决定落点高亮;与 addContainerToLayout 同一判据)。 */
-  canAddContainerToLayout: (key: ContainerKey) => boolean;
-  /** 让容器成为唯一列(退出并排),并聚焦。 */
-  focusContainerExclusive: (key: ContainerKey) => void;
-  /** 把容器移出并排布局(标签仍开着,二层状态保留)。它是唯一列时无操作。 */
-  removeContainerFromLayout: (key: ContainerKey) => boolean;
-
-  /** 在容器内打开会话标签并激活(容器随之打开、进入并排布局并聚焦)。已在其他窗格
+  /** 在容器内打开会话标签并激活(容器随之打开、进入分栏并聚焦)。已在其他窗格
       打开则聚焦过去。路由是权威,本方法由路由同步调用。 */
   openConversation: (container: ContainerKey, conversationId: string) => void;
   /** 聚焦窗格回到"新对话"态(不动已开标签)。 */
@@ -81,7 +66,7 @@ interface ContainerTabsState {
   /** 聚焦指定容器的指定窗格(容器随之成为激活容器)。返回该窗格的激活会话(便于调用方导航)。 */
   focusPane: (container: ContainerKey, index: number) => string | null;
   /** 关闭会话标签(自动定位所在窗格;多窗格下窗格随最后一个标签关闭而收起)。
-      返回聚焦窗格随之应激活的会话(undefined = 聚焦窗格的激活标签未受影响,无需导航)。 */
+      返回焦点列随之应激活的会话(undefined = 焦点列的激活标签未受影响,无需导航)。 */
   closeConversation: (container: ContainerKey, conversationId: string) => string | null | undefined;
   /** 批量关闭会话标签(右键菜单,作用于 anchor 所在窗格)。返回语义同 closeConversation。 */
   closeConversationsBatch: (container: ContainerKey, scope: "others" | "right" | "all", anchor: string) => string | null | undefined;
@@ -90,6 +75,17 @@ interface ContainerTabsState {
   splitConversation: (container: ContainerKey, conversationId: string, toIndex: number) => boolean;
   /** J 轮跨栏移动:把会话标签移入既有窗格尾部并激活聚焦;源窗格空了即收起。 */
   moveConversationToPane: (container: ContainerKey, conversationId: string, toPane: number) => void;
+
+  /** 一级分栏:把容器拆为 anchor 容器左/右侧的新组(它"带着"自己的会话标签)。
+      组次序 = 标签次序,所以先重排 openTabs 再登记分组。已在屏上 = 横移成独立组
+      (通常先配合 removeFromGroups 移除);超额/未打开/anchor 不在屏上时拒绝。 */
+  splitContainerBeside: (key: ContainerKey, anchor: ContainerKey, side: "left" | "right") => boolean;
+  /** 合并:容器退出分栏、回到标签栏里(由被让位组接管显示;二层状态原样保留)。
+      不在组里、或它是唯一组时无操作。 */
+  mergeContainer: (key: ContainerKey) => boolean;
+  /** 分栏是否放得下该容器(拖拽中决定落点高亮;与 splitContainerBeside 同一判据)。 */
+  canSplitContainer: (key: ContainerKey) => boolean;
+
   /** 会话被删除时从所有容器所有窗格中移除。 */
   forgetConversation: (conversationId: string) => void;
   /** 工作区被删除后清理其容器标签与二层状态。 */
@@ -100,7 +96,7 @@ const STORAGE_KEY = "rikkahub.container-tabs.v1";
 
 interface PersistedShape {
   openTabs: ContainerKey[];
-  layout: ContainerKey[];
+  groups: ContainerKey[];
   activeTab: ContainerKey;
   panes: Record<ContainerKey, ConversationPane[]>;
   focusedPane: Record<ContainerKey, number>;
@@ -111,13 +107,13 @@ const emptyPane = (): ConversationPane => ({ tabs: [], active: null });
 /** flattenColumns 的兜底列(容器暂无窗格时占一列)。仅供读取,勿写入。 */
 const FALLBACK_PANES: readonly ConversationPane[] = [emptyPane()];
 
-/** 把"并排容器 × 各自窗格"摊平成屏幕列(渲染与列计数的唯一口径;纯函数便于单测)。 */
+/** 把"各组焦点容器 × 各自窗格"摊平成屏幕列(渲染与列计数的唯一口径;纯函数便于单测)。 */
 export function flattenColumns(
-  layout: readonly ContainerKey[],
+  groups: readonly ContainerKey[],
   panes: Readonly<Record<ContainerKey, ConversationPane[]>>,
 ): PaneColumn[] {
   const columns: PaneColumn[] = [];
-  for (const container of layout) {
+  for (const container of groups) {
     const list = panes[container];
     const effective = list && list.length > 0 ? list : FALLBACK_PANES;
     effective.forEach((pane, paneIndex) => columns.push({ container, paneIndex, pane }));
@@ -136,36 +132,35 @@ function columnsOf(state: Pick<ContainerTabsState, "panes">, container: Containe
   return Math.max(1, state.panes[container]?.length ?? 1);
 }
 
-/** 并排布局占用的总列数(受 MAX_PANES 约束的唯一口径)。 */
+/** 分栏占用的总列数(受 MAX_PANES 约束的唯一口径)。 */
 function visibleColumns(
   state: Pick<ContainerTabsState, "panes">,
-  layout: readonly ContainerKey[],
+  groups: readonly ContainerKey[],
 ): number {
-  return layout.reduce((sum, key) => sum + columnsOf(state, key), 0);
+  return groups.reduce((sum, key) => sum + columnsOf(state, key), 0);
 }
 
 function sameOrder(a: readonly ContainerKey[], b: readonly ContainerKey[]): boolean {
   return a.length === b.length && a.every((key, index) => key === b[index]);
 }
 
-/** layout 归一化:去重、剔除未打开容器,并把次序对齐 openTabs;空则回落 [fallback]。
+/** groups 归一化:去重、剔除未打开容器,并把次序对齐 openTabs;空则回落 [fallback]。
     结果与入参等价时原样返回入参 —— 引用稳定,免得每次调用都让订阅方重渲染。
 
-    ★ 单一排序源:列的左右次序 = 一级标签的左右次序。于是"亮着的标签,从左到右,
-    就是屏幕上的列",用户不需要额外线索去对应标签与列;拖标签排序同时排列,
-    不存在两套次序打架。 */
-function normalizeLayout(
+    ★ 屏幕顺序 = 标签顺序:列的左右次序 = 一级标签的左右次序。于是"亮的标签从左到右
+    就是屏幕上的组",拖标签排序同时也在排列,不存在两套次序。 */
+function normalizeGroups(
   openTabs: readonly ContainerKey[],
-  layout: readonly ContainerKey[],
+  groups: readonly ContainerKey[],
   fallback: ContainerKey,
 ): ContainerKey[] {
-  const wanted = new Set(layout);
+  const wanted = new Set(groups);
   const ordered = openTabs.filter((key) => wanted.has(key));
   if (ordered.length === 0) return [fallback];
-  return sameOrder(ordered, layout) ? (layout as ContainerKey[]) : ordered;
+  return sameOrder(ordered, groups) ? (groups as ContainerKey[]) : ordered;
 }
 
-/** 把 key 移到 anchor 的左/右侧(anchor 不在列表内则原样返回)。 */
+/** 把 key 移到 anchor 的左/右侧(anchor 不在列表内则原样返回拷贝)。 */
 function moveBeside(
   list: readonly ContainerKey[],
   key: ContainerKey,
@@ -179,17 +174,16 @@ function moveBeside(
   return rest;
 }
 
-/** 让容器可见并聚焦:已在并排中则仅聚焦;否则接替当前焦点列的席位(其余列留着)。
-    只改 layout、不动标签次序 —— 点标签/新建容器不该悄悄重排标签条(重排后列的左右
-    也跟着变,用户会以为自己点错了)。列的左右由"标签次序"这唯一排序源导出。 */
+/** 让容器可见并聚焦:已在屏上则仅聚焦;否则接替焦点组的席位(其余组留着)。
+    只改 groups、不动标签次序 —— 点标签/新建容器不该悄悄重排标签栏。 */
 function ensureVisible(
-  state: Pick<ContainerTabsState, "openTabs" | "layout" | "activeTab" | "panes">,
+  state: Pick<ContainerTabsState, "openTabs" | "groups" | "activeTab" | "panes">,
   key: ContainerKey,
-): Pick<PersistedShape, "openTabs" | "layout" | "activeTab"> {
+): Pick<PersistedShape, "openTabs" | "groups" | "activeTab"> {
   const openTabs = state.openTabs.includes(key) ? state.openTabs : [...state.openTabs, key];
-  const current = normalizeLayout(openTabs, state.layout, key);
-  if (current.includes(key)) return { openTabs, layout: current, activeTab: key };
-  const layout = normalizeLayout(
+  const current = normalizeGroups(openTabs, state.groups, key);
+  if (current.includes(key)) return { openTabs, groups: current, activeTab: key };
+  const groups = normalizeGroups(
     openTabs,
     current.map((item) => (item === state.activeTab ? key : item)),
     key,
@@ -197,7 +191,7 @@ function ensureVisible(
   return {
     openTabs,
     // 接替后仍超额(被替容器只占 1 列、新容器自己是多窗格)→ 退化为独占显示。
-    layout: layout.includes(key) && visibleColumns(state, layout) <= MAX_PANES ? layout : [key],
+    groups: groups.includes(key) && visibleColumns(state, groups) <= MAX_PANES ? groups : [key],
     activeTab: key,
   };
 }
@@ -217,7 +211,7 @@ function sanitizePane(raw: unknown): ConversationPane | null {
   return { tabs, active };
 }
 
-/** localStorage 反序列化 + 自愈(含 v1→v2→v3 迁移)。导出供迁移测试直接喂样本数据:
+/** localStorage 反序列化 + 自愈(含 v1→v2→v3→v4 迁移)。导出供迁移测试直接喂样本数据:
     存量用户的标签布局要能无损升级,这条路径出错等于开机丢工作区。 */
 export function sanitizePersistedTabs(raw: unknown): PersistedShape | null {
   if (!raw || typeof raw !== "object") return null;
@@ -239,7 +233,7 @@ export function sanitizePersistedTabs(raw: unknown): PersistedShape | null {
   const focusedPane: Record<string, number> = {};
 
   if (value.panes && typeof value.panes === "object") {
-    // v2 形状(J 轮):窗格数组直存。
+    // v2 起形状(J 轮):窗格数组直存。
     for (const [key, rawPanes] of Object.entries(value.panes as Record<string, unknown>)) {
       if (!Array.isArray(rawPanes)) continue;
       const seen = new Set<string>();
@@ -278,26 +272,32 @@ export function sanitizePersistedTabs(raw: unknown): PersistedShape | null {
     }
   }
 
-  // v3 迁移(K 轮):无 layout 的旧数据 = 单容器独占。恢复时还要守住可见列上限——
-  // 旧数据可能存着 3 窗格的容器,与另一容器并排会超额。
-  const rawLayout = Array.isArray(value.layout)
-    ? value.layout.filter((key): key is string => typeof key === "string")
-    : [activeTab];
-  const layout = normalizeLayout(openTabs, [...new Set(rawLayout)], activeTab);
+  // v3/v4 迁移:布局字段缺省 = 激活容器独占(v4 起叫 groups;v3 叫 layout,语义相同)。
+  const rawGroups = Array.isArray(value.groups)
+    ? value.groups
+    : Array.isArray(value.layout)
+      ? value.layout
+      : [activeTab];
+  const groups = normalizeGroups(
+    openTabs,
+    [...new Set(rawGroups.filter((key): key is string => typeof key === "string"))],
+    activeTab,
+  );
+  // 恢复时守住可见列上限:旧数据可能存着 3 窗格的容器,与另一容器并排会超额。
   const capped: ContainerKey[] = [];
   let used = 0;
-  for (const key of layout) {
+  for (const key of groups) {
     const cost = Math.max(1, panes[key]?.length ?? 1);
     if (capped.length > 0 && used + cost > MAX_PANES) continue;
     capped.push(key);
     used += cost;
   }
-  const finalLayout = capped.length > 0 ? capped : [activeTab];
+  const finalGroups = capped.length > 0 ? capped : [activeTab];
 
   return {
     openTabs,
-    layout: finalLayout,
-    activeTab: finalLayout.includes(activeTab) ? activeTab : finalLayout[0]!,
+    groups: finalGroups,
+    activeTab: finalGroups.includes(activeTab) ? activeTab : finalGroups[0]!,
     panes,
     focusedPane,
   };
@@ -306,7 +306,7 @@ export function sanitizePersistedTabs(raw: unknown): PersistedShape | null {
 function loadPersisted(): PersistedShape {
   const fallback: PersistedShape = {
     openTabs: [CHAT_CONTAINER],
-    layout: [CHAT_CONTAINER],
+    groups: [CHAT_CONTAINER],
     activeTab: CHAT_CONTAINER,
     panes: {},
     focusedPane: {},
@@ -325,7 +325,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
   activateContainer: (key) =>
     set((state) => {
       if (!state.openTabs.includes(key)) return state;
-      if (state.activeTab === key && state.layout.includes(key)) return state;
+      if (state.activeTab === key && state.groups.includes(key)) return state;
       return ensureVisible(state, key);
     }),
 
@@ -339,7 +339,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       if (openTabs.length === 0) {
         return {
           openTabs: [CHAT_CONTAINER],
-          layout: [CHAT_CONTAINER],
+          groups: [CHAT_CONTAINER],
           activeTab: CHAT_CONTAINER,
         };
       }
@@ -347,16 +347,16 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
         state.activeTab === key
           ? (openTabs[Math.min(index, openTabs.length - 1)] ?? openTabs[0]!)
           : state.activeTab;
-      // 被关的容器退出并排;并排组因此空了就让新激活容器独占。
-      const layout = normalizeLayout(
+      // 被关的容器退出其组;组因此空了就由新激活容器接替席位。
+      const groups = normalizeGroups(
         openTabs,
-        state.layout.filter((tab) => tab !== key),
+        state.groups.filter((tab) => tab !== key),
         activeTab,
       );
       return {
         openTabs,
-        layout,
-        activeTab: layout.includes(activeTab) ? activeTab : layout[0]!,
+        groups,
+        activeTab: groups.includes(activeTab) ? activeTab : groups[0]!,
       };
     }),
 
@@ -373,74 +373,66 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       if (openTabs.length === 0) {
         return {
           openTabs: [CHAT_CONTAINER],
-          layout: [CHAT_CONTAINER],
+          groups: [CHAT_CONTAINER],
           activeTab: CHAT_CONTAINER,
         };
       }
       const activeTab = openTabs.includes(state.activeTab) ? state.activeTab : anchor;
-      const layout = normalizeLayout(openTabs, state.layout, activeTab);
+      const groups = normalizeGroups(openTabs, state.groups, activeTab);
       return {
         openTabs,
-        layout,
-        activeTab: layout.includes(activeTab) ? activeTab : layout[0]!,
+        groups,
+        activeTab: groups.includes(activeTab) ? activeTab : groups[0]!,
       };
     }),
 
-  reorderContainer: (key, toIndex) =>
+  setOpenTabsOrder: (next) =>
     set((state) => {
-      const from = state.openTabs.indexOf(key);
-      if (from < 0) return state;
-      const clamped = Math.max(0, Math.min(toIndex, state.openTabs.length - 1));
-      if (clamped === from) return state;
-      const openTabs = [...state.openTabs];
-      openTabs.splice(from, 1);
-      openTabs.splice(clamped, 0, key);
-      // 列次序跟着标签次序走(单一排序源)。
-      return { openTabs, layout: normalizeLayout(openTabs, state.layout, state.activeTab) };
+      if (next.length !== state.openTabs.length) return state;
+      const seen = new Set(next);
+      if (seen.size !== next.length || state.openTabs.some((key) => !seen.has(key))) return state;
+      if (sameOrder(next, state.openTabs)) return state;
+      // 屏幕顺序 = 标签顺序:标签一重排,组的左右跟着归一化。
+      return { openTabs: [...next], groups: normalizeGroups(next, state.groups, state.activeTab) };
     }),
 
-  addContainerToLayout: (key, anchor, side) => {
+  splitContainerBeside: (key, anchor, side) => {
     const state = get();
     if (key === anchor) return false;
     if (!state.openTabs.includes(key) || !state.openTabs.includes(anchor)) return false;
-    const layout = normalizeLayout(state.openTabs, state.layout, state.activeTab);
-    if (!layout.includes(anchor)) return false;
-    if (!layout.includes(key) && visibleColumns(state, layout) + columnsOf(state, key) > MAX_PANES) {
+    const groups = normalizeGroups(state.openTabs, state.groups, state.activeTab);
+    if (!groups.includes(anchor)) return false;
+    if (!groups.includes(key) && visibleColumns(state, groups) + columnsOf(state, key) > MAX_PANES) {
       return false;
     }
-    // 单一排序源:先把一级标签移到 anchor 侧,列次序由 openTabs 归一化得出。
+    // 屏幕顺序 = 标签顺序:先把一级标签移到 anchor 侧,组次序由 openTabs 归一化得出。
     const openTabs = moveBeside(state.openTabs, key, anchor, side);
     set({
       openTabs,
-      layout: normalizeLayout(openTabs, [...layout, key], key),
+      groups: normalizeGroups(openTabs, [...groups, key], key),
       activeTab: key,
     });
     return true;
   },
 
-  canAddContainerToLayout: (key) => {
+  mergeContainer: (key) => {
     const state = get();
-    if (!state.openTabs.includes(key)) return false;
-    const layout = normalizeLayout(state.openTabs, state.layout, state.activeTab);
-    if (layout.includes(key)) return true;
-    return visibleColumns(state, layout) + columnsOf(state, key) <= MAX_PANES;
-  },
-
-  focusContainerExclusive: (key) =>
-    set((state) =>
-      state.openTabs.includes(key) ? { layout: [key], activeTab: key } : state,
-    ),
-
-  removeContainerFromLayout: (key) => {
-    const state = get();
-    const layout = normalizeLayout(state.openTabs, state.layout, state.activeTab);
-    if (layout.length < 2 || !layout.includes(key)) return false;
-    const index = layout.indexOf(key);
-    const next = layout.filter((item) => item !== key);
+    const groups = normalizeGroups(state.openTabs, state.groups, state.activeTab);
+    if (groups.length < 2 || !groups.includes(key)) return false;
+    const index = groups.indexOf(key);
+    const next = groups.filter((item) => item !== key);
     const activeTab =
       state.activeTab === key ? (next[Math.min(index, next.length - 1)] ?? next[0]!) : state.activeTab;
-    set({ layout: next, activeTab });
+    set({ groups: next, activeTab });
     return true;
+  },
+
+  canSplitContainer: (key) => {
+    const state = get();
+    if (!state.openTabs.includes(key)) return false;
+    const groups = normalizeGroups(state.openTabs, state.groups, state.activeTab);
+    if (groups.includes(key)) return true;
+    return visibleColumns(state, groups) + columnsOf(state, key) <= MAX_PANES;
   },
 
   openConversation: (container, conversationId) =>
@@ -478,7 +470,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
     const panes = panesOf(state, container);
     const clamped = Math.max(0, Math.min(index, panes.length - 1));
     const focusChanged = (state.focusedPane[container] ?? 0) !== clamped;
-    const containerChanged = state.activeTab !== container && state.layout.includes(container);
+    const containerChanged = state.activeTab !== container && state.groups.includes(container);
     if (focusChanged || containerChanged) {
       set({
         ...(containerChanged ? { activeTab: container } : {}),
@@ -496,7 +488,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
     const paneIdx = panes.findIndex((pane) => pane.tabs.includes(conversationId));
     if (paneIdx < 0) return undefined;
     const focused = clampFocus(state, container, panes.length);
-    // 导航只在"聚焦列"上发生:并排时另一容器/另一窗格的关闭不该改路由。
+    // 导航只在"焦点列"上发生:分栏时另一容器/另一窗格的关闭不该改路由。
     const isFocusedColumn = state.activeTab === container && paneIdx === focused;
     const pane = panes[paneIdx]!;
     const tabIdx = pane.tabs.indexOf(conversationId);
@@ -564,10 +556,10 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
   splitConversation: (container, conversationId, toIndex) => {
     const state = get();
     const panes = panesOf(state, container);
-    // 上限按"屏幕可见列总数"算:并排容器各自的窗格都占列,分栏不能越过总额。
-    const layout = normalizeLayout(state.openTabs, state.layout, state.activeTab);
-    const inLayout = layout.includes(container);
-    if ((inLayout ? visibleColumns(state, layout) : panes.length) >= MAX_PANES) return false;
+    // 上限按"屏幕可见列总数"算:各组焦点容器的窗格都占列,二级分栏不能越过总额。
+    const groups = normalizeGroups(state.openTabs, state.groups, state.activeTab);
+    const onScreen = groups.includes(container);
+    if ((onScreen ? visibleColumns(state, groups) : panes.length) >= MAX_PANES) return false;
     const fromIdx = panes.findIndex((pane) => pane.tabs.includes(conversationId));
     if (fromIdx < 0) return false;
     const from = panes[fromIdx]!;
@@ -583,7 +575,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
     const insertAt = Math.max(0, Math.min(toIndex, nextPanes.length));
     nextPanes.splice(insertAt, 0, { tabs: [conversationId], active: conversationId });
     set({
-      ...(inLayout && state.activeTab !== container ? { activeTab: container } : {}),
+      ...(onScreen && state.activeTab !== container ? { activeTab: container } : {}),
       panes: { ...state.panes, [container]: nextPanes },
       focusedPane: { ...state.focusedPane, [container]: insertAt },
     });
@@ -596,9 +588,9 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
     const fromIdx = panes.findIndex((pane) => pane.tabs.includes(conversationId));
     const target = Math.max(0, Math.min(toPane, panes.length - 1));
     if (fromIdx < 0) return;
-    // 落点容器成为激活容器(并排时把焦点交给用户放手的那一列)。
+    // 落点容器成为激活容器(分栏时把焦点交给用户放手的那一列)。
     const focusContainer =
-      state.layout.includes(container) && state.activeTab !== container
+      state.groups.includes(container) && state.activeTab !== container
         ? { activeTab: container }
         : {};
     if (fromIdx === target) {
@@ -679,7 +671,7 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       const staleState =
         Object.keys(state.panes).some((key) => !keep(key)) ||
         Object.keys(state.focusedPane).some((key) => !keep(key)) ||
-        state.layout.some((key) => !keep(key));
+        state.groups.some((key) => !keep(key));
       if (stale.length === 0 && !staleState) return state;
       const openTabs = state.openTabs.filter((tab) => !stale.includes(tab));
       const panes = Object.fromEntries(Object.entries(state.panes).filter(([key]) => keep(key)));
@@ -689,18 +681,18 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
       if (openTabs.length === 0) {
         return {
           openTabs: [CHAT_CONTAINER],
-          layout: [CHAT_CONTAINER],
+          groups: [CHAT_CONTAINER],
           activeTab: CHAT_CONTAINER,
           panes,
           focusedPane,
         };
       }
       const activeTab = openTabs.includes(state.activeTab) ? state.activeTab : openTabs[0]!;
-      const layout = normalizeLayout(openTabs, state.layout.filter(keep), activeTab);
+      const groups = normalizeGroups(openTabs, state.groups.filter(keep), activeTab);
       return {
         openTabs,
-        layout,
-        activeTab: layout.includes(activeTab) ? activeTab : layout[0]!,
+        groups,
+        activeTab: groups.includes(activeTab) ? activeTab : groups[0]!,
         panes,
         focusedPane,
       };
@@ -714,7 +706,7 @@ if (typeof localStorage !== "undefined") {
         STORAGE_KEY,
         JSON.stringify({
           openTabs: state.openTabs,
-          layout: state.layout,
+          groups: state.groups,
           activeTab: state.activeTab,
           panes: state.panes,
           focusedPane: state.focusedPane,
