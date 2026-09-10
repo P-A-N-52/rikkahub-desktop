@@ -32,10 +32,11 @@ node_modules/
 *.log
 
 # AI Memory / agent 本地指导文档(仅本机使用,不随仓库分发)
-# .claude/ 含 settings.local.json 这类 per-machine 权限白名单;CLAUDE.md 无路径前缀,
-# 各层级(根 / web-ui)同名文件一并忽略。无构建依赖,删跟踪不影响编译。
+# .claude/ 含 settings.local.json 这类 per-machine 权限白名单;CLAUDE.md / AGENTS.md
+# 无路径前缀,各层级(根 / web-ui)同名文件一并忽略。无构建依赖,删跟踪不影响编译。
 .claude/
 CLAUDE.md
+AGENTS.md
 
 # Reference source trees (separate repos, checked out locally for study)
 Rikkahub-Android/
