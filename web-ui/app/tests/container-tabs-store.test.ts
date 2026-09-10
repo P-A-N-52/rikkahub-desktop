@@ -51,6 +51,22 @@ describe("容器标签", () => {
     expect(store().activeTab).toBe(CHAT_CONTAINER);
   });
 
+  test("关闭组焦点容器 → 焦点先给同组的组内右邻,不隔着组飞", () => {
+    // 搭出 openTabs [chat, ws1, ws2]、分组 [chat, ws1]:ws1 先上屏并独占,再把 chat
+    // 拆到它左侧(分栏 = chat 与 ws1 各占一组,ws2 不在屏上),焦点落到新组 chat。
+    // (对比"激活":激活是接替焦点组席位,会把对方顶下屏;分栏才是各自独立成组。)
+    store().openContainer("ws1");
+    store().openContainer("ws2");
+    store().activateContainer("ws1");
+    store().splitContainerBeside(CHAT_CONTAINER, "ws1", "left");
+    expect(store().groups).toEqual([CHAT_CONTAINER, "ws1"]);
+    expect(store().activeTab).toBe(CHAT_CONTAINER);
+    store().closeContainer(CHAT_CONTAINER);
+    // 关 chat:它的组里还有 ws1 这枚组内右邻 → 焦点留在该组由 ws1 接替,而不是飞走
+    expect(store().activeTab).toBe("ws1");
+    expect(store().groups).toEqual(["ws1"]);
+  });
+
   test("关闭非激活容器不动 activeTab", () => {
     store().openContainer("ws1");
     store().closeContainer(CHAT_CONTAINER);

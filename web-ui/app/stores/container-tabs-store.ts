@@ -51,7 +51,8 @@ interface ContainerTabsState {
   activateContainer: (key: ContainerKey) => void;
   /** 打开并激活容器(已开则仅激活;不在屏上则接替焦点组)。 */
   openContainer: (key: ContainerKey) => void;
-  /** 收起容器标签。若关闭的是激活容器,激活其右邻(无则左邻);关到最后一个时回落到对话模式。 */
+  /** 收起容器标签。关闭激活容器:若它在某个组里,焦点先给同组的组内右邻(无则左邻),
+      都没有(独组)才回落全局右邻;关到最后一个标签时回落到对话模式。 */
   closeContainer: (key: ContainerKey) => void;
   /** 批量收起容器标签(右键菜单):others=只留 anchor;right=关 anchor 右侧;all=全关(回落对话模式)。 */
   closeContainersBatch: (scope: "others" | "right" | "all", anchor: ContainerKey) => void;
@@ -343,10 +344,25 @@ export const useContainerTabsStore = create<ContainerTabsState>((set, get) => ({
           activeTab: CHAT_CONTAINER,
         };
       }
-      const activeTab =
-        state.activeTab === key
-          ? (openTabs[Math.min(index, openTabs.length - 1)] ?? openTabs[0]!)
-          : state.activeTab;
+      const activeTab = (() => {
+        if (state.activeTab !== key) return state.activeTab;
+        // 关闭的是激活容器:若它在一个组里,焦点先给同组的组内右邻(无则左邻)——
+        // 组才成立,别让焦点隔着组乱飞;独组(只剩它自己)才回落到全局右邻。
+        const gIdx = state.groups.indexOf(key);
+        if (gIdx >= 0) {
+          const before = state.openTabs.slice(0, index);
+          const after = state.openTabs.slice(index + 1);
+          const prevGroup = gIdx > 0 ? state.groups[gIdx - 1]! : undefined;
+          const nextGroup = gIdx < state.groups.length - 1 ? state.groups[gIdx + 1]! : undefined;
+          const rightIdx = after.findIndex((tab) => tab !== nextGroup);
+          if (rightIdx >= 0) return after[rightIdx]!;
+          // 反向找左邻:目标 lib 低于 es2023,无 findLastIndex。
+          for (let i = before.length - 1; i >= 0; i--) {
+            if (before[i] !== prevGroup) return before[i]!;
+          }
+        }
+        return openTabs[Math.min(index, openTabs.length - 1)] ?? openTabs[0]!;
+      })();
       // 被关的容器退出其组;组因此空了就由新激活容器接替席位。
       const groups = normalizeGroups(
         openTabs,
