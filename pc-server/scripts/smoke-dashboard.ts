@@ -235,53 +235,78 @@ console.log("[stats]");
 }
 
 // ── purge(假新用户清理)──
-// 种一批明确的假设备:0.1.0-beta 版本(开发期构建) + 存活1天零活动的未知版本设备。
-// 再种一批"看起来像但其实是真用户"的对照:存活1天但发过消息的设备(绝不可删)。
+// 两条口径:①开发版本号(0.1.0-beta / 1.6.0,从未正式发布过,版本即铁证)
+// ②一日游零活动设备(只出现过一天 + msg/hb/am 全 0),默认不设年龄门槛。
+// 重点验证:零活动门槛是唯一的误删防线(发过消息的一日游必须活着);而"今天刚装、
+// 还没聊过天"的设备**按用户决策就该被删**(他回来会重新落库),这里正向锁死这个行为,
+// 免得日后有人以"保护新用户"为名把年龄门槛偷偷加回默认值。
 console.log("[purge]");
 {
-  const pv = "0.1.0-beta";
-  // 假设备 A:版本命中(0.1.0-beta),存活1天,零活动
-  ins.run("fake-dev-a-0001-aaaaaaaaaaaa", utcToday, pv, "win", 0, "", 0, 0, 0, 0);
-  // 假设备 B:版本命中,存活1天,有点消息(版本口径照样删——版本即铁证)
-  ins.run("fake-dev-b-0002-aaaaaaaaaaaa", utcToday, pv, "win", 3, "", 0, 0, 0, 0);
-  // 假设备 C:未知版本但存活1天零活动(通用启发式命中)
-  ins.run("fake-dev-c-0003-aaaaaaaaaaaa", utcToday, "9.9.9", "win", 0, "", 0, 0, 0, 0);
-  // 对照 D:存活1天但发过消息的真用户——绝不可删
-  ins.run("real-dev-d-0004-aaaaaaaaaaaa", utcToday, "1.4.1", "win", 7, "", 2, 0, 1, 0);
+  const old20 = addDays(utcToday, -20);
+  // 假 A:0.1.0-beta,今天,零活动 → 版本口径命中
+  ins.run("fake-dev-a-0001-aaaaaaaaaaaa", utcToday, "0.1.0-beta", "win", 0, "", 0, 0, 0, 0);
+  // 假 B:1.6.0(用户第二个已定位的开发版本号),今天且发过消息 → 版本口径照样命中
+  ins.run("fake-dev-b-0002-aaaaaaaaaaaa", utcToday, "1.6.0", "win", 3, "", 0, 0, 0, 0);
+  // 假 C:正常版本号,20 天前只来过一次且零活动 → 一日游口径命中
+  ins.run("fake-dev-c-0003-aaaaaaaaaaaa", old20, "1.4.1", "win", 0, "", 0, 0, 0, 0);
+  // 假 D:今天首见的一日游零活动设备 → 无年龄门槛,同样命中(用户决策:宁多错杀)
+  ins.run("fake-dev-d-0004-aaaaaaaaaaaa", utcToday, "1.4.1", "win", 0, "", 0, 0, 0, 0);
+  // 留 E:20 天前的一日游,但发过消息 → 零活动门槛保护(试用一次即流失的真人)
+  ins.run("real-dev-e-0005-aaaaaaaaaaaa", old20, "1.4.1", "win", 7, "", 2, 0, 1, 0);
+  // 留 F:今天首见的一日游,发过消息 → 同上,零活动门槛保护
+  ins.run("real-dev-f-0006-aaaaaaaaaaaa", utcToday, "1.4.1", "win", 5, "", 1, 0, 0, 0);
 
+  const alive = (id: string) => (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = ?").get(id) as { c: number }).c;
   const base = BASE + "/api/admin/purge?token=" + TOKEN;
   let res = await purgeHandler(ctx(base, { method: "GET" }));
   check("purge GET 被拒 405", res.status === 405);
   res = await purgeHandler(ctx(BASE + "/api/admin/purge?token=wrong", { method: "POST" }));
   check("purge 坏 token 401", res.status === 401);
+  res = await purgeHandler(ctx(base + "&versions=&heuristic=0", { method: "POST" }));
+  check("两条口径全关 → 400", res.status === 400);
 
-  // dry-run:不动库。注意:宁多错杀——seed 里 60 个"存活1天零活动"的 churned 设备
-  // (newdev-*-cccccccc 中 mc=0 的那批)同样命中通用启发式,属预期内误删,故 matched>3。
-  res = await purgeHandler(ctx(base + "&version=" + pv, { method: "POST" }));
+  // dry-run:不动库。注意宁多错杀——seed 里那批 newdev-*-1(mc=0,只来一天)同样命中
+  // 一日游口径,属预期内误删,故 matched 远大于 4。
+  res = await purgeHandler(ctx(base, { method: "POST" }));
   const dry = await res.json();
-  check("purge dry-run 命中≥3 台假设备", dry.dryRun === true && dry.matchedDevices >= 3, dry.matchedDevices);
-  check("purge dry-run 后假设备仍在库",
-    (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get() as { c: number }).c === 3);
+  check("purge dry-run 默认版本列表含两个开发版本号", dry.criteria?.versions?.join(",") === "0.1.0-beta,1.6.0", dry.criteria);
+  check("purge 默认不设年龄门槛", dry.criteria?.minAgeDays === 0 && dry.criteria?.cutoff === utcToday, dry.criteria);
+  check("purge dry-run 两条口径都出数", dry.dryRun === true && dry.byCriteria?.version === 2 && dry.byCriteria?.oneDayOld >= 2, dry.byCriteria);
+  check("purge dry-run 不动库", alive("fake-dev-a-0001-aaaaaaaaaaaa") === 1 && alive("fake-dev-d-0004-aaaaaaaaaaaa") === 1);
+  const sampleSet = new Set(dry.sample ?? []);
+  check("purge dry-run 回报样本便于人工核对", (dry.sample ?? []).length > 0 && sampleSet.size === (dry.sample ?? []).length, dry.sample?.length);
+  check("purge dry-run 报出关掉零活动会多删多少", dry.extraIfNoIdle >= 2, dry.extraIfNoIdle);
 
-  // commit:真删 + 重建。3 台 fake-dev-* 必被删,churned 零活动设备也被清(预期误删)。
-  res = await purgeHandler(ctx(base + "&version=" + pv + "&commit=1", { method: "POST" }));
+  // commit:真删 + 重建。4 台假设备必被删,两台发过消息的对照必须活着。
+  res = await purgeHandler(ctx(base + "&commit=1", { method: "POST" }));
   const done = await res.json();
-  check("purge commit 删除≥3 台", done.purgedDevices >= 3 && done.dryRun === false, done);
-  const gone = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id LIKE 'fake-dev-%'").get() as { c: number }).c;
-  check("purge 后假设备已清", gone === 0, gone);
-  const dAlive = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'real-dev-d-0004-aaaaaaaaaaaa'").get() as { c: number }).c;
-  check("purge 不误删发过消息的真用户", dAlive === 1, dAlive);
+  check("purge commit 删除数与 dry-run 一致", done.dryRun === false && done.purgedDevices === dry.matchedDevices, { done: done.purgedDevices, dry: dry.matchedDevices });
+  check("purge 后四台假设备已清",
+    alive("fake-dev-a-0001-aaaaaaaaaaaa") === 0 && alive("fake-dev-b-0002-aaaaaaaaaaaa") === 0
+    && alive("fake-dev-c-0003-aaaaaaaaaaaa") === 0 && alive("fake-dev-d-0004-aaaaaaaaaaaa") === 0);
+  check("零活动门槛保住发过消息的一日游老设备", alive("real-dev-e-0005-aaaaaaaaaaaa") === 1);
+  check("零活动门槛保住今天发过消息的一日游设备", alive("real-dev-f-0006-aaaaaaaaaaaa") === 1);
+  check("全勤重度用户毫发无损", alive("core-device-0-aaaaaaaaaaaa") === 60, alive("core-device-0-aaaaaaaaaaaa"));
 
-  // 关掉启发式后只按版本删:dev-c(9.9.9,无版本命中)不该被命中——再种回验证
-  ins.run("fake-dev-e-0005-aaaaaaaaaaaa", utcToday, pv, "win", 0, "", 0, 0, 0, 0);
-  ins.run("fake-dev-f-0006-aaaaaaaaaaaa", utcToday, "9.9.9", "win", 0, "", 0, 0, 0, 0);
-  res = await purgeHandler(ctx(base + "&version=" + pv + "&heuristic=0&commit=1", { method: "POST" }));
+  // minAgeDays 仍可显式开启:传 10 时今天首见的零活动设备被保住
+  ins.run("fake-dev-g-0007-aaaaaaaaaaaa", utcToday, "1.4.1", "win", 0, "", 0, 0, 0, 0);
+  res = await purgeHandler(ctx(base + "&versions=&minAgeDays=10&commit=1", { method: "POST" }));
   const done2 = await res.json();
-  check("purge heuristic=0 只按版本删", done2.purgedDevices === 1, done2);
-  const fAlive = (db.query("SELECT COUNT(*) AS c FROM pings WHERE device_id = 'fake-dev-f-0006-aaaaaaaaaaaa'").get() as { c: number }).c;
-  check("heuristic=0 时未知版本零活动设备保留", fAlive === 1, fAlive);
-  // 清理残留,避免影响后续 stats 章节
-  db.query("DELETE FROM pings WHERE device_id LIKE 'fake-dev-%'").run();
+  check("minAgeDays=10 时今天首见的零活动设备被保住", done2.criteria?.minAgeDays === 10 && alive("fake-dev-g-0007-aaaaaaaaaaaa") === 1, done2.criteria);
+
+  // heuristic=0 只按版本删:1.6.0 命中,一日游零活动设备保留
+  ins.run("fake-dev-h-0008-aaaaaaaaaaaa", utcToday, "1.6.0", "win", 0, "", 0, 0, 0, 0);
+  res = await purgeHandler(ctx(base + "&heuristic=0&commit=1", { method: "POST" }));
+  const done3 = await res.json();
+  check("purge heuristic=0 只按版本删", done3.purgedDevices === 1 && alive("fake-dev-g-0007-aaaaaaaaaaaa") === 1, done3);
+
+  // versions= 空 + 一日游口径(默认无年龄门槛):上一步留下的 g 被清
+  res = await purgeHandler(ctx(base + "&versions=&commit=1", { method: "POST" }));
+  const done4 = await res.json();
+  check("versions= 空时只按一日游口径删", done4.byCriteria?.version === 0 && alive("fake-dev-g-0007-aaaaaaaaaaaa") === 0, done4.byCriteria);
+
+  // 清理残留,避免影响后续章节
+  db.query("DELETE FROM pings WHERE device_id LIKE 'fake-dev-%' OR device_id LIKE 'real-dev-%'").run();
 }
 
 // ── dashboard ──
