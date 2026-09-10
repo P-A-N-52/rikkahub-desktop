@@ -30,6 +30,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
       # pi/ 是 gitignore 的本地浅克隆(vendored 源码),不进仓库。pc-server 直接
       # import 其 TS 源码,缺它 bun build --compile 第一步解析 import 即失败。
       # 按 CLAUDE.md「pi vendor 维护手册」重建:浅克隆上游基线 + 应用 pi-patches/*.patch。
@@ -47,12 +52,6 @@ jobs:
           git apply ../pi-patches/*.patch
           bun install
           cd packages/ai && bun run generate-models
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          # 与本地开发环境保持一致;升级 Bun 时记得同步,避免编译产物行为漂移。
-          bun-version: '1.4.0'
 
       - name: Resolve version
         id: ver
