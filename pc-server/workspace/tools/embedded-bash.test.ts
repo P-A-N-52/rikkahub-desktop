@@ -1,6 +1,7 @@
 // workspace/tools/embedded-bash.test.ts — 内嵌 bash 懒落地的单测。
 // 用真实嵌入的 bash-bundle.tar.gz(构建脚本已产出),在隔离的临时 dataDir 里走完整落地路径。
 // paths.ts 在 import 时刻固化 dataDir,故必须先设环境变量再动态加载被测模块。
+// Windows-only:非 Windows 平台整个 describe 跳过(embedded-bash.ts 内部也拒绝)。
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +18,8 @@ afterAll(() => {
   rmSync(testDataDir, { recursive: true, force: true });
 });
 
-describe("embedded bash 懒落地", () => {
+// 内嵌 bash 仅 Windows 用;非 Windows 平台跳过整个 describe(无需跑空测试)。
+describe.skipIf(process.platform !== "win32")("embedded bash 懒落地", () => {
   test("首次前 availableSync 为 null;ensureEmbeddedBash 落地后命中且可执行", async () => {
     _resetEmbeddedBashForTest();
     rmSync(embeddedBashDir, { recursive: true, force: true });
@@ -64,10 +66,5 @@ describe("embedded bash 懒落地", () => {
     _resetEmbeddedBashForTest();
     await ensureEmbeddedBash();
     expect(existsSync(embeddedBashExe)).toBe(true); // 已重落地恢复
-  });
-
-  test("非 Windows 平台直接拒绝(内嵌 bash 仅 Windows)", async () => {
-    if (process.platform === "win32") return; // 仅非 win 有意义;win 上跳过
-    await expect(ensureEmbeddedBash()).rejects.toThrow(/Windows-only/);
   });
 });
