@@ -32,6 +32,20 @@ COPY web-ui/ ./
 # 步骤(缺 renderToPipeableStream 的旧软链 workaround 已删,实测两种形态全绿)。
 RUN bun run build
 
+# pi/ 是 gitignore 的本地浅克隆(vendored 源码),不进构建上下文。pc-server 直接
+# import 其 TS 源码,缺它 bun build --compile 第一步解析 import 即失败。
+# 按 CLAUDE.md「pi vendor 维护手册」重建:浅克隆上游基线 + 应用 pi-patches/*.patch。
+# --no-install-recommends 防止 bookworm-slim 带 ca-certificates 缺失导致 https clone 失败。
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY pi-patches/ ./pi-patches/
+RUN git clone --filter=blob:none --no-checkout https://github.com/earendil-works/pi.git pi && \
+    cd pi && \
+    git checkout 5cd93f688aaab89dbb6dfa4aca535f21796ae185 && \
+    git -c user.name=ci -c user.email=ci@local am ../pi-patches/*.patch
+
 # Compile server — cross-compile to match the runtime platform.
 # Lay out a separate /build/pc-server subtree so we don't mix the pc-server lockfile
 # with the web-ui one above. We need `bun install` here for one reason only: server.ts
