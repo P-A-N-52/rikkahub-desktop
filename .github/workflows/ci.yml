@@ -46,7 +46,13 @@ jobs:
 
       - name: Run pc-server unit tests
         working-directory: pc-server
-        run: bun test
+        run: |
+          # embedded-bash.ts 顶层 import ../../assets/bash-bundle.tar.gz(Windows-only
+          # 构建产物,gitignored)。Linux CI 无法生成,但 bun test 需要解析该 import。
+          # 创建 dummy 文件让解析成功;embedded-bash.test.ts 在非 Windows 平台会跳过。
+          mkdir -p assets
+          [ -f assets/bash-bundle.tar.gz ] || echo "dummy" > assets/bash-bundle.tar.gz
+          bun test
 
       - name: Run request-chain smoke
         working-directory: pc-server
