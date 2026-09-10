@@ -259,26 +259,24 @@ export function ContainerTabBar({
     [navigate],
   );
 
-  // NewMax getTabWidthCalc:页签宽度随本组标签数在 58~172px 间按容器宽均分(容器查询
-  // cqw),预留 77px 给 "+" 钮、边距与首标签 13px 左位——多开标签时像浏览器一样逐渐收窄。
-  // 幽灵标签缀在本组尾部,一并计入宽度。
-  const visibleCount = group.length + ghostTabs.length;
-  const tabWidthCalc = `clamp(58px, calc((100cqw - ${77 + Math.max(0, visibleCount - 1) * 3}px) / ${Math.max(1, visibleCount)}), 172px)`;
+  // NewMax getTabWidthCalc:页签宽度随数量在 58~172px 间按容器宽均分(容器查询 cqw),
+  // 预留 77px 给 "+" 钮、边距与首标签 13px 左位——多开标签时像浏览器一样逐渐收窄。
+  // 幽灵标签不占本组宽度预算(它是过客),只按本组成员数均分,免得把标签无谓拉宽。
+  const tabWidthCalc = `clamp(58px, calc((100cqw - ${77 + Math.max(0, group.length - 1) * 3}px) / ${Math.max(1, group.length)}), 172px)`;
 
-  // 标签渲染三态与成员资格无关,全看 active/inGroup 入参:组焦点标签连体、
-  // 组内非焦点胶囊、幽灵画布色。成员行与幽灵行只差这一组入参,其余回调完全一致。
-  const renderTab = (key: ContainerKey, opts: { inGroup: boolean; indexInRow: number; activeFirst: boolean }) => (
+  // 标签渲染只看 active 一个配色入参:本组焦点标签连体白底,其余(同组非焦点与画布
+  // 幽灵)一律画布色 hover——与旧版/NewMax 一致,不再造"组内胶囊"这条第三视觉态。
+  // 右键菜单的"移出分栏/分栏到左右"由 splitable/unsplitable 决定,与配色无关。
+  const renderTab = (key: ContainerKey, opts: { indexInRow: number; activeFirst: boolean }) => (
     <ContainerTab
       key={key}
       containerKey={key}
       workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
       width={tabWidthCalc}
       active={key === activeTab}
-      /** 本组的非焦点标签:组面板色胶囊(它的列也在屏上),弱于焦点态。 */
-      inGroup={opts.inGroup}
       closable={openTabsCount > 1}
       hasOthers={openTabsCount > 1}
-      hasRight={opts.indexInRow < visibleCount - 1}
+      hasRight={opts.indexInRow < group.length + ghostTabs.length - 1}
       splitable={!group.includes(key)}
       unsplitable={groupsCount > 1 && group.includes(key)}
       dragging={dragKey === key}
@@ -360,11 +358,11 @@ export function ContainerTabBar({
           }
         }}
       >
-        {group.map((key, index) => renderTab(key, { inGroup: key !== activeTab, indexInRow: index, activeFirst: index === 0 }))}
+        {group.map((key, index) => renderTab(key, { indexInRow: index, activeFirst: index === 0 }))}
         {/* 幽灵标签:开着的容器不在任何组。缀在全局焦点组尾部保持可见可点(画布色,
             点击 = 接替本组席位上屏);不挪进其它组的条,免得用户切焦点组时标签乱飞。 */}
         {ghostTabs.map((key, index) =>
-          renderTab(key, { inGroup: false, indexInRow: group.length + index, activeFirst: false }),
+          renderTab(key, { indexInRow: group.length + index, activeFirst: false }),
         )}
       </div>
 
@@ -475,7 +473,6 @@ function ContainerTab({
   workspace,
   width,
   active,
-  inGroup,
   closable,
   hasOthers,
   hasRight,
@@ -502,8 +499,6 @@ function ContainerTab({
   width: string;
   /** 本组的焦点标签:与组内容面板连体。 */
   active: boolean;
-  /** 本组的非焦点标签:组面板色胶囊,弱于焦点态。 */
-  inGroup: boolean;
   closable: boolean;
   hasOthers: boolean;
   hasRight: boolean;
@@ -537,11 +532,10 @@ function ContainerTab({
   const Icon = isChat ? MessageSquare : workspace?.type === "folder" ? FolderOpen : Folder;
   // NewMax WorkspaceTab 原样移植:28px 高页签,焦点标签与下方组面板(surface-200)连体——
   // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
-  // 分区模型的三态:连体(全局焦点)> 面板色胶囊(本组成员)> 画布幽灵(它组标签)。
-  // 连体反圆角左右各溢 13px:右溢永远落在本组面板/邻组胶囊上,安全;左溢仅当本标签
-  // 是组首枚(左侧紧邻要么不存在、要么也是本组胶囊)才不盖住别组幽灵——否则退化圆角。
+  // 非焦点一律画布色 hover(与旧版/NewMax 一致),不再造"组内胶囊"第三视觉态。
+  // 连体反圆角左右各溢 13px:右溢永远落在本组面板上,安全;左溢仅当本标签是组首枚
+  // (左侧紧邻要么不存在、要么也是本组标签)才不盖住别组幽灵——否则退化为普通圆角。
   const TAB_CORNER_R = 13;
-  const docked = inGroup;
   const cornerClip = active ? `inset(-2px -15px -2px ${activeFirst ? "-15px" : "0px"})` : undefined;
   return (
     <ContextMenu>
@@ -567,11 +561,9 @@ function ContainerTab({
       onDragOver={(event) => {
         onDragOverTab(event);
       }}
-      className={cn("relative shrink-0 select-none pb-[3px]", dragging && "invisible")}
+      className={cn("relative shrink-0 select-none pb-[3px]", dragging && "opacity-60")}
       style={{
         width,
-        // 拖动中原生拖影会让标签原地显形,隐藏本体 —— 落点即所见,激活标签也能拖走。
-        ...(dragging ? { visibility: "hidden" as const } : {}),
         ...(active
           ? {
               filter: "drop-shadow(rgba(0, 0, 0, 0.08) 0px 0px 0.5px)",
@@ -585,9 +577,7 @@ function ContainerTab({
           "group relative flex h-7 w-full items-center gap-1.5 pl-2.5 pr-1.5 text-compact font-medium transition-colors duration-150",
           active
             ? "rounded-t-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-primary)]"
-            : docked
-              ? "rounded-[10px] bg-[var(--ds-surface-200)] text-[var(--ds-text-secondary)] shadow-[var(--ds-elevation-100)]"
-              : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
+            : "rounded-[10px] text-[var(--ds-text-secondary)] hover:bg-[var(--ds-on-surface)]",
         )}
       >
         <Icon className="size-4 shrink-0" strokeWidth={1.75} />
