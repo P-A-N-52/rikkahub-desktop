@@ -98,9 +98,17 @@ import {
   type Settings,
   type UIMessagePart,
 } from "~/types";
-import { ArrowDown, Check, Folder, FolderOpen, ListChecks, Loader2, MessageSquare, Pencil, X } from "lucide-react";
+import {
+  ArrowDown,
+  Check,
+  ListChecks,
+  Loader2,
+  MessageSquare,
+  Pencil,
+  X,
+} from "lucide-react";
 import { EmptyGreeting } from "~/components/empty-greeting";
-import type { PanelImperativeHandle } from "react-resizable-panels";
+import type { GroupImperativeHandle, PanelImperativeHandle } from "react-resizable-panels";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
@@ -1318,33 +1326,6 @@ export function meta() {
   ];
 }
 
-/** 组面板顶缘的"本组焦点标签"胶囊(分栏时非全局焦点组显示):读作"这一组的标签栏
-    当前停在它身上",与左缘一级标签栏里那枚组面板色胶囊互为镜像。 */
-function GroupFocusLabel({ container }: { container: ContainerKey }) {
-  const { t } = useTranslation("page");
-  const workspace = useWorkspaceStore((state) =>
-    container === CHAT_CONTAINER
-      ? undefined
-      : state.workspaces.find((item) => item.id === container),
-  );
-  const label =
-    container === CHAT_CONTAINER
-      ? t("workspace.tabs.chat")
-      : (workspace?.name ?? t("workspace.tabs.missing"));
-  const Icon =
-    container === CHAT_CONTAINER
-      ? MessageSquare
-      : workspace?.type === "folder"
-        ? FolderOpen
-        : Folder;
-  return (
-    <>
-      <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
-      <span className="min-w-0 truncate">{label}</span>
-    </>
-  );
-}
-
 export default function ConversationsPage() {
   const workbench = useWorkbenchController();
 
@@ -1359,7 +1340,7 @@ export default function ConversationsPage() {
 // 订阅/选择器/草稿/编辑态/三个会话级对话框全部收进本组件,以 conversationId 为参数——
 // 双栏/三栏 = 渲染多个实例。流订阅(entries 多路)与草稿(drafts 按会话键)天然隔离,
 // 打字/流式只重渲染所属列。页面层只保留侧栏、容器标签、热键、工作台等全局职责。
-// K 轮一级并排:列 = (容器, 容器内窗格下标),故容器归属由 props 显式传入。
+// L 轮一级分栏:列 = (容器, 容器内窗格下标),故容器归属由 props 显式传入。
 
 type CurrentAssistantValue = ReturnType<typeof useCurrentAssistant>["currentAssistant"];
 
@@ -1865,7 +1846,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
     [activeAssistantForConversation?.allowConversationSystemPrompt, activeId, refreshList],
   );
 
-  // 拖拽落点(J 轮二级 + K 轮一级统一到一套三分区):拖动标签悬停内容区时
+  // 拖拽落点(J 轮二级 + L 轮一级统一到一套三分区):拖动标签悬停内容区时
   // 左/中/右 三区高亮 —— 左/右 = 在本列左/右侧拆出新列,中 = 并入本列。
   // 二级载荷(会话标签)在本容器内分栏/移动;一级载荷(容器)拆出/并入"组"——
   // 与二级完全同构:中区 = 并入本组(组焦点换成它),左右 = 带着自己的会话标签
@@ -1896,7 +1877,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         store.focusPane(container, paneIndex);
         store.activateContainer(payload.container);
       } else {
-        store.mergeContainer(payload.container); // 已在屏上 → 先脱离原组再落位
+        // 拖出成新组:从原组移除(原组空了即消失)再落到本组左/右。
         if (!store.splitContainerBeside(payload.container, container, zone === "left" ? "left" : "right")) {
           // 可见列已满:说明原因,别静默吞掉用户的操作。
           toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
@@ -1944,13 +1925,6 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
   );
   const overlayTop = dragPayload?.kind === "conversation" && hasTabStrip ? "top-9" : "top-0";
 
-  // 组焦点标签 = 组面板色胶囊;覆盖层把这条胶囊行让出来,使容器拖拽落在胶囊上
-  // 就命中"并入本组"(中区),行以下的内容区才分三区。
-  const showGroupHeader = useContainerTabsStore(
-    (state) =>
-      state.groups.length > 1 && state.groups.includes(container) && container !== state.activeTab,
-  );
-
   return (
     <PaneContainerProvider container={container}>
     <div
@@ -1967,32 +1941,6 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
             }
       }
     >
-      {showGroupHeader ? (
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0 z-40 flex h-9 items-start px-3 pt-[7px]"
-          onDragOver={(event) => {
-            const dragging = useTabDragStore.getState().dragging;
-            if (dragging?.kind !== "container" || dragging.container === container) return;
-            // 胶囊行整行 = "并入本组"(content-box 不拦指针,命中时由自己接管)。
-            event.preventDefault();
-            event.stopPropagation();
-            event.currentTarget.style.pointerEvents = "auto";
-            setDropZone("center");
-          }}
-          onDragLeave={(event) => {
-            event.currentTarget.style.pointerEvents = "";
-            setDropZone(null);
-          }}
-          onDrop={(event) => {
-            event.currentTarget.style.pointerEvents = "";
-            handleZoneDrop(event);
-          }}
-        >
-          <div className="flex h-7 max-w-[65%] items-center gap-1.5 rounded-full bg-[var(--ds-on-surface)] px-2.5 text-compact font-medium text-[var(--ds-text-secondary)] shadow-[var(--ds-elevation-100)]">
-            <GroupFocusLabel container={container} />
-          </div>
-        </div>
-      ) : null}
       {/* 分栏时标出焦点列:顶缘一道品牌色细线。焦点决定路由、侧栏、热键与全局拖放的
           落点,用户必须随时知道"我现在在哪一栏";用发丝线而非底色/描边,才不会与
           面板本身的层次语言打架。单列时整屏就是焦点,不画。 */}
@@ -2106,10 +2054,7 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         // 落点提示层:三区等分,命中区亮起品牌色薄底 + 描边,并给一句"放手会发生什么"。
         // 只在本列接受当前拖拽时挂载 —— 不接受时既不拦指针也不亮,用户能看出此处不可放。
         <div
-          className={cn(
-            "absolute inset-x-0 bottom-0 z-30",
-            dragPayload?.kind === "container" && showGroupHeader ? "top-9" : overlayTop,
-          )}
+          className={cn("absolute inset-x-0 bottom-0 z-30", overlayTop)}
           onDragOver={(event) => {
             event.preventDefault();
             setDropZone(resolveDropZone(event));
@@ -2360,13 +2305,23 @@ function ConversationsPageInner() {
     [activeContainer, conversations],
   );
 
-  // 分栏(K 轮组模型):屏幕列 = 各组焦点容器 × 各自窗格,摊平后左→右渲染。焦点列的
+  // 分栏(L 轮分区模型):屏幕列 = 各组焦点容器 × 各自窗格,摊平后左→右渲染。焦点列的
   // 会话以路由为权威,其余列用各自窗格的激活标签。
   // 订阅整个 panes(而非只订阅激活容器的):分栏后同屏有多个容器的窗格,都要参与摊平。
   // 代价可忽略——panes 只在用户开/关/拖标签时变,那些动作本就伴随导航重渲染。
   const groups = useContainerTabsStore((state) => state.groups);
+  const openTabs = useContainerTabsStore((state) => state.openTabs);
   const panesRecord = useContainerTabsStore((state) => state.panes);
-  const columns = React.useMemo(() => flattenColumns(groups, panesRecord), [groups, panesRecord]);
+  const columns = React.useMemo(
+    () => flattenColumns(groups, panesRecord, activeContainer),
+    [groups, panesRecord, activeContainer],
+  );
+  // 幽灵标签(开着的容器不在任何组):缀在全局焦点组的标签栏尾部渲染,保持可见可点;
+  // 其它组的条不收容它们,免得用户切焦点组时标签跟着乱跳。
+  const ghostTabs = React.useMemo(
+    () => openTabs.filter((key) => !groups.some((group) => group.includes(key))),
+    [openTabs, groups],
+  );
   const focusedPaneIndex = useContainerTabsStore((state) => {
     const count = state.panes[state.activeTab]?.length ?? 1;
     return Math.max(0, Math.min(state.focusedPane[state.activeTab] ?? 0, count - 1));
@@ -2574,6 +2529,8 @@ function ConversationsPageInner() {
   const workbenchPanelRef = React.useRef<PanelImperativeHandle | null>(null);
   // 用户上次调整的工作台宽度(占组宽百分比),关闭再打开时恢复。
   const workbenchWidthRef = React.useRef(WORKBENCH_DEFAULT_WIDTH_PCT);
+  // 一级分栏的组面板组:新组成立即与它组等宽(用户抱怨"拆完两栏不对称")。
+  const outerGroupRef = React.useRef<GroupImperativeHandle | null>(null);
 
   // 工作台开合的根治方案(用户反馈:关闭后空间不回收/拖到边缘后重开只剩一条缝):
   // react-resizable-panels v4 的三个坑一起踩过——
@@ -2596,6 +2553,33 @@ function ConversationsPageInner() {
       workbenchPanel.resize("0%");
     }
   }, [panel, isMobile]);
+
+  // 一级分栏对称初值(用户反馈:拖出一级分栏后两栏不是默认对称摆放):
+  // v4 的动态面板仅保证 minSize 合规,新组会按比例摊薄既有宽度(如 95/5 拆成 90/5/5)。
+  // 只在"组数变多"且用户没拖过分隔条(layout 仍全员等宽)时重铺等宽;用户已拖过的
+  // 布局原样尊重。effect 里的 setLayout 已保证此刻所有面板都注册完毕。
+  const groupsCountRef = React.useRef(groups.length);
+  React.useEffect(() => {
+    if (isMobile) return;
+    const grew = groups.length > groupsCountRef.current;
+    groupsCountRef.current = groups.length;
+    if (!grew || groups.length < 2) return;
+    const group = outerGroupRef.current;
+    if (!group) return;
+    const layout = group.getLayout();
+    const workbench = hasWorkbenchPanel ? Math.max(0, layout["workbench-panel"] ?? 0) : 0;
+    const ids = groups.map((_, gi) => `group-panel-${gi}`);
+    const sizes = ids.map((id) => layout[id] ?? NaN);
+    const alreadyEqual = sizes.every(
+      (size) => Number.isFinite(size) && Math.abs(size - sizes[0]!) < 0.5,
+    );
+    // 面板可能尚未注册(组数刚变的第一帧):缺哪块就跳过,等下一次布局变化再说,
+    // 绝不写半截布局(见下"5% 裂条"风险)。
+    if (!sizes.every((size) => Number.isFinite(size))) return;
+    if (!alreadyEqual) return;
+    const share = (100 - workbench) / ids.length;
+    group.setLayout(Object.fromEntries(ids.map((id) => [id, share])));
+  }, [groups, isMobile, hasWorkbenchPanel]);
 
   // 全局拖放附件落进聚焦窗格的草稿(草稿键推导与窗格内 useDraftInputController 一致)。
   const focusedDraftKey = activeId ?? (isHomeRoute ? homeDraftId : null);
@@ -2694,16 +2678,21 @@ function ConversationsPageInner() {
         {/* NewMax 内容列 = on-surface 着色 wrapper(撞色带):一级标签行浮在带顶,
             下方白面板盖住其余部分,于是"带"只在标签行处露出;四周 SidebarInset 的
             pt/pr/pb/pl 留出画布边距(左侧即侧栏与面板之间的 gap)。
-            K 轮组模型:分栏时每组是一块同款"撞色带 + 白面板"的独立单元(自己的一级
-            标签栏 + 自己的内容列),与二级分栏"每列一条会话标签栏"同构;组间由画布色
-            缝隙分隔 —— "两个组"是比"同组两列"更重的边界。 */}
+            L 轮分区模型:分栏时每组是一块同款"撞色带 + 白面板"的独立单元(自己的一级
+            标签栏只列本组成员 + 自己的内容列),与二级分栏"每列一条会话标签栏"同构;
+            组间由画布色缝隙分隔 —— "两个组"是比"同组两列"更重的边界。 */}
         {groups.length === 1 || isMobile ? (
           <div className="relative isolate flex min-h-0 flex-1 flex-col rounded-[18px] bg-[var(--ds-on-surface)] pt-[2px]">
             {/* 一级容器标签行:窗控/拖拽由上方 WindowControlsBar 负责,本行纯交互。 */}
             <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
               <CollapsedSidebarTrigger />
               <div className="relative flex h-full min-w-0 flex-1 items-end">
-                <ContainerTabBar container={groups[0] ?? CHAT_CONTAINER} headerTrailing={<ContainerPlusMenu />} />
+                <ContainerTabBar
+                  group={groups[0] ?? [CHAT_CONTAINER]}
+                  groupIndex={0}
+                  ghostTabs={ghostTabs}
+                  headerTrailing={<ContainerPlusMenu />}
+                />
               </div>
             </div>
             {/* 白色圆角内容面板:surface-200 底 + elevation-100,盖住撞色带主体,
@@ -2777,18 +2766,22 @@ function ConversationsPageInner() {
             </div>
           </div>
         ) : (
-          // 组模型分栏:每组 = 撞色带 wrapper(自己的一级标签栏)+ 白面板(该组焦点容器的
-          // 二级列);工作台面板与组并列可调。"新建容器"入口只在全局焦点组的标签栏上。
-          <ResizablePanelGroup orientation="horizontal" className="relative isolate flex min-h-0 flex-1">
-            {groups.map((groupContainer, groupIndex) => {
-              const groupColumns = columns.filter((column) => column.container === groupContainer);
+          // L 轮分区模型分栏:每组 = 撞色带 wrapper(自己的一级标签栏,渲染本组全部
+          // 标签)+ 白面板(该组焦点容器的二级列);工作台面板与组并列可调。"新建容器"
+          // 入口只在全局焦点组的标签栏上。
+          <ResizablePanelGroup orientation="horizontal" className="relative isolate flex min-h-0 flex-1" groupRef={outerGroupRef}>
+            {groups.map((group, groupIndex) => {
+              const focus = group.includes(activeContainer) ? activeContainer : group[0]!;
+              const groupColumns = columns.filter((column) => column.container === focus);
               return (
-                <React.Fragment key={groupContainer}>
+                // 面板 id 按下标而非焦点容器命名:焦点容器随用户点击切换,若 id 跟着换,
+                // v4 视作新面板注册,宽度记忆全丢。
+                <React.Fragment key={groupIndex}>
                   {groupIndex > 0 ? (
                     <ResizableHandle className="w-1.5 bg-transparent after:w-1.5" />
                   ) : null}
                   <ResizablePanel
-                    id={`group-${groupContainer}`}
+                    id={`group-panel-${groupIndex}`}
                     minSize="18%"
                     className="flex min-h-0 flex-col"
                   >
@@ -2796,8 +2789,10 @@ function ConversationsPageInner() {
                       <div className="flex h-[31px] shrink-0 items-end gap-1 px-1">
                         <div className="relative flex h-full min-w-0 flex-1 items-end">
                           <ContainerTabBar
-                            container={groupContainer}
-                            headerTrailing={groupContainer === activeContainer ? <ContainerPlusMenu /> : null}
+                            group={group}
+                            groupIndex={groupIndex}
+                            ghostTabs={group.includes(activeContainer) ? ghostTabs : []}
+                            headerTrailing={group.includes(activeContainer) ? <ContainerPlusMenu /> : null}
                           />
                         </div>
                       </div>

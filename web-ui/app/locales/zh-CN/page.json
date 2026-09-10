@@ -143,10 +143,10 @@
       "rename_placeholder": "输入新标题…",
       "rename_failed": "重命名失败",
       "cache_hit_rate": "会话缓存命中率：{{rate}}%",
-      "unsplit": "合并回标签栏",
+      "unsplit": "移出分栏",
       "ctx_split_left": "分栏到左侧",
       "ctx_split_right": "分栏到右侧",
-      "ctx_unsplit": "合并回标签栏",
+      "ctx_unsplit": "移出分栏",
       "split_full": "最多同时分栏 {{max}} 列，请先关掉一列",
       "drop_hint_split": "在此侧拆出新栏",
       "drop_hint_merge": "并入这一栏"

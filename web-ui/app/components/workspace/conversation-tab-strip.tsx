@@ -33,7 +33,7 @@ import type { ConversationListDto } from "~/types";
 // 路由 /c/:id 是权威,这里只发导航,由路由同步效应回写状态。
 // G4:右键菜单五项(重命名/关闭/关闭其他/关闭右侧/关闭全部,NewMax 对位);
 // G5:悬停用自定义 Tooltip 展示完整标题(替代原生 title)。
-// K 轮组模型:一级分栏后同屏有多个容器的标签行,容器归属由 props 显式传入,
+// L 轮分区模型:一级分栏后同屏有多个容器的标签行,容器归属由 props 显式传入,
 // 不读全局 activeTab —— 非聚焦列的标签行也要能正确寻址自己的窗格。
 
 const EMPTY_TABS: string[] = [];
@@ -97,7 +97,7 @@ export function ConversationTabStrip({
   trailing,
   onRename,
 }: {
-  /** 本标签行所属容器(K 轮组模型:同屏可有多个容器)。 */
+  /** 本标签行所属容器(L 轮分区模型:同屏可有多个容器)。 */
   container: ContainerKey;
   conversations: ConversationListDto[];
   /** 本标签行在所属容器内的窗格下标。 */

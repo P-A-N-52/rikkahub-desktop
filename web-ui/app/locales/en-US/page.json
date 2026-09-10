@@ -143,10 +143,10 @@
       "rename_placeholder": "Enter a new title…",
       "rename_failed": "Rename failed",
       "cache_hit_rate": "Session cache hit rate: {{rate}}%",
-      "unsplit": "Merge back into the tab bar",
+      "unsplit": "Move out of split",
       "ctx_split_left": "Split to the Left",
       "ctx_split_right": "Split to the Right",
-      "ctx_unsplit": "Merge back into the tab bar",
+      "ctx_unsplit": "Move out of split",
       "split_full": "At most {{max}} columns side by side — close one first",
       "drop_hint_split": "Open a new column here",
       "drop_hint_merge": "Move into this column"

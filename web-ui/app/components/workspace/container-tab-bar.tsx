@@ -49,14 +49,13 @@ import { useWorkspaceStore } from "~/stores/workspace-store";
 import type { WorkspaceDto } from "~/types";
 
 // 一层容器标签栏(工作区 M2-1;前端重构A1 复刻 NewMax 浏览器式页签):
-// 组焦点标签白底上圆角,与下方组内容面板连成一体;同组的非焦点标签为该组面板色
-// 胶囊(淡一个层级);不在任何组的标签是画布上的幽灵态。中键/×关闭(仅收起);
-// 拖拽排序;Ctrl+Tab 循环;溢出横滚。
-// K 轮组模型:每个组分栏各挂一条本组件(container = 该组焦点容器),标签栏只高亮
-// 自己组的成员 —— 与二级分栏"每列一条会话标签栏"同构。新建入口只在全局焦点组
-// (activeTab 所在组)的条上渲染,其余组收到 null。
-// 拖拽:在标签上悬停 = 组内重排;落进组的空白处 = 并入该组;落到组内容区边缘 =
-// 拆出新组(落点区在 conversations.tsx)。
+// 本组焦点标签白底上圆角、与下方组内容面板连成一体;同组的非焦点标签是该组面板色
+// 胶囊(淡一个层级)。中键/×关闭(仅收起);拖拽排序;Ctrl+Tab 循环;溢出横滚。
+// L 轮分区模型:每个组分栏各挂一条本组件(group = 本组的标签列表),标签栏只渲染
+// 自己组的成员 —— 与二级分栏"每列一条会话标签栏"完全同构。开着的幽灵容器(不在任何组)
+// 由全局焦点组的条缀在尾部渲染(ghostTabs),点击 = 接替该组席位上屏。
+// 拖拽:悬停标签 = 组内重排/跨组插入(方向感知);落进组的空白处 = 并入该组尾部;
+// 落到组内容区边缘 = 拆出新组(落点区在 conversations.tsx)。
 
 /** 点击/循环切换容器:激活并导航到该容器上次停留的会话(无则回"新对话"首页)。 */
 function navigateToContainer(key: ContainerKey, navigate: (to: string) => void) {
@@ -79,26 +78,18 @@ function navigateToActiveContainer(navigate: (to: string) => void) {
   navigate(conversationId ? `/c/${conversationId}` : "/");
 }
 
-/** 把 key 移到 anchor 的左/右侧(anchor 不在列表内则原样返回拷贝)。 */
-function moveBeside(
-  list: readonly ContainerKey[],
-  key: ContainerKey,
-  anchor: ContainerKey,
-  side: "left" | "right",
-): ContainerKey[] {
-  const rest = list.filter((item) => item !== key);
-  const at = rest.indexOf(anchor);
-  if (at < 0) return [...list];
-  rest.splice(side === "left" ? at : at + 1, 0, key);
-  return rest;
-}
-
 export function ContainerTabBar({
-  container,
+  group,
+  groupIndex,
+  ghostTabs = [],
   headerTrailing = null,
 }: {
-  /** 本标签栏所属组的焦点容器(组模型:每组分栏一条标签栏)。 */
-  container: ContainerKey;
+  /** 本标签栏所属组的标签列表(分区模型:每组分栏一条标签栏,只渲染本组成员)。 */
+  group: ContainerKey[];
+  /** 本组在 groups 里的下标(拖拽并入/移出按它寻址)。 */
+  groupIndex: number;
+  /** 缀在本组尾部的幽灵标签(开着的容器不在任何组;点击 = 接替本组席位上屏)。 */
+  ghostTabs?: ContainerKey[];
   /** 行尾动作位(全局焦点组挂"新建"入口,其余组为 null)。 */
   headerTrailing?: React.ReactNode;
 }) {
@@ -107,9 +98,9 @@ export function ContainerTabBar({
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const loaded = useWorkspaceStore((state) => state.loaded);
   const refresh = useWorkspaceStore((state) => state.refresh);
-  const openTabs = useContainerTabsStore((state) => state.openTabs);
-  const groups = useContainerTabsStore((state) => state.groups);
-  const groupIndex = groups.indexOf(container);
+  const openTabsCount = useContainerTabsStore((state) => state.openTabs.length);
+  const activeTab = useContainerTabsStore((state) => state.activeTab);
+  const groupsCount = useContainerTabsStore((state) => state.groups.length);
   const [dragKey, setDragKey] = React.useState<ContainerKey | null>(null);
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false);
   // 信任门目标 + 拒绝语义:创建流拒绝=删除记录;重开已有未信任工作区拒绝=仅关门。
@@ -171,26 +162,26 @@ export function ContainerTabBar({
     [navigate],
   );
 
-  // K 轮组模型:把容器拆到本组左/右侧成新组(右键菜单入口;拖拽入口在内容区落点区)。
+  // L 轮分区模型:把容器拆到本组左/右侧成新组(右键菜单入口;拖拽入口在内容区落点区)。
   // 已在屏上的容器先脱离原位再落位(横移);拒绝 = 可见列已满,给出可行动提示。
   const splitContainerBeside = React.useCallback(
     (key: ContainerKey, side: "left" | "right") => {
       const store = useContainerTabsStore.getState();
-      if (key === container) return;
-      store.mergeContainer(key); // 已在屏上 → 先脱离原组,再落到目标侧
-      if (!store.splitContainerBeside(key, container, side)) {
+      if (group.includes(key)) return;
+      const anchor = group.includes(activeTab) ? activeTab : group[0]!;
+      if (!store.splitContainerBeside(key, anchor, side)) {
         toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
         return;
       }
       navigateToContainer(key, navigate);
     },
-    [container, navigate, t],
+    [group, activeTab, navigate, t],
   );
 
-  // 合并:容器退出分栏、回到标签栏里,由邻组接管显示(标签不关、二层状态保留)。
-  const mergeContainerTab = React.useCallback(
+  // 移出分栏:容器脱离本组、回到幽灵态,由焦点组接管显示(标签不关、二层状态保留)。
+  const unsplitContainerTab = React.useCallback(
     (key: ContainerKey) => {
-      if (useContainerTabsStore.getState().mergeContainer(key)) {
+      if (useContainerTabsStore.getState().unsplitContainer(key)) {
         navigateToActiveContainer(navigate);
       }
     },
@@ -268,9 +259,77 @@ export function ContainerTabBar({
     [navigate],
   );
 
-  // NewMax getTabWidthCalc:页签宽度随数量在 58~172px 间按容器宽均分(容器查询
+  // NewMax getTabWidthCalc:页签宽度随本组标签数在 58~172px 间按容器宽均分(容器查询
   // cqw),预留 77px 给 "+" 钮、边距与首标签 13px 左位——多开标签时像浏览器一样逐渐收窄。
-  const tabWidthCalc = `clamp(58px, calc((100cqw - ${77 + Math.max(0, openTabs.length - 1) * 3}px) / ${Math.max(1, openTabs.length)}), 172px)`;
+  // 幽灵标签缀在本组尾部,一并计入宽度。
+  const visibleCount = group.length + ghostTabs.length;
+  const tabWidthCalc = `clamp(58px, calc((100cqw - ${77 + Math.max(0, visibleCount - 1) * 3}px) / ${Math.max(1, visibleCount)}), 172px)`;
+
+  // 标签渲染三态与成员资格无关,全看 active/inGroup 入参:组焦点标签连体、
+  // 组内非焦点胶囊、幽灵画布色。成员行与幽灵行只差这一组入参,其余回调完全一致。
+  const renderTab = (key: ContainerKey, opts: { inGroup: boolean; indexInRow: number; activeFirst: boolean }) => (
+    <ContainerTab
+      key={key}
+      containerKey={key}
+      workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
+      width={tabWidthCalc}
+      active={key === activeTab}
+      /** 本组的非焦点标签:组面板色胶囊(它的列也在屏上),弱于焦点态。 */
+      inGroup={opts.inGroup}
+      closable={openTabsCount > 1}
+      hasOthers={openTabsCount > 1}
+      hasRight={opts.indexInRow < visibleCount - 1}
+      splitable={!group.includes(key)}
+      unsplitable={groupsCount > 1 && group.includes(key)}
+      dragging={dragKey === key}
+      /** 激活连体标签的左反圆角溢出会盖住左侧不属于本组的标签:仅当它是本组首枚
+          (溢出落在面板左缘,左侧邻居要么没有、要么也是本组)才安全,否则退化为普通圆角。 */
+      activeFirst={opts.activeFirst}
+      onActivate={() => activateGuarded(key)}
+      onClose={() => closeTab(key)}
+      onCloseOthers={() => closeTabsBatch("others", key)}
+      onCloseRight={() => closeTabsBatch("right", key)}
+      onCloseAll={() => closeTabsBatch("all", key)}
+      onSplitRight={() => splitContainerBeside(key, "right")}
+      onSplitLeft={() => splitContainerBeside(key, "left")}
+      onUnsplit={() => unsplitContainerTab(key)}
+      onEdit={
+        key === CHAT_CONTAINER
+          ? undefined
+          : () => {
+              const workspace = workspaceById.get(key);
+              if (workspace) openEditDialog(workspace);
+            }
+      }
+      onReveal={
+        key === CHAT_CONTAINER
+          ? undefined
+          : () => {
+              const workspace = workspaceById.get(key);
+              if (workspace) revealWorkspace(workspace);
+            }
+      }
+      onDragStart={() => {
+        setDragKey(key);
+        // 载荷入内存 store(dataTransfer 在 dragover 阶段读不到):落到组内容区
+        // 边缘 = 拆新组;落到组标签栏空白处 = 并入该组(见 conversations.tsx)。
+        useTabDragStore.getState().setDragging({ kind: "container", container: key });
+      }}
+      onDragEnd={() => {
+        setDragKey(null);
+        useTabDragStore.getState().setDragging(null);
+      }}
+      onDragOverTab={(event) => {
+        // 悬停标签 = 组内重排/跨组插入(方向感知)。事件就地消化,不冒泡成"并入本组"。
+        if (!dragKey || dragKey === key) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const side = event.clientX < rect.left + rect.width / 2 ? "left" : "right";
+        useContainerTabsStore.getState().moveContainerBeside(dragKey, key, side);
+      }}
+    />
+  );
 
   return (
     <div
@@ -281,84 +340,32 @@ export function ContainerTabBar({
       <div
         className="flex h-full min-w-0 items-end gap-[3px] overflow-x-auto pl-[13px] [scrollbar-width:none]"
         onDragOver={(event) => {
-          // 落进本组空白处 = 并入本组(组焦点换成它);等效于点标签,只是顺手一放。
-          // 标签自身的 onDragOver 处理组内重排,已 stopPropagation 不会走到这里。
+          // 落进本组空白处 = 并入本组尾部(组焦点换成它);等效于点标签,只是顺手一放。
+          // 标签自身的 onDragOver 处理组内重排/跨组插入,已 stopPropagation 不会走到这里。
           const dragging = useTabDragStore.getState().dragging;
-          if (dragging?.kind === "container" && dragging.container !== container) {
+          if (dragging?.kind === "container" && !group.includes(dragging.container)) {
             event.preventDefault();
           }
         }}
         onDrop={(event) => {
           const dragging = useTabDragStore.getState().dragging;
-          if (dragging?.kind !== "container" || dragging.container === container) return;
+          if (dragging?.kind !== "container" || group.includes(dragging.container)) return;
           event.preventDefault();
           useTabDragStore.getState().setDragging(null);
           setDragKey(null);
-          navigateToContainer(dragging.container, navigate);
+          const store = useContainerTabsStore.getState();
+          // 并入本组尾部:已在别组 → 组间移动;幽灵态 → 直接并入(不用激活顶替席位)。
+          if (store.moveContainerToGroup(dragging.container, groupIndex)) {
+            navigateToActiveContainer(navigate);
+          }
         }}
       >
-        {openTabs.map((key, index) => (
-          <ContainerTab
-            key={key}
-            containerKey={key}
-            workspace={key === CHAT_CONTAINER ? null : (workspaceById.get(key) ?? null)}
-            width={tabWidthCalc}
-            active={key === container}
-            /** 本组的非焦点标签:组面板色胶囊(它的列也在屏上),弱于焦点态。 */
-            inGroup={key !== container && groupIndex >= 0 && groups[groupIndex] === key}
-            closable={openTabs.length > 1}
-            hasOthers={openTabs.length > 1}
-            hasRight={index < openTabs.length - 1}
-            splitable={key !== container}
-            unsplitable={groupIndex >= 0 && groups[groupIndex] === key && groups.length > 1}
-            dragging={dragKey === key}
-            onActivate={() => activateGuarded(key)}
-            onClose={() => closeTab(key)}
-            onCloseOthers={() => closeTabsBatch("others", key)}
-            onCloseRight={() => closeTabsBatch("right", key)}
-            onCloseAll={() => closeTabsBatch("all", key)}
-            onSplitRight={() => splitContainerBeside(key, "right")}
-            onSplitLeft={() => splitContainerBeside(key, "left")}
-            onUnsplit={() => mergeContainerTab(key)}
-            onEdit={
-              key === CHAT_CONTAINER
-                ? undefined
-                : () => {
-                    const workspace = workspaceById.get(key);
-                    if (workspace) openEditDialog(workspace);
-                  }
-            }
-            onReveal={
-              key === CHAT_CONTAINER
-                ? undefined
-                : () => {
-                    const workspace = workspaceById.get(key);
-                    if (workspace) revealWorkspace(workspace);
-                  }
-            }
-            onDragStart={() => {
-              setDragKey(key);
-              // 载荷入内存 store(dataTransfer 在 dragover 阶段读不到):落到组内容区
-              // 边缘 = 拆新组;落到组标签栏空白处 = 并入该组(见 conversations.tsx)。
-              useTabDragStore.getState().setDragging({ kind: "container", container: key });
-            }}
-            onDragEnd={() => {
-              setDragKey(null);
-              useTabDragStore.getState().setDragging(null);
-            }}
-            onDragOverTab={(event) => {
-              // 组内重排只在本组成员间发生;事件就地消化,不冒泡成"并入本组"。
-              if (groupIndex < 0) return;
-              const member = groups[groupIndex]!;
-              if (!dragKey || dragKey === key || dragKey === container || dragKey === member) {
-                return;
-              }
-              event.stopPropagation();
-              const to = moveBeside(openTabs, dragKey, member, index > groupIndex ? "right" : "left");
-              useContainerTabsStore.getState().setOpenTabsOrder(to);
-            }}
-          />
-        ))}
+        {group.map((key, index) => renderTab(key, { inGroup: key !== activeTab, indexInRow: index, activeFirst: index === 0 }))}
+        {/* 幽灵标签:开着的容器不在任何组。缀在全局焦点组尾部保持可见可点(画布色,
+            点击 = 接替本组席位上屏);不挪进其它组的条,免得用户切焦点组时标签乱飞。 */}
+        {ghostTabs.map((key, index) =>
+          renderTab(key, { inGroup: false, indexInRow: group.length + index, activeFirst: false }),
+        )}
       </div>
 
       {headerTrailing}
@@ -475,6 +482,7 @@ function ContainerTab({
   splitable,
   unsplitable,
   dragging,
+  activeFirst = true,
   onActivate,
   onClose,
   onCloseOthers,
@@ -499,9 +507,14 @@ function ContainerTab({
   closable: boolean;
   hasOthers: boolean;
   hasRight: boolean;
+  /** 可"分栏到左/右":不在本组(含幽灵态)。 */
   splitable: boolean;
+  /** 可"移出分栏":分栏中且是本组成员(幽灵已不在组,无可退)。 */
   unsplitable: boolean;
   dragging: boolean;
+  /** 激活标签是否是本组首枚:连体反圆角左溢 13px,左侧邻居不是本组成员时溢出会
+      盖住它 → 退化为普通圆角(见 ContainerTab 实现)。 */
+  activeFirst?: boolean;
   onActivate: () => void;
   onClose: () => void;
   onCloseOthers: () => void;
@@ -524,11 +537,12 @@ function ContainerTab({
   const Icon = isChat ? MessageSquare : workspace?.type === "folder" ? FolderOpen : Folder;
   // NewMax WorkspaceTab 原样移植:28px 高页签,焦点标签与下方组面板(surface-200)连体——
   // 底部 3px 连接条 + 两侧 radial-gradient 反圆角(R=13),白色顶内衬制造受光面。
-  // 组模型的三态:连体(本组焦点)> 面板色胶囊(本组成员,它的列也在屏上)> 幽灵。
-  // 连体造型每组只有一份,且组焦点标签恒为本组首枚,其左侧必是本组面板的左缘——
-  // 反圆角溢出的 13px 永远落在自己组的面板上,不会渗进别组的幽灵标签底下。
+  // 分区模型的三态:连体(全局焦点)> 面板色胶囊(本组成员)> 画布幽灵(它组标签)。
+  // 连体反圆角左右各溢 13px:右溢永远落在本组面板/邻组胶囊上,安全;左溢仅当本标签
+  // 是组首枚(左侧紧邻要么不存在、要么也是本组胶囊)才不盖住别组幽灵——否则退化圆角。
   const TAB_CORNER_R = 13;
   const docked = inGroup;
+  const cornerClip = active ? `inset(-2px -15px -2px ${activeFirst ? "-15px" : "0px"})` : undefined;
   return (
     <ContextMenu>
       <Tooltip delayDuration={800}>
@@ -553,13 +567,15 @@ function ContainerTab({
       onDragOver={(event) => {
         onDragOverTab(event);
       }}
-      className={cn("relative shrink-0 select-none pb-[3px]", dragging && "opacity-60")}
+      className={cn("relative shrink-0 select-none pb-[3px]", dragging && "invisible")}
       style={{
         width,
+        // 拖动中原生拖影会让标签原地显形,隐藏本体 —— 落点即所见,激活标签也能拖走。
+        ...(dragging ? { visibility: "hidden" as const } : {}),
         ...(active
           ? {
               filter: "drop-shadow(rgba(0, 0, 0, 0.08) 0px 0px 0.5px)",
-              clipPath: "inset(-2px -15px -2px -15px)",
+              clipPath: cornerClip,
             }
           : undefined),
       }}
@@ -599,16 +615,18 @@ function ContainerTab({
       {active ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center">
           <div className="h-[3px] flex-1 bg-[var(--ds-surface-200)]" />
-          <div
-            className="absolute"
-            style={{
-              left: -TAB_CORNER_R,
-              bottom: -2,
-              width: TAB_CORNER_R,
-              height: TAB_CORNER_R + 2,
-              background: `radial-gradient(circle ${TAB_CORNER_R}px at 0 0, transparent ${TAB_CORNER_R - 0.5}px, var(--ds-surface-200) ${TAB_CORNER_R}px)`,
-            }}
-          />
+          {activeFirst ? (
+            <div
+              className="absolute"
+              style={{
+                left: -TAB_CORNER_R,
+                bottom: -2,
+                width: TAB_CORNER_R,
+                height: TAB_CORNER_R + 2,
+                background: `radial-gradient(circle ${TAB_CORNER_R}px at 0 0, transparent ${TAB_CORNER_R - 0.5}px, var(--ds-surface-200) ${TAB_CORNER_R}px)`,
+              }}
+            />
+          ) : null}
           <div
             className="absolute"
             style={{
@@ -643,8 +661,9 @@ function ContainerTab({
             <ContextMenuSeparator />
           </>
         ) : null}
-        {/* K 轮组模型:键鼠/无障碍等价路径(拖拽是主交互,但不能是唯一交互)。
-            "分栏到左/右" 以本组焦点容器为锚点;本标签是组焦点时改为"合并回标签栏"。 */}
+        {/* L 轮分区模型:键鼠/无障碍等价路径(拖拽是主交互,但不能是唯一交互)。
+            本组成员 → "移出分栏"(回幽灵态,标签仍开);其它标签(含幽灵)→
+            "分栏到左/右",以本组焦点容器为锚点。 */}
         {unsplitable ? (
           <ContextMenuItem onSelect={onUnsplit}>
             <Columns2 className="size-4" strokeWidth={1.75} />
