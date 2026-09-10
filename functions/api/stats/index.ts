@@ -286,7 +286,16 @@ export const onRequest = async (context) => {
       qualityTrend: qualityRaw.results ?? [],
       countryDist,
       filter: { os: osFilter, version: verFilter, segment, range: daysRaw, startDate, asOf: today },
-    }), { headers: { "Content-Type": "application/json" } });
+    }), {
+      headers: {
+        "Content-Type": "application/json",
+        // 防刷新打爆 D1 日额度(免费版 rows read 5M/天,UTC 零点重置):60s 内的
+        // 重复刷新走浏览器本地缓存。用 private 而非 s-maxage——本端点靠 cookie/token
+        // 鉴权,public/s-maxage 会把鉴权内容存进 CDN 共享缓存,同 URL 的未授权访客
+        // 在缓存期内能直接读到;private 只进用户自己的浏览器,无此泄露面。
+        "Cache-Control": "private, max-age=60",
+      },
+    });
   } catch (err) {
     console.error("stats error:", err);
     // 不把后端错误细节透出到页面。
