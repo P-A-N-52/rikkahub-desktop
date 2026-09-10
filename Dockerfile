@@ -28,14 +28,21 @@ RUN bun install
 # Build web-ui SPA
 COPY web-ui/ ./
 
-# Bun 1.4.0 起 react-dom 的 bun 条件导出不再阻断 React Router 的 SSR build
-# 步骤(缺 renderToPipeableStream 的旧软链 workaround 已删,实测两种形态全绿)。
+# Build web-ui SPA
+COPY web-ui/ ./
+
+# react-dom 19.2.4 的 server.bun.js 缺 renderToPipeableStream,用 node 入口覆盖它。
+RUN cd node_modules/react-dom && cp server.node.js server.bun.js
+
 RUN bun run build
 
 # pi/ 是 gitignore 的本地浅克隆(vendored 源码),不进构建上下文。pc-server 直接
 # import 其 TS 源码,缺它 bun build --compile 第一步解析 import 即失败。
 # 按 CLAUDE.md「pi vendor 维护手册」重建:浅克隆上游基线 + 应用 pi-patches/*.patch。
 # --no-install-recommends 防止 bookworm-slim 带 ca-certificates 缺失导致 https clone 失败。
+# 装 pi 自己的依赖(proper-lockfile/typebox/openai 等,bun build 会把它们一并打包)。
+# packages/ai/src/providers/data/.manifest.json 是构建期生成物、git 不跟踪,
+# 由 generate-models 从 models.dev 拉取生成。
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -44,7 +51,9 @@ COPY pi-patches/ ./pi-patches/
 RUN git clone --filter=blob:none --no-checkout https://github.com/earendil-works/pi.git pi && \
     cd pi && \
     git checkout 5cd93f688aaab89dbb6dfa4aca535f21796ae185 && \
-    git -c user.name=ci -c user.email=ci@local am ../pi-patches/*.patch
+    git -c user.name=ci -c user.email=ci@local am ../pi-patches/*.patch && \
+    bun install && \
+    cd packages/ai && bun run generate-models
 
 # Compile server — cross-compile to match the runtime platform.
 # Lay out a separate /build/pc-server subtree so we don't mix the pc-server lockfile
