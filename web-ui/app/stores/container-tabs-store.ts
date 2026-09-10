@@ -140,9 +140,9 @@ export function flattenColumns(
 }
 
 /** 同组的另一个成员(任一即可)——"把某容器从本组拆出去"要用同组兄弟当锚点:
-    屏上的列都属于各组焦点容器,拖焦点标签时它悬停到的就是自己的列,拿自己当锚点会被
-    `key === anchor` 挡掉。返回 null = 本组只有它自己(已是独立组,无可拆)。
-    落点按组粒度计算(锚点组的左/右),所以取哪个兄弟都等价。 */
+    屏上的列都属于各组焦点容器,拖焦点标签时它悬停到的就是自己的列;自我落点由
+    `splitContainerBeside` 的 `key === anchor` 守卫统一拦下。返回 null = 本组只有它
+    自己(已是独立组,无可拆)。落点按组粒度计算(锚点组的左/右),取哪个兄弟都等价。 */
 export function groupSiblingOf(
   groups: readonly ContainerKey[][],
   key: ContainerKey,

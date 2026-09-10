@@ -1887,9 +1887,12 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
         // 拖本组焦点容器时锚点取同组另一成员 —— 屏上的列都属于各组焦点容器,单组时
         // 它悬停到的唯一目标就是自己的列,不接这一手它就成了唯一拆不出去的标签。
         const anchor = selfDrag ? groupSiblingOf(store.groups, container) : container;
-        if (anchor === null) return; // 本组只有它自己:已是独立组,无可拆
-        if (!store.splitContainerBeside(payload.container, anchor, zone === "left" ? "left" : "right")) {
-          // 可见列已满:说明原因,别静默吞掉用户的操作。
+        // 自锚/列满/本组只剩它自己(anchor 为 null)都会让 splitContainerBeside 返回 false:
+        // 守卫收口在 store 一处,视图不重复校验,只在被拒时统一外显原因。
+        if (
+          anchor === null ||
+          !store.splitContainerBeside(payload.container, anchor, zone === "left" ? "left" : "right")
+        ) {
           toast.error(t("workspace.tabs.split_full", { max: MAX_PANES }));
           return;
         }
