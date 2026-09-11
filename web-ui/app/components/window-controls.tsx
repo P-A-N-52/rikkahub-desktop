@@ -3,14 +3,11 @@ import { Copy, Minus, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "~/lib/utils";
+import { usesCustomWindowControls } from "~/lib/system-info";
 
 // I1(无边框窗口回归,按 NewMax 框架结构):顶部与侧边栏同色的窗控条,文档流内布局
 // (不是 fixed 覆盖层——G 轮教训:fixed 拖拽层 + isolate 层叠上下文会盖住标签行)。
-// 浏览器开发预览下整条不渲染,布局退回原状。
-
-function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+// macOS 使用原生标题栏;浏览器开发预览下整条不渲染。
 
 type WindowApi = {
   minimize: () => Promise<void>;
@@ -22,7 +19,7 @@ type WindowApi = {
 };
 
 async function loadWindowApi(): Promise<WindowApi | null> {
-  if (!isTauri()) return null;
+  if (!usesCustomWindowControls()) return null;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const win = getCurrentWindow();
@@ -75,9 +72,9 @@ function handleDragDoubleClick(event: React.MouseEvent<HTMLElement>) {
   runWindowAction((api) => api.toggleMaximize());
 }
 
-/** 摊到任意元素上使之成为窗口拖拽区(双击最大化;区内按钮点击不受影响)。
-    浏览器环境下 runWindowAction 静默为空,属性无害。 */
+/** 自绘窗控模式下提供拖拽和双击最大化;原生标题栏模式保留页面原有鼠标行为。 */
 export function windowDragRegionProps() {
+  if (!usesCustomWindowControls()) return {};
   return {
     "data-tauri-drag-region": true,
     onMouseDown: handleDragMouseDown,
@@ -88,29 +85,31 @@ export function windowDragRegionProps() {
 export function WindowControlsBar({ className }: { className?: string }) {
   const { t } = useTranslation("page");
   const [maximized, setMaximized] = React.useState(false);
-  const [tauri, setTauri] = React.useState(false);
+  const [ready, setReady] = React.useState(false);
+  const customControls = usesCustomWindowControls();
 
   React.useEffect(() => {
+    if (!customControls) return;
     let dispose: (() => void) | null = null;
     let cancelled = false;
     void (async () => {
       const api = await windowApi();
+      if (!api || cancelled) return;
+      setReady(true);
+      const refreshMaximized = async () => {
+        try {
+          const maximized = await api.isMaximized();
+          if (!cancelled) setMaximized(maximized);
+        } catch {
+          // 取不到时保留上次窗口状态。
+        }
+      };
+      await refreshMaximized();
       if (cancelled) return;
-      setTauri(api != null);
-      if (!api) return;
       try {
-        setMaximized(await api.isMaximized());
-      } catch {
-        // 初始态取不到就按默认 false。
-      }
-      try {
-        dispose = await api.onResized(async () => {
-          try {
-            setMaximized(await api.isMaximized());
-          } catch {
-            // ignore
-          }
-        });
+        const unlisten = await api.onResized(() => void refreshMaximized());
+        if (cancelled) unlisten();
+        else dispose = unlisten;
       } catch {
         // 监听注册尽力而为。
       }
@@ -119,10 +118,9 @@ export function WindowControlsBar({ className }: { className?: string }) {
       cancelled = true;
       dispose?.();
     };
-  }, []);
+  }, [customControls]);
 
-  // 浏览器预览:不渲染窗控条,各页布局与原生环境外一致。
-  if (!isTauri()) return null;
+  if (!customControls) return null;
 
   return (
     <div
@@ -132,7 +130,7 @@ export function WindowControlsBar({ className }: { className?: string }) {
         className,
       )}
     >
-      {tauri ? (
+      {ready ? (
         <div className="flex h-full items-center">
           <WindowControlButton
             variant="default"

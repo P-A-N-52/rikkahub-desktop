@@ -4,10 +4,11 @@
 // 存储与会话同库(rikka_hub.db,§5.2),表为 PC 自有,跨端导出永不包含(枚举纪律,§9.1)。
 
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Database } from "bun:sqlite";
 import { dataDir, workspacesDir } from "../foundation/paths";
-import { systemDenyDirs } from "./boundary";
+import { isSystemWorkspaceRoot } from "./root-policy";
+import { isPathWithin, resolvePathIdentity, samePathIdentity, type PathIdentity } from "./path-identity";
 import type { PcWorkspaceRow, Workspace, WorkspacePermissionPreset, WorkspaceStatus, WorkspaceType } from "../foundation/types";
 import { id as newId } from "../foundation/utils";
 import { getConversation, getConversationsDb, persistConversation } from "../conversations";
@@ -121,12 +122,16 @@ function sanitizeName(raw: unknown, fallback: string): string {
   return name || fallback;
 }
 
-/** 路径身份比较键:Windows 文件系统大小写不敏感,统一小写参与比较;resolve() 已归一
- *  分隔符与尾部斜杠。不追 symlink/junction 别名——目录别名的越权问题归边界层
- *  (boundary.ts)管,这里只负责"同一路径写法"的身份判定,过度解析反而引入网络盘/
- *  subst 的兼容坑。 */
-function comparablePath(path: string): string {
-  return process.platform === "win32" ? path.toLowerCase() : path;
+/** 旧记录可能已卸载、失去权限或成为悬空链接；只影响查重，不阻止用户重绑恢复。
+ *  新输入与实际文件操作仍走严格解析，不能用这个入口放行不可解析的路径。 */
+function savedFolderIdentity(root: string): PathIdentity | null {
+  try {
+    const identity = resolvePathIdentity(root);
+    return identity.exists && identity.stats.isDirectory() ? identity : null;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EACCES", "EPERM", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
 }
 
 /** 工作区 ↔ 文件夹 1:1 不变式的查询半边:该目录当前绑定的 folder 型工作区(无则 null)。
@@ -134,9 +139,11 @@ function comparablePath(path: string): string {
  *  历史互不可见"的割裂(2.0.0 内测反馈)。managed 型 root 由 id 派生且必在 dataDir 内、
  *  与 folder 型准入互斥(validateFolderRoot 拒绝 dataDir 重叠),天然不参与查重。 */
 export function findWorkspaceByRoot(root: string): Workspace | null {
-  const target = comparablePath(root);
+  const target = resolvePathIdentity(root);
   for (const workspace of listWorkspaces()) {
-    if (workspace.type === "folder" && comparablePath(workspace.root) === target) return workspace;
+    if (workspace.type !== "folder") continue;
+    const saved = savedFolderIdentity(workspace.root);
+    if (saved && samePathIdentity(saved, target)) return workspace;
   }
   return null;
 }
@@ -146,29 +153,24 @@ export function validateFolderRoot(rawRoot: unknown): string {
   const raw = String(rawRoot ?? "").trim();
   if (!raw || !isAbsolute(raw)) throw new Error("必须提供绝对路径");
   const root = resolve(raw);
-  let stat;
+  let identity;
   try {
-    stat = statSync(root);
+    identity = resolvePathIdentity(root);
   } catch {
     throw new Error("目录不存在或不可访问");
   }
-  if (!stat.isDirectory()) throw new Error("路径不是目录");
+  if (!identity.exists) throw new Error("目录不存在或不可访问");
+  if (!identity.stats.isDirectory()) throw new Error("路径不是目录");
   // 文件系统根(C:\ / /)作为边界等于没有边界
-  if (root === resolve(root, "..")) throw new Error("不能以磁盘根目录作为工作区");
+  if (samePathIdentity(identity, resolvePathIdentity(dirname(identity.path)))) {
+    throw new Error("不能以磁盘根目录作为工作区");
+  }
   // 与应用数据目录互斥:工作区含 dataDir 或位于 dataDir 内,模型可改写应用自身状态
-  const rootPrefixed = root + sep;
-  const dataPrefixed = resolve(dataDir) + sep;
-  if (rootPrefixed.startsWith(dataPrefixed) || dataPrefixed.startsWith(rootPrefixed)) {
+  const dataIdentity = resolvePathIdentity(dataDir);
+  if (isPathWithin(identity, dataIdentity) || isPathWithin(dataIdentity, identity)) {
     throw new Error("工作区不能与应用数据目录重叠");
   }
-  // 操作系统系统目录拒绝(M1 冒烟发现的缺口):这类目录做工作区无正当场景,
-  // 写坏即系统级灾难。只拦"等于或位于系统目录内",不拦包含关系(C:\ 已被盘根规则拦)。
-  // Windows 路径大小写不敏感,比较前统一小写。
-  for (const sysDir of systemDenyDirs()) {
-    if (comparablePath(root) === comparablePath(sysDir) || comparablePath(rootPrefixed).startsWith(comparablePath(sysDir + sep))) {
-      throw new Error("不能以操作系统目录作为工作区");
-    }
-  }
+  if (isSystemWorkspaceRoot(identity)) throw new Error("不能以操作系统目录作为工作区");
   return root;
 }
 
@@ -246,8 +248,9 @@ export function updateWorkspace(workspaceId: string, patch: { name?: unknown; pe
   if (patch.root !== undefined) {
     if (existing.type !== "folder") throw new Error("仅 folder 型工作区可重新绑定目录");
     const newRoot = validateFolderRoot(patch.root);
-    // 大小写变体视为同目录(comparablePath):不算换绑,信任不重置。
-    if (comparablePath(newRoot) !== comparablePath(existing.root)) {
+    // 同一目录的大小写/软链别名不算换绑，保留原路径与信任状态。
+    const previousIdentity = savedFolderIdentity(existing.root);
+    if (!previousIdentity || !samePathIdentity(resolvePathIdentity(newRoot), previousIdentity)) {
       // 1:1 不变式的另一半:重绑目标已被其他工作区绑定 → 拒绝(错误文案直达 UI)。
       const bound = findWorkspaceByRoot(newRoot);
       if (bound && bound.id !== workspaceId) throw new Error(`该文件夹已绑定工作区「${bound.name}」`);

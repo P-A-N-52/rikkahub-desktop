@@ -3,7 +3,7 @@
 
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { executableDir, rootDir } from "../foundation/paths";
+import { resourcePaths, resolveStaticRoot } from "../foundation/paths";
 import { mime } from "./request";
 
 // 批次二 R7-1(纵深防御):Tauri 壳窗口加载的是本服务的 http://127.0.0.1 页面,
@@ -20,14 +20,7 @@ import { mime } from "./request";
 const HTML_CSP = "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
 
 export async function routeStatic(url: URL) {
-  const candidates = [
-    resolve(executableDir, "web-ui", "build", "client"),
-    resolve(executableDir, "web-ui", "build"),
-    resolve(rootDir, "web-ui", "build", "client"),
-    resolve(rootDir, "web-ui", "build"),
-    resolve(rootDir, "web-ui", "dist"),
-  ];
-  const staticRoot = candidates.find((candidate) => existsSync(join(candidate, "index.html")));
+  const staticRoot = resolveStaticRoot();
   if (!staticRoot) {
     return new Response("web-ui is not built. Run `cd web-ui && bun install && bun run build`.", { status: 200 });
   }
@@ -43,6 +36,10 @@ export async function routeStatic(url: URL) {
     };
     if (contentType.startsWith("text/html")) headers["Content-Security-Policy"] = HTML_CSP;
     return new Response(Bun.file(target), { headers });
+  }
+  // 打包资源丢失需要以真实失败暴露，不能把 SPA HTML 当作成功的 JS/CSS/图标响应。
+  if (resourcePaths.explicit && (url.pathname.startsWith("/assets/") || /\.[^/]+$/.test(url.pathname))) {
+    return new Response(`Bundled resource not found: ${url.pathname}`, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
   // SPA fallback (index.html): 绝不缓存。覆盖安装后 WebView2 每次都拿最新的 index.html,
   // 它引用的 hash 化 css/js 会自然跟到新版本,彻底杜绝"装了新版还在跑旧前端"的缓存污染。

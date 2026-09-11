@@ -6,7 +6,7 @@
 // 注意:pi 的 resolveToCwd 没有任何边界校验(pi 信任 cwd)——PC 的工作区边界层包裹在
 // Operations 注入点上(boundary.ts,M1-3),本文件保持 pi 原语义。
 
-import { accessSync, constants, realpathSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve as nodeResolvePath } from "node:path";
@@ -26,20 +26,6 @@ export interface PathInputOptions {
   stripAtPrefix?: boolean;
   /** Normalize unicode space variants to regular spaces. */
   normalizeUnicodeSpaces?: boolean;
-}
-
-/**
- * Resolve a path to its canonical (real) form, following symlinks.
- * Falls back to the raw path if resolution fails (e.g. the target does
- * not exist yet), so that callers never crash on missing filesystem
- * entries.
- */
-export function canonicalizePath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
 }
 
 export function normalizePath(input: string, options: PathInputOptions = {}): string {

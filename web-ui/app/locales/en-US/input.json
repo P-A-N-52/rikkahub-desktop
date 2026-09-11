@@ -119,6 +119,7 @@
     "placeholder_not_ready": "Please select a conversation first",
     "send_hint_enter": "Press Enter to send, Shift + Enter for newline",
     "send_hint_newline": "Press Shift + Enter to send, Enter for newline",
+    "send_hint_command": "Cmd + Enter to send",
     "long_text_as_file": "Long text converted to file attachment",
     "uploading_progress": "Uploading {{percent}}%",
     "parsing_progress": "Parsing page {{done}}/{{total}}",
@@ -145,6 +146,7 @@
     "failed": "Speech recognition failed",
     "connect_failed": "Speech recognition connection failed",
     "mic_denied": "Cannot access the microphone",
+    "unsupported": "Microphone capture is unavailable in this environment. Use the desktop app or an HTTPS page.",
     "start": "Voice input",
     "stop": "Stop voice input"
   },

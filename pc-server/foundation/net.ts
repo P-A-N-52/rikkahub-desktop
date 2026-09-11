@@ -1,6 +1,7 @@
 // foundation/net.ts — 代理与网络工具
 // 纪律：纯函数，不直接读取 state；调用方通过参数传入 ProxyConfig。
 
+import { isIP } from "node:net";
 import { isRecord } from "./utils";
 import { RUNNING_IN_CONTAINER, RUNTIME_PLATFORM } from "./platform";
 import type { ProxyConfig , ProxyMode } from "./types";
@@ -32,9 +33,7 @@ export function parseProxyServerValue(value: string): string | undefined {
   return /^https?:\/\//i.test(value) ? value : `http://${value}`;
 }
 
-// R1-7:reg/gsettings 读取全部改异步(Bun.spawn),消灭"fetch 拦截器内同步 spawn 阻塞
-// 事件循环数十 ms"的病灶。运行期唯一热路径入口是缓存读(readSystemProxy);这两个函数
-// 只被启动预热、后台刷新和 settings/proxy/detect 端点调用。
+// 系统探测使用异步子进程；出站请求只读缓存，不等待系统命令。
 async function runCommandText(cmd: string[]): Promise<{ exitCode: number; stdout: string }> {
   const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
   const stdout = await new Response(proc.stdout).text();
@@ -78,12 +77,61 @@ export async function readGnomeProxy(): Promise<string | undefined> {
   }
 }
 
+type MacosProxySettings = { proxy?: string; pac?: string };
+
+/** scutil --proxy reports the current configuration, unlike per-service saved preferences.
+ *  Only use its global dictionary: scoped/supplemental entries cannot be selected without
+ *  a destination and interface. Keep the app's existing single-endpoint, HTTPS-first policy. */
+export function parseMacosProxySettings(output: string): MacosProxySettings {
+  const values = new Map<string, string>();
+  let depth = 0;
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/(?:^| : )<(?:dictionary|array)> \{$/.test(line)) { depth++; continue; }
+    if (line === "}") {
+      if (--depth <= 0) break;
+      continue;
+    }
+    if (depth !== 1) continue;
+    const field = line.match(/^(\w+) : (.*)$/);
+    if (field) values.set(field[1], field[2].trim());
+  }
+
+  const endpoint = (protocol: "HTTP" | "HTTPS"): string | undefined => {
+    if (values.get(`${protocol}Enable`) !== "1") return undefined;
+    const host = values.get(`${protocol}Proxy`) ?? "";
+    const portText = values.get(`${protocol}Port`) ?? "";
+    const port = Number(portText);
+    if (!host || /[\s\x00-\x1f\x7f/@\\?#%]/.test(host)
+      || !/^\d+$/.test(portText) || port < 1 || port > 65535) return undefined;
+    const address = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+    const ipv6 = isIP(address) === 6;
+    if (!ipv6 && /[:\[\]]/.test(host)) return undefined;
+    // HTTPSProxy is the HTTP CONNECT endpoint for HTTPS destinations, not TLS to the proxy.
+    try { return new URL(`http://${ipv6 ? `[${address}]` : host}:${port}`).origin; }
+    catch { return undefined; }
+  };
+
+  const pac = values.get("ProxyAutoConfigEnable") === "1"
+    ? values.get("ProxyAutoConfigURLString") || "pac"
+    : values.get("ProxyAutoDiscoveryEnable") === "1" ? "wpad" : undefined;
+  return { proxy: endpoint("HTTPS") ?? endpoint("HTTP"), pac };
+}
+
+async function readMacosProxySettings(): Promise<MacosProxySettings> {
+  try {
+    const { exitCode, stdout } = await runCommandText(["/usr/sbin/scutil", "--proxy"]);
+    return exitCode === 0 ? parseMacosProxySettings(stdout) : {};
+  } catch { return {}; }
+}
+
 // 专题10-②:PAC(自动配置脚本)存在性探测。应用不解析 PAC(实现成本高、收益低),本函数
 // 仅供"检测系统代理"按钮的诊断提示:常规系统代理未检出但存在 PAC 配置时,告诉用户
 // 去代理工具查 HTTP 端口手动填写,而不是留下"未检测到系统代理"的死胡同。
 // 不进代理解析主链路(resolveEffectiveProxy),探测失败一律视作无 PAC。
 export async function detectSystemPacUrl(): Promise<string | undefined> {
   try {
+    if (RUNTIME_PLATFORM === "mac") return (await readMacosProxySettings()).pac;
     if (RUNTIME_PLATFORM === "win") {
       const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
       const res = await runCommandText(["reg", "query", key, "/v", "AutoConfigURL"]);
@@ -107,6 +155,7 @@ export async function detectSystemPacUrl(): Promise<string | undefined> {
 }
 
 export async function detectSystemProxy(): Promise<string | undefined> {
+  if (RUNTIME_PLATFORM === "mac") return (await readMacosProxySettings()).proxy;
   if (RUNTIME_PLATFORM === "win") return readWindowsSystemProxy();
   if (RUNTIME_PLATFORM === "linux" && !RUNNING_IN_CONTAINER) return readGnomeProxy();
   return undefined;
@@ -114,20 +163,15 @@ export async function detectSystemProxy(): Promise<string | undefined> {
 
 let systemProxyCache: { value: string | undefined; ts: number } | null = null;
 export const SYSTEM_PROXY_TTL_MS = 2000;
-let systemProxyRefreshInFlight = false;
-
-function scheduleSystemProxyRefresh(): void {
-  if (systemProxyRefreshInFlight) return;
-  systemProxyRefreshInFlight = true;
-  void detectSystemProxy()
-    .then((value) => { systemProxyCache = { value, ts: Date.now() }; })
-    .finally(() => { systemProxyRefreshInFlight = false; });
-}
+let systemProxyRefreshInFlight: Promise<void> | null = null;
 
 /** R1-7:启动时(首个业务出站 fetch 之前,见 bootstrap 第 2 步)预热一次缓存,
  *  之后 readSystemProxy 永不阻塞。 */
-export async function primeSystemProxyCache(): Promise<void> {
-  systemProxyCache = { value: await detectSystemProxy(), ts: Date.now() };
+export function primeSystemProxyCache(): Promise<void> {
+  systemProxyRefreshInFlight ??= detectSystemProxy()
+    .then((value) => { systemProxyCache = { value, ts: Date.now() }; })
+    .finally(() => { systemProxyRefreshInFlight = null; });
+  return systemProxyRefreshInFlight;
 }
 
 /** R1-7:同步读缓存(fetch 拦截器 per-request 调用,不能阻塞)。TTL 过期返回陈值并触发
@@ -136,10 +180,10 @@ export async function primeSystemProxyCache(): Promise<void> {
  *  冷缓存(未预热,常规启动流程不会发生)返回 undefined 并触发后台刷新,该次请求按直连走。 */
 export function readSystemProxy(): string | undefined {
   if (!systemProxyCache) {
-    scheduleSystemProxyRefresh();
+    void primeSystemProxyCache();
     return undefined;
   }
-  if (Date.now() - systemProxyCache.ts >= SYSTEM_PROXY_TTL_MS) scheduleSystemProxyRefresh();
+  if (Date.now() - systemProxyCache.ts >= SYSTEM_PROXY_TTL_MS) void primeSystemProxyCache();
   return systemProxyCache.value;
 }
 
@@ -181,7 +225,7 @@ export function resolveEffectiveProxy(cfg: ProxyConfig): { url: string | undefin
     return { url: undefined, source: "none" };
   }
 
-  // mode === "auto": 跟随系统代理（Windows 注册表 / GNOME gsettings）
+  // mode === "auto": 跟随系统代理（Windows 注册表 / macOS scutil / GNOME gsettings）
   const system = readSystemProxy();
   lastDetectedSystemProxy = system;
   if (system) return { url: system, source: "system" };
@@ -357,10 +401,11 @@ export function installProxyFetchInterceptor(getProxyConfig: () => ProxyConfig):
 export function redactProxyForLog(url: string): string {
   try {
     const parsed = new URL(url);
+    if (parsed.username) parsed.username = "***";
     if (parsed.password) parsed.password = "***";
     return parsed.toString();
   } catch {
-    return url;
+    return "[invalid proxy URL]";
   }
 }
 

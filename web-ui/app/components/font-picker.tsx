@@ -77,6 +77,9 @@ function resolveFamilyForValue(
     );
     if (entry) return entry.family;
   }
+  if (value.startsWith("system:")) {
+    return [JSON.stringify(value.slice("system:".length)), fallbackFamily].filter(Boolean).join(", ");
+  }
   return fallbackFamily;
 }
 
@@ -97,7 +100,7 @@ export function FontPicker({
   showPreview = true,
 }: FontPickerProps) {
   const { t } = useTranslation("settings");
-  const { data, isLoading } = useFontCatalog();
+  const { data, isLoading, isSystemLoading, systemError, refetchSystem } = useFontCatalog();
   const invalidate = useInvalidateFontCatalog();
   const [open, setOpen] = React.useState(false);
   const [keyword, setKeyword] = React.useState("");
@@ -126,8 +129,10 @@ export function FontPicker({
     return allEntries.find((e) => entryMatches(e, value)) ?? null;
   }, [allEntries, genericFonts, value]);
 
-  const selectedLabel = isLoading ? t("font_picker.loading") : (selectedEntry?.label ?? t("font_picker.follow_system"));
-  const previewFamily = selectedEntry ? selectedEntry.family || fallbackFamily : fallbackFamily;
+  const selectedLabel = isLoading ? t("font_picker.loading") : (
+    selectedEntry?.label || value.replace(/^system:/, "") || t("font_picker.follow_system")
+  );
+  const previewFamily = resolveFamilyForValue(value, data, fallbackFamily);
 
   React.useEffect(() => {
     if (!open) setKeyword("");
@@ -208,6 +213,19 @@ export function FontPicker({
                 className="h-8 pl-7 text-xs"
               />
             </div>
+            {isSystemLoading ? (
+              <div role="status" className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <LoaderCircle className="size-3.5 animate-spin" />
+                {t("font_picker.system_loading")}
+              </div>
+            ) : systemError ? (
+              <div role="status" className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{t("font_picker.system_failed")}</span>
+                <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => void refetchSystem()}>
+                  {t("font_picker.retry")}
+                </Button>
+              </div>
+            ) : null}
             <div className="mt-2 h-[20rem]">
               {empty ? (
                 <div className="rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">

@@ -14,6 +14,9 @@ import { WorkspacePermissionPicker } from "~/components/input/workspace-permissi
 import { WorkspaceFilesButton } from "~/components/input/workspace-files-button";
 import { useSlashCommand } from "~/hooks/use-slash-command";
 import { parseSlashCommand, type SlashCommandDto } from "~/lib/slash-commands";
+import { isComposingKeyEvent, shouldSendOnEnter } from "~/lib/input-keyboard";
+import { getSystemInfoSnapshot } from "~/lib/system-info";
+import { createPcmCapture, type PcmCapture } from "~/lib/pcm-capture";
 import { useChatInputStore, useSettingsStore } from "~/stores";
 import { Button } from "~/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
@@ -63,7 +66,10 @@ const IMAGE_UPLOAD_ACCEPT = "image/*";
 const SLASH_MENU_ID = "chat-slash-command-menu";
 const EMPTY_SLASH_COMMANDS: SlashCommandDto[] = [];
 
-const ASR_FRAME_SIZE = 4096;
+interface AsrSession {
+  capture: PcmCapture;
+  socket: WebSocket | null;
+}
 
 function websocketApiUrl(path: string) {
   const base =
@@ -72,31 +78,6 @@ function websocketApiUrl(path: string) {
       : window.location.origin.replace(/^http/i, "ws");
   // WebSocket 无法携带 Authorization header，启用 web 鉴权时 token 走 access_token query
   return `${base}${appendWebAuthQuery(`/api/${path.replace(/^\/+/, "")}`)}`;
-}
-
-function resampleLinear(input: Float32Array, inputRate: number, outputRate: number) {
-  if (inputRate === outputRate) return input;
-  const ratio = inputRate / outputRate;
-  const outputLength = Math.max(1, Math.round(input.length / ratio));
-  const output = new Float32Array(outputLength);
-  for (let i = 0; i < outputLength; i++) {
-    const sourceIndex = i * ratio;
-    const left = Math.floor(sourceIndex);
-    const right = Math.min(input.length - 1, left + 1);
-    const weight = sourceIndex - left;
-    output[i] = input[left] * (1 - weight) + input[right] * weight;
-  }
-  return output;
-}
-
-function floatToPcm16(input: Float32Array) {
-  const buffer = new ArrayBuffer(input.length * 2);
-  const view = new DataView(buffer);
-  for (let i = 0; i < input.length; i++) {
-    const sample = Math.max(-1, Math.min(1, input[i]));
-    view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-  }
-  return buffer;
 }
 
 function partLabel(part: UIMessagePart, t: (key: string) => string): string {
@@ -359,13 +340,7 @@ function ChatInputInner({
   const [uploadMenuOpen, setUploadMenuOpen] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [asrListening, setAsrListening] = React.useState(false);
-  const asrSocketRef = React.useRef<WebSocket | null>(null);
-  const asrAudioContextRef = React.useRef<AudioContext | null>(null);
-  const asrSourceRef = React.useRef<MediaStreamAudioSourceNode | null>(null);
-  const asrProcessorRef = React.useRef<ScriptProcessorNode | null>(null);
-  const asrStreamRef = React.useRef<MediaStream | null>(null);
-  const asrFrameRef = React.useRef<Int16Array[]>([]);
-  const asrFrameSamplesRef = React.useRef(0);
+  const asrSessionRef = React.useRef<AsrSession | null>(null);
   // 提示词优化:点击后把输入框原文发给"提示词优化模型",返回的优化版直接替换输入框。
   // 优化成功后在优化按钮旁显示常驻"撤销"按钮(不走 toast —— toast 几秒就消失,用户来不及点
   // 或事后想反悔就没机会了)。originalBeforeOptimize 保存原文,点撤销即恢复;重新优化 / 发送
@@ -427,19 +402,6 @@ function ChatInputInner({
   const canUseQuickMessage = ready && !disabled && !uploading && !submitting;
   const canUseAsr = ready && !disabled && !isGenerating && !uploading && !submitting;
   const actionDisabled = submitting || uploading || (!canStop && !canSend);
-
-  const releaseAsrResources = React.useCallback(() => {
-    asrProcessorRef.current?.disconnect();
-    asrProcessorRef.current = null;
-    asrSourceRef.current?.disconnect();
-    asrSourceRef.current = null;
-    void asrAudioContextRef.current?.close().catch(() => undefined);
-    asrAudioContextRef.current = null;
-    asrStreamRef.current?.getTracks().forEach((track) => track.stop());
-    asrStreamRef.current = null;
-    asrFrameRef.current = [];
-    asrFrameSamplesRef.current = 0;
-  }, []);
 
   React.useEffect(() => {
     if (!canUpload) {
@@ -559,142 +521,107 @@ function ChatInputInner({
     [canUseQuickMessage, error, onValueChange, value],
   );
 
-  const stopAsr = React.useCallback(() => {
-    asrSocketRef.current?.send(JSON.stringify({ type: "stop" }));
-    asrSocketRef.current?.close(1000, "stop");
-    asrSocketRef.current = null;
-    releaseAsrResources();
+  const stopAsr = React.useCallback((session = asrSessionRef.current) => {
+    if (!session || asrSessionRef.current !== session) return;
+    asrSessionRef.current = null;
     setAsrListening(false);
-  }, [releaseAsrResources]);
+    session.capture.stop();
+    const socket = session.socket;
+    if (socket) {
+      socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+      try {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
+      } catch (error) {
+        console.warn("[asr] Stop message failed; closing the connection", error);
+      }
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000, "stop");
+      }
+    }
+  }, []);
 
   React.useEffect(() => () => stopAsr(), [stopAsr]);
+  React.useEffect(() => { if (!canUseAsr) stopAsr(); }, [canUseAsr, stopAsr]);
 
   const toggleAsr = React.useCallback(async () => {
-    if (!canUseAsr) return;
-    if (asrListening) {
+    if (asrSessionRef.current) {
       stopAsr();
       return;
     }
+    if (!canUseAsr) return;
 
-    if (!settings?.selectedASRProviderId) {
+    const provider = settings?.asrProviders?.find(
+      (item) => item.id === settings.selectedASRProviderId,
+    );
+    if (!provider) {
       toast.error(t("asr.not_configured"));
       return;
     }
 
+    let session: AsrSession | undefined;
+    const fail = (message: string) => {
+      if (session && asrSessionRef.current !== session) return;
+      setError(message);
+      toast.error(message);
+      stopAsr(session);
+    };
     try {
-      const provider = settings.asrProviders?.find(
-        (item) => item.id === settings.selectedASRProviderId,
-      );
-      if (!provider) {
-        toast.error(t("asr.not_configured"));
-        return;
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+      const capture = createPcmCapture({
+        sampleRate: Math.max(8000, Number(provider.sampleRate || (provider.type === "openai_realtime" ? 24000 : 16000))),
+        onFrame: (frame) => {
+          if (!session || asrSessionRef.current !== session) return;
+          const socket = session.socket;
+          if (socket?.readyState !== WebSocket.OPEN) return;
+          try { socket.send(frame); } catch { fail(t("asr.connect_failed")); }
         },
       });
+      session = { capture, socket: null };
+      asrSessionRef.current = session;
+      // Starting is cancellable too, including a pending microphone permission prompt.
+      setAsrListening(true);
+      await capture.ready;
+      if (asrSessionRef.current !== session) return;
       const socket = new WebSocket(websocketApiUrl("asr/realtime"));
       socket.binaryType = "arraybuffer";
-      asrSocketRef.current = socket;
-      asrStreamRef.current = stream;
+      session.socket = socket;
       const baseText = value;
-      let latestTranscript = "";
       const applyTranscript = (transcript: string) => {
-        latestTranscript = transcript.trim();
+        const latestTranscript = transcript.trim();
         if (!latestTranscript) return;
         const prefix =
           baseText.trim().length > 0 && !baseText.endsWith("\n") ? `${baseText}\n` : baseText;
         onValueChange(`${prefix}${latestTranscript}`.trimStart());
         if (error) setError(null);
       };
-      socket.onopen = async () => {
-        socket.send(JSON.stringify({ type: "start", providerId: provider.id }));
-        const AudioContextCtor =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        const audioContext = new AudioContextCtor();
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        asrAudioContextRef.current = audioContext;
-        asrSourceRef.current = source;
-        asrProcessorRef.current = processor;
-        const targetSampleRate = Math.max(
-          8000,
-          Number(provider.sampleRate || (provider.type === "openai_realtime" ? 24000 : 16000)),
-        );
-        processor.onaudioprocess = (event) => {
-          if (socket.readyState !== WebSocket.OPEN) return;
-          const channel = event.inputBuffer.getChannelData(0);
-          const pcmBuffer = floatToPcm16(
-            resampleLinear(channel, audioContext.sampleRate, targetSampleRate),
-          );
-          const chunk = new Int16Array(pcmBuffer);
-          asrFrameRef.current.push(chunk);
-          asrFrameSamplesRef.current += chunk.length;
-          while (asrFrameSamplesRef.current >= ASR_FRAME_SIZE) {
-            const frame = new Int16Array(ASR_FRAME_SIZE);
-            let offset = 0;
-            while (offset < ASR_FRAME_SIZE) {
-              const head = asrFrameRef.current[0];
-              const take = Math.min(head.length, ASR_FRAME_SIZE - offset);
-              frame.set(head.subarray(0, take), offset);
-              offset += take;
-              if (take === head.length) {
-                asrFrameRef.current.shift();
-              } else {
-                asrFrameRef.current[0] = head.subarray(take);
-              }
-              asrFrameSamplesRef.current -= take;
-            }
-            socket.send(frame.buffer);
-          }
-        };
-        source.connect(processor);
-        processor.connect(audioContext.destination);
+      socket.onopen = () => {
+        if (asrSessionRef.current !== session) return;
+        try { socket.send(JSON.stringify({ type: "start", providerId: provider.id })); }
+        catch { fail(t("asr.connect_failed")); }
       };
       socket.onmessage = (event) => {
-        if (typeof event.data !== "string") return;
-        const payload = JSON.parse(event.data) as {
-          type?: string;
-          transcript?: string;
-          error?: string;
-        };
-        if (payload.type === "transcript") applyTranscript(payload.transcript ?? "");
-        if (payload.type === "error") {
-          const message = payload.error || t("asr.failed");
-          setError(message);
-          toast.error(message);
-          stopAsr();
+        if (asrSessionRef.current !== session || typeof event.data !== "string") return;
+        try {
+          const payload = JSON.parse(event.data) as { type?: string; transcript?: string; error?: string };
+          if (payload.type === "transcript") applyTranscript(payload.transcript ?? "");
+          if (payload.type === "error") fail(payload.error || t("asr.failed"));
+        } catch {
+          fail(t("asr.failed"));
         }
       };
-      socket.onerror = () => {
-        toast.error(t("asr.connect_failed"));
-        stopAsr();
-      };
-      socket.onclose = () => {
-        releaseAsrResources();
-        asrSocketRef.current = null;
-        setAsrListening(false);
-      };
-      setAsrListening(true);
+      socket.onerror = () => fail(t("asr.connect_failed"));
+      socket.onclose = () => stopAsr(session);
     } catch (asrError) {
-      const message = asrError instanceof Error ? asrError.message : t("asr.mic_denied");
-      setError(message);
-      toast.error(message);
-      stopAsr();
+      fail(asrError instanceof Error && asrError.name === "NotSupportedError"
+        ? t("asr.unsupported")
+        : asrError instanceof Error ? asrError.message : t("asr.mic_denied"));
     }
   }, [
-    asrListening,
     canUseAsr,
     error,
     onValueChange,
-    releaseAsrResources,
     settings,
     stopAsr,
+    t,
     value,
   ]);
 
@@ -715,13 +642,15 @@ function ChatInputInner({
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // 输入法候选导航/确认/取消拥有整次按键,先于斜杠菜单与发送处理。
+      if (isComposingKeyEvent(event.nativeEvent)) return;
       // 斜杠推荐菜单优先消费(↑↓/Tab/Enter/Esc;菜单打开时 Enter=补全,绝不发送)。
       if (slash.handleMenuKeyDown(event)) return;
 
       // 域9-2(3D):编辑模式 Esc = 点"取消"按钮。菜单开着时上面已消费(第一次 Esc 只关
       // 菜单);IME 组合输入中(isComposing)不响应,避免中/日文输入法取词 Esc 误退编辑。
       if (event.key === "Escape") {
-        if (isEditing && !event.nativeEvent.isComposing) {
+        if (isEditing) {
           event.preventDefault();
           onCancelEdit?.();
         }
@@ -730,12 +659,7 @@ function ChatInputInner({
 
       if (event.key !== "Enter") return;
       if (isGenerating) return;
-      if (event.nativeEvent.isComposing) return;
-
-      // 镜像逻辑：
-      // sendOnEnter = true: Enter 发送，Shift+Enter 换行
-      // sendOnEnter = false: Shift+Enter 发送，Enter 换行
-      const shouldSend = sendOnEnter ? !event.shiftKey : event.shiftKey;
+      const shouldSend = shouldSendOnEnter(event.nativeEvent, sendOnEnter, getSystemInfoSnapshot().platform);
       if (!shouldSend) return; // 换行角色的组合始终放行(域9-1:解析中也不动换行)
 
       // 域9-1:发送角色的组合在附件解析中短路(不换行、不发送、不 preventDefault);
@@ -798,7 +722,10 @@ function ChatInputInner({
     [canUpload, onAddParts, t],
   );
 
-  const sendHint = sendOnEnter ? t("chat.send_hint_enter") : t("chat.send_hint_newline");
+  const sendHint = [
+    sendOnEnter ? t("chat.send_hint_enter") : t("chat.send_hint_newline"),
+    getSystemInfoSnapshot().platform === "macos" ? t("chat.send_hint_command") : "",
+  ].filter(Boolean).join(" · ");
   const placeholder = ready ? t("chat.placeholder_ready") : t("chat.placeholder_not_ready");
 
   return (
@@ -1088,7 +1015,7 @@ function ChatInputInner({
                 variant="ghost"
                 size="icon"
                 disabled={
-                  isGenerating || !isEmpty ? actionDisabled : !canUseAsr && !asrListening
+                  !asrListening && (isGenerating || !isEmpty ? actionDisabled : !canUseAsr)
                 }
                 title={
                   isGenerating
@@ -1102,8 +1029,9 @@ function ChatInputInner({
                           : undefined
                 }
                 onClick={() => {
-                  if (isGenerating || !isEmpty) void handlePrimaryAction();
-                  else toggleAsr();
+                  if (asrSessionRef.current) stopAsr();
+                  else if (isGenerating || !isEmpty) void handlePrimaryAction();
+                  else void toggleAsr();
                 }}
                 className={cn(
                   "cpd-action-btn size-8 rounded-full",

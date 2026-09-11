@@ -8,6 +8,7 @@ fn main() {
             "get_data_dir",
             "set_data_dir",
             "launch_installer",
+            "open_update_dmg",
             "get_minimize_to_tray",
             "set_minimize_to_tray",
         ]),

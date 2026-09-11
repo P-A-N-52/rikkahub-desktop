@@ -1,0 +1,150 @@
+name: Package reviewed macOS release
+
+# Manual packaging only. Configure required reviewers on the macos-release environment.
+# No pull_request trigger, no release upload, and no repository write permissions.
+on:
+  workflow_dispatch:
+    inputs:
+      release_repository:
+        description: 'Explicit GitHub owner/repository used by this build for updates'
+        required: true
+        default: yuh-G/rikkahub-desktop
+
+permissions:
+  contents: read
+
+env:
+  RIKKAHUB_ANALYTICS: '0'
+
+jobs:
+  model-catalog:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: ./.github/actions/restore-pi
+      - run: bun run pc-server/scripts/model-catalog.ts generate
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-model-catalog
+          path: dist/pi-model-catalog/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  signed-package:
+    if: github.ref == 'refs/heads/main'
+    needs: model-catalog
+    environment: macos-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # workflow_dispatch resolves main to this immutable reviewed commit.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: ./.github/actions/restore-pi
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-model-catalog
+          path: dist/pi-model-catalog/
+      - run: bun run pc-server/scripts/model-catalog.ts restore
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web-ui/src-tauri
+          shared-key: macos-release-${{ matrix.target }}
+      - name: Check reviewed source before importing signing credentials
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          bun install --cwd pc-server --frozen-lockfile
+          bun install --cwd web-ui --frozen-lockfile
+          cd pc-server
+          bun run typecheck
+          bun test
+          bun run smoke:request-chain
+          bun run smoke:backup-roundtrip
+          cd ../web-ui
+          bun run typecheck
+          bun run test:unit
+      - name: Import environment-scoped signing and notarization credentials
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE_BASE64"
+          test -n "$CERTIFICATE_PASSWORD"
+          test -n "$APPLE_API_KEY"
+          test -n "$APPLE_API_KEY_ID"
+          test -n "$APPLE_API_ISSUER"
+          umask 077
+          certificate_path="$RUNNER_TEMP/rikkahub-signing.p12"
+          api_key_path="$RUNNER_TEMP/rikkahub-notary.p8"
+          keychain_path="$RUNNER_TEMP/rikkahub-release.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          printf '%s' "$APPLE_API_KEY" > "$api_key_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$keychain_path" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          xcrun notarytool store-credentials rikkahub-release --key "$api_key_path" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --keychain "$keychain_path"
+          rm -f "$certificate_path" "$api_key_path"
+      - name: Build, sign, notarize and staple both app and DMG
+        working-directory: web-ui
+        env:
+          SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          RELEASE_REPOSITORY: ${{ inputs.release_repository }}
+        run: |
+          test -n "$SIGNING_IDENTITY"
+          bun run tauri:build:macos --target '${{ matrix.target }}' --release-repository "$RELEASE_REPOSITORY" --signing-identity "$SIGNING_IDENTITY" --notarize-profile rikkahub-release --notarize-keychain "$RUNNER_TEMP/rikkahub-release.keychain-db"
+      - name: Verify native package and Rust tests
+        run: |
+          bun run pc-server/scripts/verify-macos-build.ts dist/desktop/${{ matrix.target }}/*.manifest.json
+          cd web-ui/src-tauri
+          cargo test --locked --target '${{ matrix.target }}'
+      - name: Remove temporary credentials
+        if: always()
+        shell: bash
+        run: |
+          keychain_path="$RUNNER_TEMP/rikkahub-release.keychain-db"
+          if [ -f "$keychain_path" ]; then security delete-keychain "$keychain_path"; fi
+          rm -f "$RUNNER_TEMP/rikkahub-signing.p12" "$RUNNER_TEMP/rikkahub-notary.p8"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Rikkahub-signed-mac-${{ matrix.arch }}
+          path: |
+            dist/desktop/${{ matrix.target }}/*.app.zip
+            dist/desktop/${{ matrix.target }}/*.dmg
+            dist/desktop/${{ matrix.target }}/*.manifest.json
+            dist/desktop/${{ matrix.target }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

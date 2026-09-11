@@ -2,7 +2,7 @@
 // 覆盖:managed/folder 创建与目录生命周期、folder 根目录准入校验、权限档位、
 // 信任门、删除(目录清理 + 归属会话经 working set 权威实例解绑)、列迁移幂等。
 import { beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, sep } from "node:path";
 
@@ -238,6 +238,40 @@ describe("会话工作区列迁移", () => {
 });
 
 describe("工作区 ↔ 文件夹 1:1 不变式(2.0.0 内测反馈)", () => {
+  test.if(process.platform === "darwin")("同一目录的软链别名复用工作区，重绑别名保留原路径和信任", () => {
+    const host = mkdtempSync(join(tmpdir(), "rkh-ws-alias-"));
+    const dir = join(host, "中文 项目");
+    const alias = join(host, "alias");
+    mkdirSync(dir);
+    symlinkSync(dir, alias);
+    const first = ws.createWorkspace({ type: "folder", root: dir });
+    const trusted = ws.trustWorkspace(first.id)!;
+    expect(ws.createWorkspace({ type: "folder", root: alias }).id).toBe(first.id);
+    expect(ws.updateWorkspace(first.id, { root: alias })?.root).toBe(dir);
+    expect(ws.getWorkspace(first.id)?.trustedAt).toBe(trusted.trustedAt);
+
+    const other = ws.createWorkspace({ type: "folder", root: mkdtempSync(join(tmpdir(), "rkh-ws-other-")) });
+    expect(() => ws.updateWorkspace(other.id, { root: alias })).toThrow("已绑定工作区");
+  });
+
+  test("大小写身份尊重实际文件系统；失效旧根不阻断新工作区", () => {
+    const host = mkdtempSync(join(process.env.RIKKAHUB_PATH_TEST_DIR ?? tmpdir(), "rkh-ws-case-"));
+    const upper = join(host, "Project");
+    const lower = join(host, "project");
+    mkdirSync(upper);
+    mkdirSync(lower, { recursive: true });
+    const a = ws.createWorkspace({ type: "folder", root: upper });
+    const b = ws.createWorkspace({ type: "folder", root: lower });
+    const sameDirectory = statSync(upper, { bigint: true }).ino === statSync(lower, { bigint: true }).ino;
+    expect(a.id === b.id).toBe(sameDirectory);
+
+    const missing = mkdtempSync(join(tmpdir(), "rkh-ws-stale-"));
+    ws.createWorkspace({ type: "folder", root: missing });
+    rmSync(missing, { recursive: true });
+    const next = mkdtempSync(join(tmpdir(), "rkh-ws-after-stale-"));
+    expect(ws.createWorkspace({ type: "folder", root: next }).root).toBe(next);
+  });
+
   test("同目录重复创建 = 打开既有工作区:同 id、不建新行、名字与信任状态保持", () => {
     const dir = mkdtempSync(join(tmpdir(), "rkh-ws-dup-"));
     const first = ws.createWorkspace({ type: "folder", root: dir });
@@ -284,5 +318,49 @@ describe("工作区 ↔ 文件夹 1:1 不变式(2.0.0 内测反馈)", () => {
     const m1 = ws.createWorkspace({ type: "managed", name: "inv-m1" });
     const m2 = ws.createWorkspace({ type: "managed", name: "inv-m2" });
     expect(m1.id).not.toBe(m2.id);
+  });
+});
+
+describe.skipIf(process.platform !== "darwin")("folder 准入的真实路径", () => {
+  test("旧根成为悬空链接后可新建其他工作区并重新绑定恢复", () => {
+    const host = mkdtempSync(join(tmpdir(), "rkh-ws-dangling-"));
+    const original = join(host, "original");
+    const alias = join(host, "alias");
+    mkdirSync(original);
+    symlinkSync(original, alias);
+    const first = ws.createWorkspace({ type: "folder", root: alias });
+    ws.trustWorkspace(first.id);
+    rmSync(original, { recursive: true });
+    const other = mkdtempSync(join(tmpdir(), "rkh-ws-unrelated-"));
+    expect(ws.createWorkspace({ type: "folder", root: other }).root).toBe(other);
+    const replacement = join(host, "replacement");
+    mkdirSync(replacement);
+    const recovered = ws.updateWorkspace(first.id, { root: replacement });
+    expect(recovered?.root).toBe(replacement);
+    expect(recovered?.trustedAt).toBeNull();
+  });
+
+  test("数据目录及其祖先的别名均拒绝，文件系统根别名同样拒绝", () => {
+    const host = mkdtempSync(join(tmpdir(), "rkh-ws-denied-alias-"));
+    const dataAlias = join(host, "data");
+    const parentAlias = join(host, "parent");
+    const rootAlias = join(host, "disk-root");
+    symlinkSync(dataDir, dataAlias);
+    symlinkSync(join(dataDir, ".."), parentAlias);
+    symlinkSync("/", rootAlias);
+    expect(() => ws.validateFolderRoot(dataAlias)).toThrow("重叠");
+    expect(() => ws.validateFolderRoot(join(dataAlias, "workspaces"))).toThrow("重叠");
+    expect(() => ws.validateFolderRoot(parentAlias)).toThrow("重叠");
+    expect(() => ws.validateFolderRoot(rootAlias)).toThrow("根目录");
+  });
+
+  test("系统目录通过 /private 或临时目录中的符号链接访问时仍被拒绝", () => {
+    const host = mkdtempSync(join(tmpdir(), "rkh-ws-system-alias-"));
+    const alias = join(host, "etc");
+    symlinkSync("/etc", alias);
+    expect(() => ws.validateFolderRoot(alias)).toThrow("操作系统目录");
+    // 应用测试数据也位于该系统目录下，双向重叠规则可能先于系统目录规则拒绝。
+    expect(() => ws.validateFolderRoot("/private/var")).toThrow(/操作系统目录|数据目录重叠/);
+    expect(() => ws.validateFolderRoot("/var/folders")).toThrow(/操作系统目录|数据目录重叠/);
   });
 });

@@ -12,7 +12,6 @@
 // 落地用 Bun.Archive(原生拒绝绝对路径/危险 symlink);固定路径 + 仅版本变更删写,杀软友好。
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import bashBundlePath from "../../assets/bash-bundle.tar.gz" with { type: "file" };
 import { embeddedBashDir, embeddedBashExe, embeddedBashStampPath } from "../../foundation/paths";
 import { reportError } from "../../observability/app-errors";
 import { getBashShellConfig, shellRunsBash } from "./shell";
@@ -66,6 +65,12 @@ export function ensureEmbeddedBash(): Promise<string> {
 
   landingPromise ??= (async () => {
     try {
+      // 仅 Windows 真正需要落地时加载资源；其他平台导入本模块无需生成 Windows 压缩包。
+      // 保留 file import，让 Windows 编译产物仍包含真实资源。
+      const { default: bashBundlePath } = await import("../../assets/bash-bundle.tar.gz", {
+        with: { type: "file" },
+      });
+
       // 版本戳不匹配(升级) → 整目录清掉重落地(仅此时删写,满足"不频繁删写")。
       if (existsSync(embeddedBashDir) && !stampMatches()) {
         rmSync(embeddedBashDir, { recursive: true, force: true });

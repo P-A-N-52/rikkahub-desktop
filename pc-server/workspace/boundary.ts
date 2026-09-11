@@ -5,23 +5,23 @@
 // 绝对路径后,每次文件系统操作前先过 assertInsideWorkspace。
 //
 // 校验语义(§5.3):
-// - resolve + realpath 后必须以 workspace root(同样 realpath 化)为前缀,前缀必须带
-//   分隔符(skills-import.ts 的盘符兄弟目录教训:C:\ws 不能放行 C:\ws2\x);
+// - resolve + realpath 后沿真实祖先检查目录身份，必须归属 workspace root；
+//   相同字符串前缀的兄弟目录(C:\ws 与 C:\ws2)不共享身份，不能越界;
 // - 目标不存在时(write 新文件/新目录)取"最深存在祖先"的 realpath 再拼回剩余段——
 //   祖先链里的软链逃逸照样被抓;
-// - Windows 大小写不敏感比较(realpath 已归一盘符大小写,双保险);
-// - 软链本体在区内、指向区外 → realpath 后前缀不匹配 → 拒绝。
+// - 现存目录通过文件系统身份比较，尊重实际卷的大小写规则与路径别名;
+// - 软链本体在区内、指向区外 → 真实祖先不包含工作区根 → 拒绝。
 //
 // 限额(两层中的硬上限层,取安卓数值;pi 截断器管单次输出 50KB/2000 行不动):
 // - 读(read/edit 的 readFile):512KB——超限文件引导模型用 bash(sed/head)分段处理,
 //   与安卓 WorkspaceTools 口径一致,同时防把大文件整读进内存;
 // - 写(write 的 writeFile):2MB。
 
-import { realpathSync } from "node:fs";
 import { constants } from "node:fs";
 import { access as fsAccess, mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename } from "node:path";
 import { isWindowsReservedName } from "../foundation/windows-names";
+import { isPathWithin, resolvePathIdentity } from "./path-identity";
 import type { ReadOperations } from "./tools/read";
 import type { WriteOperations } from "./tools/write";
 import type { EditOperations } from "./tools/edit";
@@ -33,30 +33,6 @@ import { formatSize } from "./tools/truncate";
 
 export const READ_HARD_LIMIT_BYTES = 512 * 1024; // 安卓口径:读 512KB
 export const WRITE_HARD_LIMIT_BYTES = 2 * 1024 * 1024; // 安卓口径:写 2MB
-
-/** realpath 化;目标不存在时取最深存在祖先的 realpath 拼回剩余段(write 新文件场景)。 */
-function canonicalizeWithNonexistentTail(path: string): string {
-  let current = path;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = realpathSync(current);
-      return tail.length === 0 ? real : join(real, ...tail.slice().reverse());
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) {
-        // 一路到文件系统根都不存在(不可能在合法工作区内),原样拼回交给前缀校验拒绝
-        return tail.length === 0 ? current : join(current, ...tail.slice().reverse());
-      }
-      tail.push(basename(current));
-      current = parent;
-    }
-  }
-}
-
-function comparablePath(path: string): string {
-  return process.platform === "win32" ? path.toLowerCase() : path;
-}
 
 export class WorkspaceBoundaryError extends Error {
   constructor(path: string, root: string) {
@@ -73,15 +49,12 @@ export class WorkspaceBoundaryError extends Error {
  */
 export function assertInsideWorkspace(absolutePath: string, root: string): string {
   if (absolutePath.includes("\0")) throw new WorkspaceBoundaryError(absolutePath, root);
-  const canonicalRoot = canonicalizeWithNonexistentTail(root);
-  const canonicalTarget = canonicalizeWithNonexistentTail(absolutePath);
-  const rootCmp = comparablePath(canonicalRoot);
-  const targetCmp = comparablePath(canonicalTarget);
-  // 前缀必须带分隔符:root 自身可放行(cwd=root 合法),兄弟目录(C:\ws vs C:\ws2)拒绝
-  if (targetCmp !== rootCmp && !targetCmp.startsWith(rootCmp.endsWith(sep) ? rootCmp : rootCmp + sep)) {
+  const rootIdentity = resolvePathIdentity(root);
+  const targetIdentity = resolvePathIdentity(absolutePath);
+  if (!isPathWithin(targetIdentity, rootIdentity)) {
     throw new WorkspaceBoundaryError(absolutePath, root);
   }
-  return canonicalTarget;
+  return targetIdentity.path;
 }
 
 /** 读取前的体积闸门:超限抛错引导模型分段处理(bash sed/head),防整读进内存。 */
@@ -123,21 +96,7 @@ export function createBoundedEditOperations(root: string): EditOperations {
 // 2026-08-23 改版(用户拍板):宽界不再对任何路径设黑名单——full_access 语义即"完全
 // 访问",pc-data 应用数据目录不享特殊地位,操作系统目录也给审批机会(专业用户改 hosts、
 // 研究应用配置的正当场景)。宽界 = 写到哪算哪,唯一保留的闸是 2MB 体积上限。
-// systemDenyDirs() 仍保留:它同时服务"能否以系统目录为工作区根"的准入校验(index.ts)。
-
-/** 平台系统目录黑名单(规范化绝对路径)。仅供"以系统目录为工作区根"的准入校验(index.ts)
- *  使用;宽界写入自 2026-08-23 起不再据此设限。 */
-export function systemDenyDirs(): string[] {
-  if (process.platform === "win32") {
-    return [
-      process.env.SystemRoot || String.raw`C:\Windows`,
-      process.env.ProgramFiles || String.raw`C:\Program Files`,
-      process.env["ProgramFiles(x86)"] || String.raw`C:\Program Files (x86)`,
-      process.env.ProgramData || String.raw`C:\ProgramData`,
-    ].map((dir) => resolve(dir));
-  }
-  return ["/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys", "/var", "/System", "/Library"].map((dir) => resolve(dir));
-}
+// folder 根目录准入由 root-policy.ts 单独处理，不影响这些宽界操作。
 
 /** 宽界写入断言:区内直通(managed 工作区根就在 dataDir/workspaces/ 下);区外/系统目录/
  *  应用数据目录一律放行——full_access 的"完全访问"不设黑名单,写坏的风险由用户在审批卡上
@@ -148,7 +107,7 @@ export function assertWideWritablePath(absolutePath: string, root: string): stri
   } catch (err) {
     if (!(err instanceof WorkspaceBoundaryError)) throw err;
   }
-  return canonicalizeWithNonexistentTail(absolutePath);
+  return resolvePathIdentity(absolutePath).path;
 }
 
 /** Windows 保留设备名写入阻断(问题4,2.0.0 内测)。此类路径在 Win32 语义下是设备:
@@ -182,7 +141,7 @@ async function writeWithHardLimit(safePath: string, content: string, what: strin
  *  无路径限制,512KB 读闸门照旧。 */
 export function createWideReadOperations(): ReadOperations {
   return {
-    readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
+    readFile: (absolutePath) => readWithHardLimit(resolvePathIdentity(absolutePath).path, absolutePath),
     access: (absolutePath) => fsAccess(absolutePath, constants.R_OK),
     detectImageMimeType: (absolutePath) => detectSupportedImageMimeTypeFromFile(absolutePath),
   };
@@ -201,7 +160,7 @@ export function createWideWriteOperations(root: string): WriteOperations {
 /** edit 工具的宽界 Operations(经批准的区外编辑 / full_access)。 */
 export function createWideEditOperations(root: string): EditOperations {
   return {
-    readFile: (absolutePath) => readWithHardLimit(canonicalizeWithNonexistentTail(absolutePath), absolutePath),
+    readFile: (absolutePath) => readWithHardLimit(resolvePathIdentity(absolutePath).path, absolutePath),
     writeFile: async (absolutePath, content) => writeWithHardLimit(assertWideWritablePath(absolutePath, root), content, "Edited content"),
     access: (absolutePath) => fsAccess(absolutePath, constants.R_OK | constants.W_OK),
   };

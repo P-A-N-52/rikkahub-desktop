@@ -86,6 +86,13 @@ describe("boot-trace 取证黑匣子", () => {
     expect(log!.content).toContain("uncaughtException");
   });
 
+  test("停机刷盘或回收失败保留 abnormal 证据", () => {
+    startSession(["进程拉起", "已拿数据目录锁", "端口已绑定", "bootstrap 完成"]);
+    appendBootTraceIn(dir, "shutdownFailed: state flush", DEAD_PID);
+    expect(capturePreviousBootTraceIn(dir)).toBe(true);
+    expect(readPreviousCrashLogIn(dir)!.level).toBe("abnormal");
+  });
+
   test("pid 活性(多实例):仍存活实例的 pending 绝不转存,只收尸体", () => {
     // 邻居实例(本测试进程自己,必活)+ 一具真尸体
     beginBootTraceIn(dir, process.pid);

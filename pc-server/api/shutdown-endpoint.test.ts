@@ -1,6 +1,6 @@
 // 全面审查 8-2/1-1 回归测试:优雅停机端点端到端契约——POST /api/app/shutdown 必须在
-// 全部状态刷盘后返回 200,随后进程以 0 码自退。Tauri 壳(Windows kill=TerminateProcess,
-// 信号钩子不运行)依赖这个契约:收到 200 后硬杀是零丢失的。
+// 在途任务与所属子进程结束、状态刷盘后返回 200,随后进程以 0 码自退。
+// Tauri 壳(Windows kill=TerminateProcess,信号钩子不运行)依赖这个契约。
 import { waitForServerReady } from "../test-utils/e2e-server";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";

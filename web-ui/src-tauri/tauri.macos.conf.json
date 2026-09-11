@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "shortDescription": "Native macOS LLM chat client.",
+    "longDescription": "Rikkahub is a native macOS LLM chat client supporting multiple AI providers, MCP tools, web search, image generation, and local models via Ollama / LM Studio.",
+    "icon": [
+      "icons/icon.icns",
+      "icons/128x128@2x.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "infoPlist": "Info.macos.plist"
+    }
+  }
+}

@@ -11,8 +11,10 @@ import { Button } from "~/components/ui/button";
 import { Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import api, { appendWebAuthQuery } from "~/services/api";
+import api from "~/services/api";
+import { downloadUpdatePackage } from "~/services/update-download";
 import { cn } from "~/lib/utils";
+import { canOpenMacUpdate, openMacUpdateDmg } from "~/lib/update-installation";
 
 export type UpdateInfo = {
   current: string;
@@ -25,9 +27,12 @@ export type UpdateInfo = {
   downloadUrl: string;
   fileName: string;
   size: number;
+  sha256?: string;
   cachedInstallerPath?: string | null;
-  /** 运行平台，决定走哪种更新应用流程（win→NSIS 安装器，linux→二进制替换）。 */
+  /** 后端运行平台，决定更新包与安装流程。macOS 只打开 DMG，由用户在 Finder 替换应用。 */
   platform?: "win" | "mac" | "linux";
+  architecture?: string;
+  releaseRepo?: string;
   /** 容器化部署（Docker 等）无法原地更新，前端改为提示 docker pull。 */
   containerized?: boolean;
 };
@@ -49,14 +54,31 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
   );
   const [installerCached, setInstallerCached] = React.useState(!!info.cachedInstallerPath);
   const [installerLaunching, setInstallerLaunching] = React.useState(false);
+  const activeDownload = React.useRef<AbortController | null>(null);
+  const isMacUpdate = info.platform === "mac";
+  const canOpenDmg = canOpenMacUpdate(info.platform);
 
-  const handleClose = () => {
-    onClose();
-    // Reset download state so next open is clean
+  const cancelDownload = React.useCallback(() => {
+    activeDownload.current?.abort();
+    activeDownload.current = null;
     setDownloading(false);
     setDownloadProgress(0);
     setDownloadedBytes(0);
     setTotalBytes(0);
+  }, []);
+
+  React.useEffect(() => () => activeDownload.current?.abort(), []);
+  React.useEffect(() => {
+    cancelDownload();
+    setInstallerPath(info.cachedInstallerPath ?? null);
+    setInstallerCached(!!info.cachedInstallerPath);
+    setInstallerLaunching(false);
+  }, [info.latest, info.fileName, info.downloadUrl, info.cachedInstallerPath, cancelDownload]);
+  React.useEffect(() => { if (!open) cancelDownload(); }, [open, cancelDownload]);
+
+  const handleClose = () => {
+    cancelDownload();
+    onClose();
   };
 
   const skipThisVersion = async () => {
@@ -69,65 +91,57 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
     onClose();
   };
 
-  const downloadAndInstall = async () => {
+  const downloadUpdate = async () => {
     if (!info.downloadUrl) return;
+    activeDownload.current?.abort();
+    const controller = new AbortController();
+    activeDownload.current = controller;
+    const isCurrent = () => activeDownload.current === controller && !controller.signal.aborted;
     setDownloading(true);
     setDownloadProgress(0);
     setDownloadedBytes(0);
     setTotalBytes(0);
     try {
-      // 后端用 text/event-stream 流式推 {type:"progress"|"done"|"error"}。fetch + ReadableStream
-      // 解析每个事件实时更新进度条——之前 XHR 监听响应进度,但后端 arrayBuffer 下完才返回,
-      // 下载期间一个字节都不吐,进度条自然不动。
-      const res = await fetch(appendWebAuthQuery("/api/update/download"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: info.downloadUrl, fileName: info.fileName }),
+      const result = await downloadUpdatePackage({
+        url: info.downloadUrl, fileName: info.fileName, version: info.latest, size: info.size, sha256: info.sha256,
+      }, {
+        signal: controller.signal,
+        incompleteMessage: t("update.download_incomplete"),
+        failedMessage: t("update.download_failed"),
+        onProgress: (progress) => {
+          if (!isCurrent()) return;
+          setTotalBytes(progress.total);
+          setDownloadedBytes(progress.loaded);
+          setDownloadProgress(progress.percent);
+        },
       });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const result = { path: "", size: 0, done: false };
-      const handleLine = (line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data: ")) return;
-        let evt: { type?: string; loaded?: number; total?: number; percent?: number; path?: string; size?: number; message?: string };
-        try {
-          evt = JSON.parse(trimmed.slice(6));
-        } catch {
-          return;
-        }
-        if (evt.type === "progress") {
-          setTotalBytes(Number(evt.total) || 0);
-          setDownloadedBytes(Number(evt.loaded) || 0);
-          setDownloadProgress(Number(evt.percent) || 0);
-        } else if (evt.type === "done") {
-          result.path = String(evt.path ?? "");
-          result.size = Number(evt.size) || 0;
-          result.done = true;
-        } else if (evt.type === "error") {
-          throw new Error(String(evt.message || t("update.download_failed")));
-        }
-      };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) handleLine(line);
-      }
-      if (buffer.trim()) handleLine(buffer);
-      if (!result.done) throw new Error(t("update.download_incomplete"));
+      if (!isCurrent()) return;
       setInstallerPath(result.path);
       setInstallerCached(false);
       setDownloadProgress(100);
       toast.success(t("update.download_done"));
     } catch (err) {
+      if (!isCurrent()) return;
       toast.error(err instanceof Error ? err.message : t("update.download_failed"));
     } finally {
-      setDownloading(false);
+      if (activeDownload.current === controller) {
+        activeDownload.current = null;
+        setDownloading(false);
+      }
+    }
+  };
+
+  const openDmg = async () => {
+    if (!installerPath || !canOpenDmg) return;
+    setInstallerLaunching(true);
+    try {
+      await openMacUpdateDmg(info.platform, installerPath, info.latest);
+      toast.success(t("update.mac_opened"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(t("update.mac_open_failed", { message }));
+    } finally {
+      setInstallerLaunching(false);
     }
   };
 
@@ -201,6 +215,13 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
             {t("update.containerized_suffix")}
           </div>
         ) : null}
+        {isMacUpdate && info.isNewer && !info.containerized ? (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+            {!info.downloadUrl && !installerPath
+              ? t("update.mac_download_unavailable")
+              : canOpenDmg ? t("update.mac_instructions") : t("update.mac_desktop_required")}
+          </div>
+        ) : null}
         {downloading ? (
           <div className="space-y-2 rounded-md border bg-muted/30 p-3">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -225,10 +246,17 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
             </div>
           </div>
         ) : null}
-        {installerPath ? (
+        {installerPath && (!isMacUpdate || canOpenDmg) ? (
           <div className="rounded-md border border-success/30 bg-success/5 p-3 text-xs text-success">
             {info.platform === "linux" ? (
               <>{t("update.linux_ready")}</>
+            ) : isMacUpdate ? (
+              <>
+                {t("update.mac_ready")}
+                <code className="ml-1 break-all font-mono">{installerPath}</code>
+                <br />
+                {t("update.mac_keep_data")}
+              </>
             ) : (
               <>
                 {installerCached ? t("update.installer_cached") : t("update.installer_downloaded")}
@@ -265,7 +293,7 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
                 {t("update.later")}
               </Button>
             </>
-          ) : !info.downloadUrl ? (
+          ) : !info.downloadUrl || (isMacUpdate && !canOpenDmg) ? (
             <>
               <Button
                 type="button"
@@ -293,12 +321,12 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
               >
                 {t("update.skip_version")}
               </Button>
-              <Button type="button" variant="outline" onClick={handleClose} disabled={downloading}>
-                {t("update.later")}
+              <Button type="button" variant="outline" onClick={downloading ? cancelDownload : handleClose}>
+                {downloading ? t("update.cancel_download") : t("update.later")}
               </Button>
               <Button
                 type="button"
-                onClick={() => void downloadAndInstall()}
+                onClick={() => void downloadUpdate()}
                 disabled={downloading || !info.downloadUrl}
               >
                 {downloading ? (
@@ -306,7 +334,17 @@ export function UpdateDialog({ info, open, onClose }: UpdateDialogProps) {
                 ) : (
                   <Download className="size-4" />
                 )}
-                {downloading ? t("update.updating") : t("update.update_now")}
+                {downloading ? t("update.updating") : isMacUpdate ? t("update.mac_download") : t("update.update_now")}
+              </Button>
+            </>
+          ) : isMacUpdate ? (
+            <>
+              <Button type="button" variant="outline" onClick={handleClose}>
+                {t("update.update_later")}
+              </Button>
+              <Button type="button" onClick={() => void openDmg()} disabled={installerLaunching}>
+                {installerLaunching ? <Loader2 className="size-4 animate-spin" /> : null}
+                {t("update.mac_open_dmg")}
               </Button>
             </>
           ) : info.platform === "linux" ? (

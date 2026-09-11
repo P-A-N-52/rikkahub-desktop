@@ -1,6 +1,7 @@
 // api/handlers/data.ts — 数据备份路由（data/webdav/*、data/s3/*、data/export|import|register-schema）
 // 纪律：纯搬迁自 server.ts routeApi()；备份 zip 结构与 Android 互导契约冻结。
 
+import { serverWork } from "../../foundation/lifecycle";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -87,7 +88,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
   }
   if (path === "data/webdav/backup/stream" && request.method === "POST") {
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const send = (event: string, payload: Record<string, unknown>) => controller.enqueue(sseFrame(event, payload));
         try {
           const result = await webDavBackup(state.settings.webDavConfig, (message, percent) => {
@@ -100,7 +101,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
         } finally {
           controller.close();
         }
-      },
+      }),
     });
     return new Response(stream, { headers: sseHeaders() });
   }
@@ -109,7 +110,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
     const fileName = String(body.fileName ?? "").trim();
     if (!fileName || fileName.includes("/") || fileName.includes("\\")) return error("Invalid WebDAV backup file name", 400);
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const send = (event: string, payload: Record<string, unknown>) => controller.enqueue(sseFrame(event, payload));
         try {
           await webDavRestore(state.settings.webDavConfig, fileName, (message, percent) => {
@@ -121,7 +122,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
         } finally {
           controller.close();
         }
-      },
+      }),
     });
     return new Response(stream, { headers: sseHeaders() });
   }
@@ -181,7 +182,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
   }
   if (path === "data/s3/backup/stream" && request.method === "POST") {
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const send = (event: string, payload: Record<string, unknown>) => controller.enqueue(sseFrame(event, payload));
         try {
           const result = await s3Backup(state.settings.s3Config, (message, percent) => {
@@ -194,7 +195,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
         } finally {
           controller.close();
         }
-      },
+      }),
     });
     return new Response(stream, { headers: sseHeaders() });
   }
@@ -203,7 +204,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
     const fileName = String(body.fileName ?? "").trim();
     if (!fileName || fileName.includes("\\")) return error("Invalid S3 backup file name", 400);
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const send = (event: string, payload: Record<string, unknown>) => controller.enqueue(sseFrame(event, payload));
         try {
           await s3Restore(state.settings.s3Config, fileName, (message, percent) => {
@@ -215,7 +216,7 @@ export async function handleDataRoutes(request: Request, _url: URL, path: string
         } finally {
           controller.close();
         }
-      },
+      }),
     });
     return new Response(stream, { headers: sseHeaders() });
   }

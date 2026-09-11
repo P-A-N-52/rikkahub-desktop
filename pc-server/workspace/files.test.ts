@@ -1,7 +1,7 @@
 // workspace/files.test.ts — 文件面板领域操作单测（M3-5）。reveal 不测（起系统进程）。
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Workspace } from "../foundation/types";
@@ -50,6 +50,28 @@ describe("previewWorkspaceFile", () => {
 });
 
 describe("rename/delete", () => {
+  test.if(process.platform === "darwin")("系统别名、软链和中文空格目录下的根保护不误删实际目录", () => {
+    const host = mkdtempSync(join(tmpdir(), "rkh-root-protection-"));
+    const dir = join(host, "中文 项目");
+    mkdirSync(join(dir, "sub"), { recursive: true });
+    writeFileSync(join(dir, "keep.txt"), "keep");
+    const alias = join(host, "alias");
+    symlinkSync(dir, alias);
+    symlinkSync(dir, join(dir, "root-link"));
+    try {
+      for (const rootPath of [dir, realpathSync(dir), alias, `${alias}/`]) {
+        const workspace = { root: rootPath } as Workspace;
+        for (const relativePath of ["", ".", "sub/..", "root-link"]) {
+          expect(() => deleteWorkspaceEntry(workspace, relativePath)).toThrow("Cannot delete the workspace root");
+          expect(() => renameWorkspaceEntry(workspace, relativePath, "moved")).toThrow("Cannot rename the workspace root");
+          expect(readFileSync(join(dir, "keep.txt"), "utf8")).toBe("keep");
+        }
+      }
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
   test("重命名限同目录、名称不得含分隔符;root 本身不可动", () => {
     writeFileSync(join(root, "old.txt"), "x");
     renameWorkspaceEntry(workspace, "old.txt", "new.txt");

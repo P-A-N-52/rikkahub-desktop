@@ -1,290 +1,92 @@
-// api/handlers/update.ts — 应用更新路由（update/check|download|apply|skip）
-// 纪律：纯搬迁自 server.ts routeApi()；GitHub Releases 检查/下载/覆盖安装流程原样保留。
-
+// Application updates: platform-specific installers share verified atomic downloads.
+import { serverWork } from "../../foundation/lifecycle";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { GithubRelease } from "../../foundation/types";
 import { updatesCacheDir } from "../../foundation/paths";
-import { readWithIdleTimeout } from "../../foundation/net";
 import { RUNNING_IN_CONTAINER, RUNTIME_PLATFORM } from "../../foundation/platform";
-import { compareSemver } from "../../foundation/utils";
 import {
-  APP_VERSION,
-  fetchGithubLatestRelease,
-  fetchLatestReleaseFromHtmlRedirect,
-  probeCachedInstaller,
-  readSkippedVersion,
-  UPDATE_R2_BASE,
-  writeSkippedVersion,
+  APP_VERSION, RELEASE_REPOSITORY, discoverRelease, downloadInstaller, isNewerRelease,
+  normalizeReleaseVersion, probeCompletedInstaller, readSkippedVersion, validateUpdateDownload,
+  writeSkippedVersion, type UpdateDownload, type UpdateTarget,
 } from "../../updates/index";
 import { error, json, readJson, sseHeaders } from "../request";
 
+const updateTarget: UpdateTarget = {
+  platform: RUNTIME_PLATFORM, architecture: process.arch, containerized: RUNNING_IN_CONTAINER,
+};
+
 export async function handleUpdateRoutes(request: Request, _url: URL, path: string): Promise<Response | null> {
-  // -- Update check / download ---------------------------------------------------
-  // Queries GitHub Releases for the latest published release of the PC repo, compares its
-  // tag (e.g. "v1.0.1") to APP_VERSION, and returns the diff so the About page can decide
-  // whether to prompt the user. Unauthenticated GitHub API is capped at 60 req/hr/IP and
-  // can 403 when the user's IP (or anyone behind the same NAT) has been hammering GitHub;
-  // when that happens we fall back to scraping the public `github.com/<repo>/releases/latest`
-  // redirect, which doesn't hit the API and isn't rate-limited.
   if (path === "update/check" && request.method === "GET") {
-    const repo = "yuh-G/rikkahub-desktop";
-
-    // 按当前运行平台挑选 release asset。命名约定：
-    //   Windows: Rikkahub_<tag>_x64-setup.exe   (NSIS 安装器,含 exe+web-ui+icons)
-    //   Linux:   Rikkahub_<tag>_linux_x64.tar.gz (二进制 + 前端资源一起打包,
-    //            因为前端由 routeStatic 在运行时从文件系统读取,不嵌入二进制)
-    //   macOS:   暂未发布 —— 返回 undefined,前端引导用户去 Release 页手动下载。
-    // 容器化部署(Docker 等)无法通过替换二进制持久更新,直接返回 undefined,
-    // 前端会提示用 docker pull 升级镜像。
-    const pickAsset = (assets: NonNullable<GithubRelease["assets"]>): NonNullable<GithubRelease["assets"]>[number] | undefined => {
-      if (RUNNING_IN_CONTAINER) return undefined;
-      if (RUNTIME_PLATFORM === "linux") {
-        return assets.find((a) => /linux[-_]x64.*\.tar\.gz$/i.test(a.name ?? ""));
-      }
-      if (RUNTIME_PLATFORM === "mac") {
-        return assets.find((a) => /\.dmg$/i.test(a.name ?? ""))
-          ?? assets.find((a) => /(?:macos|darwin|mac)[-_]x64/i.test(a.name ?? ""));
-      }
-      return assets.find((a) => /x64[-_]setup\.exe$/i.test(a.name ?? ""))
-        ?? assets.find((a) => /\.exe$/i.test(a.name ?? ""));
-    };
-
-    // API 不可用(rate limit)时的兜底:按命名约定直接拼 asset URL。
-    const predictAssetName = (tag: string): string =>
-      RUNTIME_PLATFORM === "linux" ? `Rikkahub_${tag}_linux_x64.tar.gz`
-      : RUNTIME_PLATFORM === "mac" ? `Rikkahub_${tag}_mac_x64.dmg`
-      : `Rikkahub_${tag}_x64-setup.exe`;
-
-    // Helper: build the JSON response for a given release tag + metadata, apply skip logic.
-    const buildResponse = (fields: Record<string, unknown>) => {
-      const latest = String(fields.latest ?? "");
-      const isNewer = compareSemver(latest, APP_VERSION) > 0;
-      const skipped = readSkippedVersion();
-      fields.current = APP_VERSION;
-      fields.isNewer = isNewer;
-      fields.isSkipped = isNewer && latest === skipped;
-      fields.platform = RUNTIME_PLATFORM;
-      fields.containerized = RUNNING_IN_CONTAINER;
-      // 缓存探测只对 Windows 有意义(.exe 安装器可直接启动)。Linux 下 download 需要先解压
-      // tar.gz 才能得到 apply 用的二进制路径,缓存的 tar.gz 不能直接 apply,所以跳过。
-      if (!RUNNING_IN_CONTAINER && RUNTIME_PLATFORM === "win") {
-        fields.cachedInstallerPath = probeCachedInstaller(String(fields.fileName ?? ""), latest, isNewer && !fields.isSkipped);
-      }
-      // Windows 下载源改走 R2 镜像(国内/全球都快,与官网同源);fileName 即 R2 对象名。
-      // Linux R2 无预编译包,保留 GitHub Release 直链。
-      if (!RUNNING_IN_CONTAINER && RUNTIME_PLATFORM === "win" && String(fields.fileName ?? "")) {
-        fields.downloadUrl = `${UPDATE_R2_BASE}/${fields.fileName}`;
-      }
-      return json(fields);
-    };
-
-    // Step 1: Use the rate-limit-free HTML redirect (HEAD to github.com/releases/latest)
-    // to discover the latest version tag. This never hits api.github.com so it never
-    // 403s — even when the user's IP has exhausted the 60 req/hr unauthenticated quota.
     try {
-      const redirect = await fetchLatestReleaseFromHtmlRedirect(repo);
-      const isNewer = compareSemver(redirect.tag, APP_VERSION) > 0;
-
-      // If no update available, return immediately — zero API calls.
-      if (!isNewer) {
-        return buildResponse({
-          latest: redirect.tag,
-          title: "",
-          notes: "",
-          htmlUrl: redirect.htmlUrl,
-          downloadUrl: "",
-          fileName: "",
-          size: 0,
-          source: "redirect",
-        });
-      }
-
-      // Step 2: There IS a newer version. Try the GitHub API for full release details
-      // (release notes, asset URLs, etc.). If the API is rate-limited, fall back to
-      // predicting the asset URL from the naming convention.
-      try {
-        const release = await fetchGithubLatestRelease(repo);
-        const tag = (release.tag_name ?? "").replace(/^v/i, "");
-        const assets = release.assets ?? [];
-        const installer = pickAsset(assets);
-        return buildResponse({
-          latest: tag,
-          title: release.name ?? release.tag_name ?? "",
-          notes: release.body ?? "",
-          htmlUrl: release.html_url ?? redirect.htmlUrl,
-          downloadUrl: installer?.browser_download_url ?? "",
-          fileName: installer?.name ?? "",
-          size: installer?.size ?? 0,
-          source: "api",
-        });
-      } catch {
-        // API failed (rate limit etc.) — use the version from redirect + predicted asset URL.
-        // 容器化或 macOS(无发布物)时不预测 URL,让前端引导用户手动处理。
-        if (RUNNING_IN_CONTAINER || RUNTIME_PLATFORM === "mac") {
-          return buildResponse({
-            latest: redirect.tag,
-            title: `v${redirect.tag}`,
-            notes: "",
-            htmlUrl: redirect.htmlUrl,
-            downloadUrl: "",
-            fileName: "",
-            size: 0,
-            source: "redirect",
-          });
-        }
-        const fileName = predictAssetName(redirect.tag);
-        return buildResponse({
-          latest: redirect.tag,
-          title: `v${redirect.tag}`,
-          notes: "",
-          htmlUrl: redirect.htmlUrl,
-          downloadUrl: `https://github.com/${repo}/releases/download/v${redirect.tag}/${fileName}`,
-          fileName,
-          size: 0,
-          source: "redirect",
-        });
-      }
-    } catch {
-      // Both redirect and API failed — very rare (network down, DNS failure, etc.)
-      return error("检查更新失败：无法连接 GitHub，请检查网络连接", 502);
+      const metadata = await discoverRelease(RELEASE_REPOSITORY, updateTarget, APP_VERSION);
+      const isNewer = isNewerRelease(metadata.latest, APP_VERSION);
+      const isSkipped = isNewer && metadata.latest === readSkippedVersion();
+      const download: UpdateDownload = {
+        releaseRepo: RELEASE_REPOSITORY, version: metadata.latest, target: updateTarget,
+        fileName: metadata.fileName, url: metadata.downloadUrl, expectedSize: metadata.size, sha256: metadata.sha256,
+      };
+      const cachedInstallerPath = isNewer && !isSkipped && !RUNNING_IN_CONTAINER && RUNTIME_PLATFORM !== "linux"
+        ? await probeCompletedInstaller(updatesCacheDir, download) : null;
+      return json({
+        ...metadata, current: APP_VERSION, isNewer, isSkipped, platform: RUNTIME_PLATFORM,
+        architecture: process.arch, releaseRepo: RELEASE_REPOSITORY, containerized: RUNNING_IN_CONTAINER,
+        cachedInstallerPath,
+      });
+    } catch (cause) {
+      return error(cause instanceof Error ? cause.message : "检查更新失败", 502);
     }
   }
-  // Downloads a release asset to the temp dir's rikkahub-updates subfolder and returns the
-  // local path. Windows: the UI then asks the Tauri shell to launch the .exe installer.
-  // Linux: the UI calls update/apply to swap the running binary. The user explicitly confirms
-  // the restart so we don't race a process that's about to be replaced.
   if (path === "update/download" && request.method === "POST") {
-    // 流式下载:响应是 text/event-stream,边下载边写盘边推 progress 事件,完成推 done(含
-    // 本地路径)/error。前端用 fetch + ReadableStream 解析——之前用 arrayBuffer 一次性下完
-    // 才返回,前端 XHR onprogress 下载期间收不到任何字节,进度条纹丝不动。
-    let body: { url?: string; fileName?: string };
+    let download: UpdateDownload;
     try {
-      body = await readJson<{ url?: string; fileName?: string }>(request);
-    } catch {
-      return error("Invalid request body", 400);
+      const body = await readJson<{ url?: string; fileName?: string; version?: string; size?: number; sha256?: string }>(request);
+      download = {
+        releaseRepo: RELEASE_REPOSITORY, target: updateTarget,
+        url: String(body.url ?? "").trim(), fileName: String(body.fileName ?? ""),
+        version: normalizeReleaseVersion(String(body.version ?? "")), expectedSize: body.size ?? 0,
+        sha256: body.sha256,
+      };
+      validateUpdateDownload(download);
+    } catch (cause) {
+      return error(cause instanceof Error ? cause.message : "Invalid download request", 400);
     }
-    const url = String(body.url ?? "").trim();
-    if (!/^https:\/\//i.test(url)) return error("Invalid download URL", 400);
-    // 只放行 GitHub 与自建 R2 镜像,缩小 URL 被篡改时的攻击面。
-    // 批次二 R5-5:R2 侧此前用 pub-[a-f0-9]+\.r2\.dev 泛匹配,等于放行【任何人】的 R2
-    // 公共桶——配合 probeCachedInstaller"文件名含版本号的 .exe 即缓存安装器",已授权
-    // 客户端可诱导下载任意 exe 并在下次检查更新时被当作"直接安装"候选。收紧为
-    // UPDATE_R2_BASE 的精确 host。
-    const host = (() => {
-      try {
-        return new URL(url).host.toLowerCase();
-      } catch {
-        return "";
-      }
-    })();
-    const r2Host = new URL(UPDATE_R2_BASE).host.toLowerCase();
-    if (host !== "github.com" && host !== r2Host && !/^[a-z0-9-]+(\.[a-z0-9-]+)*\.githubusercontent\.com$/.test(host)) {
-      return error(`Refusing to download from untrusted host: ${host}`, 400);
-    }
-    const sanitized = String(body.fileName ?? "").replace(/[^A-Za-z0-9._\-]/g, "") || "rikkahub-update";
-    // Windows: launch_installer 只认 .exe(lib.rs 路径检查);Linux: asset 是 tar.gz,保留原名。
-    const fileName = RUNTIME_PLATFORM === "win"
-      ? (/\.exe$/i.test(sanitized) ? sanitized : `${sanitized}.exe`)
-      : sanitized;
-    mkdirSync(updatesCacheDir, { recursive: true });
-    const targetPath = join(updatesCacheDir, fileName);
-
-    // 批次二 R5-5:下载流补 cancel 处理。此前客户端断开后 fetch/写盘循环只能靠 enqueue
-    // 抛错间接终止,Bun 的 file writer 不走 end(),半截文件+句柄一直留到 GC。现在:
-    //   cancel → abort 上游 fetch → 读循环立刻抛 AbortError → finally 统一收尾。
-    // 半截文件必须删:probeCachedInstaller 把"文件名含版本号且 size>0 的 .exe"当作可
-    // 直接安装的缓存安装器,残留的半截安装包会在下次检查更新时被当成完整品提供给用户。
     const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, request.signal, serverWork.signal]);
     const stream = new ReadableStream({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const encoder = new TextEncoder();
-        const send = (obj: Record<string, unknown>) => {
-          try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-          } catch { /* 客户端已断开(cancel 已触发),丢弃事件 */ }
+        const send = (event: Record<string, unknown>) => {
+          if (signal.aborted) return;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         };
-        let writer: ReturnType<ReturnType<typeof Bun.file>["writer"]> | null = null;
-        let downloadComplete = false;
         try {
-          // 专题7:下载流空闲看门狗。CDN 静默挂死(TCP 通但不回字节)时,若无上限,
-          // 响应头等待或 reader.read() 永久悬挂,前端进度条永久卡住且无错误提示。
-          // 超时抛错后走下方 catch:推 error 事件、abort 掉底层连接、finally 删半截文件。
-          const res = await readWithIdleTimeout(
-            () => fetch(url, { redirect: "follow", headers: { "User-Agent": "RikkaHub-PC" }, signal: abort.signal }),
-            30_000,
-            "下载连接超时：30s 内未收到服务器响应",
-          );
-          if (!res.ok || !res.body) {
-            // D2(复查):错误分支的正文读取同样要看门狗——非 2xx 头到达后服务器悬挂不回
-            // 正文时 res.text() 会永久挂起,进度条卡死且无报错。超时/失败都按空文案处理。
-            const text = res.ok
-              ? "no response body"
-              : await readWithIdleTimeout(() => res.text(), 10_000, "error body timeout").catch(() => "");
-            send({ type: "error", message: `Download failed: ${res.status} ${String(text).slice(0, 200)}` });
+          const result = await downloadInstaller(updatesCacheDir, download, {
+            signal, onProgress: (progress) => send({ type: "progress", ...progress }),
+          });
+          signal.throwIfAborted();
+          if (RUNTIME_PLATFORM !== "linux") {
+            // Windows opens NSIS; macOS opens this DMG and explains the manual replacement.
+            send({ type: "done", ...result });
             return;
           }
-          const total = Number(res.headers.get("content-length") || 0);
-          const reader = res.body.getReader();
-          writer = Bun.file(targetPath).writer();
-          let received = 0;
-          while (true) {
-            const { done, value } = await readWithIdleTimeout(
-              () => reader.read(),
-              60_000,
-              "下载停滞：60s 未收到任何数据，已中断（网络或下载源异常，请重试）",
-            );
-            if (done) break;
-            await writer.write(value);
-            received += value.length;
-            const percent = total > 0 ? Math.round((received / total) * 100) : 0;
-            send({ type: "progress", loaded: received, total, percent });
-          }
-          await writer.end();
-          writer = null;
-          downloadComplete = true;
-
-          if (RUNTIME_PLATFORM === "win") {
-            // targetPath 指向 .exe 安装器,前端交给 Tauri launch_installer。
-            send({ type: "done", path: targetPath, size: received });
-            return;
-          }
-          // Linux: 下载的是 tar.gz(二进制 + 前端资源),解压后返回内部二进制路径,
-          // update/apply 据此连同同目录的 web-ui 一起替换。
-          const extractBase = fileName.replace(/\.tar\.gz$/i, "") || "rikkahub-pc";
+          // Existing Linux package layout and apply route remain unchanged.
+          const extractBase = download.fileName.replace(/\.tar\.gz$/i, "") || "rikkahub-pc";
           const extractDir = join(updatesCacheDir, `extracted-${extractBase}`);
-          try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* 清理上一次解压残留 */ }
+          rmSync(extractDir, { recursive: true, force: true });
           mkdirSync(extractDir, { recursive: true });
-          const tar = Bun.spawnSync(["tar", "xzf", targetPath, "-C", extractDir]);
-          if (tar.exitCode !== 0) {
-            send({ type: "error", message: `解压更新包失败：${tar.stderr?.toString().trim() || `tar exited ${tar.exitCode}`}` });
-            return;
-          }
-          // 解压后约定结构:extractDir/rikkahub-pc/rikkahub-pc (+ extractDir/rikkahub-pc/web-ui/)
+          const tar = Bun.spawnSync(["tar", "xzf", result.path, "-C", extractDir]);
+          if (tar.exitCode !== 0) throw new Error(`解压更新包失败：${tar.stderr?.toString().trim() || `tar exited ${tar.exitCode}`}`);
           const innerExe = join(extractDir, "rikkahub-pc", "rikkahub-pc");
-          if (!existsSync(innerExe) || statSync(innerExe).size === 0) {
-            send({ type: "error", message: "解压后未找到可执行文件（更新包结构异常）" });
-            return;
-          }
-          try { chmodSync(innerExe, 0o755); } catch { /* best-effort */ }
-          send({ type: "done", path: innerExe, size: received });
-        } catch (err) {
-          // 看门狗超时后底层 fetch 仍挂着(race 无法取消 promise),显式 abort 释放连接。
-          try { abort.abort(); } catch { /* 已 abort 或未发起 */ }
-          send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+          if (!existsSync(innerExe) || statSync(innerExe).size === 0) throw new Error("解压后未找到可执行文件（更新包结构异常）");
+          chmodSync(innerExe, 0o755);
+          send({ type: "done", path: innerExe, size: result.size });
+        } catch (cause) {
+          if (!signal.aborted) send({ type: "error", message: cause instanceof Error ? cause.message : String(cause) });
         } finally {
-          if (writer) {
-            try { await writer.end(); } catch { /* 尽力关句柄 */ }
-          }
-          if (!downloadComplete) {
-            try { unlinkSync(targetPath); } catch { /* 可能尚未创建 */ }
-          }
-          try { controller.close(); } catch { /* cancel 后流已关闭 */ }
+          try { controller.close(); } catch { /* canceled response */ }
         }
-      },
-      cancel() {
-        abort.abort();
-      },
+      }),
+      cancel() { abort.abort(); },
     });
     return new Response(stream, { headers: sseHeaders({ "Cache-Control": "no-store" }) });
   }
@@ -407,8 +209,8 @@ export async function handleUpdateRoutes(request: Request, _url: URL, path: stri
   }
   if (path === "update/skip" && request.method === "POST") {
     const body = await readJson<{ version?: string }>(request);
-    const version = String(body.version ?? "").trim().replace(/^v/i, "");
-    if (!version) return error("Missing version", 400);
+    let version: string;
+    try { version = normalizeReleaseVersion(String(body.version ?? "")); } catch { return error("Invalid release version", 400); }
     writeSkippedVersion(version);
     return json({ status: "ok", skipped: version });
   }

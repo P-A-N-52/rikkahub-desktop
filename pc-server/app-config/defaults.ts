@@ -5,6 +5,7 @@ import type { State } from "../foundation/types";
 import type { Settings } from "../foundation/types/settings";
 import { id } from "../foundation/utils";
 import { RUNNING_IN_CONTAINER } from "../foundation/platform";
+import { defaultKeybindings } from "../shared/keybindings";
 import { DEFAULT_AUTO_MODEL_ID, defaultProviders } from "../model-providers";
 import { DEFAULT_SYSTEM_TTS_ID, defaultTtsProviders } from "../media/tts";
 import { defaultAssistant } from "../assistants";
@@ -176,17 +177,7 @@ export function defaultSettings(): Settings {
     preferredPort: null,
     workspaceLastPermissionPreset: null,
     shellPath: "",
-    keybindings: {
-      newConversation: { keys: ["Ctrl", "N"], enabled: true },
-      prevConversation: { keys: ["Alt", "Up"], enabled: true },
-      nextConversation: { keys: ["Alt", "Down"], enabled: true },
-      renameConversation: { keys: ["F2"], enabled: true },
-      searchConversations: { keys: ["Ctrl", "Shift", "F"], enabled: true },
-      openSettings: { keys: ["Ctrl", ","], enabled: true },
-      openImageGeneration: { keys: ["Ctrl", "I"], enabled: true },
-      // 滚轮缩放:binding 固定为 Ctrl+Wheel,无法录制,只有 enabled 开关。
-      zoomInOut: { enabled: true },
-    },
+    keybindings: defaultKeybindings(process.platform === "darwin" ? "macos" : process.platform),
     // 默认开启全局记忆层(叠加注入开箱可用)。老用户迁移时由 normalizeState 的 M1 逻辑
     // 推断:若所有助手 enableMemory=false,改为 false(避免被动注入全局记忆)。
     memorySettings: {

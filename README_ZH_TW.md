@@ -11,6 +11,8 @@
   [English](README.md) | 繁體中文 | [简体中文](README_ZH_CN.md)
 </div>
 
+macOS 開發與 Apple Silicon 本機建置請參閱 [macOS 開發說明](docs/macos.md)。桌面適配分階段驗收，本機建置與正式簽署發佈分別記錄。
+
 ## 🚀 下載
 
 到 [Releases](https://github.com/yuh-G/rikkahub-desktop/releases) 頁面下載最新的安裝包，

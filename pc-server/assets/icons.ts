@@ -1,9 +1,7 @@
 // assets/icons.ts — AI 品牌图标服务（lobehub 图标代理 + 本地缓存 + 兜底 SVG）
 // 纪律：纯搬迁自 server.ts（阶段 5.3b），行为不变。
 
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { executableDir, rootDir } from "../foundation/paths";
+import { resolveResourceFile } from "../foundation/paths";
 import { mime } from "../api/request";
 
 function fallbackSvg(name: string) {
@@ -85,11 +83,7 @@ export function iconForName(name: string) {
 export async function serveAIIcon(name: string) {
   const iconName = iconForName(name);
   if (iconName) {
-    const candidates = [
-      resolve(executableDir, "icons", iconName),
-      resolve(rootDir, "icons", iconName),
-    ];
-    const target = candidates.find((candidate) => existsSync(candidate));
+    const target = resolveResourceFile("icons", iconName, true);
     if (target) {
       return new Response(Bun.file(target), {
         headers: { "Content-Type": mime(target), "Cache-Control": "public, max-age=86400" },

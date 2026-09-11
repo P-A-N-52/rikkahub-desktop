@@ -2,6 +2,7 @@
 // mode-injection/*、lorebook/*、quick-message/*、search/*、模型与 provider/*、proxy/port）
 // 纪律：纯搬迁自 server.ts routeApi()；settings 数据契约冻结。
 
+import { runBackgroundTask, serverWork } from "../../foundation/lifecycle";
 import { existsSync } from "node:fs";
 import type { Assistant, JsonValue, Provider, ProxyConfig, SearchService } from "../../foundation/types";
 import type { Settings } from "../../foundation/types/settings";
@@ -892,7 +893,7 @@ ${outcome.serverName ? `<p>${esc(outcome.serverName)}</p>` : ""}
     if (!providerItem) return error("Provider not found", 404);
 
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start: (controller) => serverWork.run(async () => {
         const send = (event: string, payload: JsonValue | object) => controller.enqueue(sseFrame(event, payload));
         try {
           send("progress", { message: "正在读取模型列表..." });
@@ -935,7 +936,7 @@ ${outcome.serverName ? `<p>${esc(outcome.serverName)}</p>` : ""}
         } finally {
           controller.close();
         }
-      },
+      }),
     });
     return new Response(stream, { headers: sseHeaders() });
   }
@@ -945,7 +946,7 @@ ${outcome.serverName ? `<p>${esc(outcome.serverName)}</p>` : ""}
     if (!providerItem) return error("Provider not found", 404);
     // 用户主动获取模型列表——大概率是想试新模型。顺带刷新 models.dev 缓存,让新模型
     // 的 context 上限立即可用(不用等每日 TTL)。fire-and-forget,不阻塞模型列表返回。
-    void loadModelsDev(true);
+    runBackgroundTask(() => loadModelsDev(true));
     try {
       const result = await fetchProviderModels(providerItem);
       if (body.save) {

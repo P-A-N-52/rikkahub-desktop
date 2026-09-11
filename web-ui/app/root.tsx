@@ -21,6 +21,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { UpdateDialog, type UpdateInfo } from "./components/update-dialog";
 import { WebAuthGate } from "./components/web-auth-gate";
 import { StartupGate } from "./components/startup-gate";
+import { DesktopMenuListener } from "./components/desktop-menu-listener";
 import Logo from "./components/logo";
 import { FontFaceInjector } from "./components/font-face-injector";
 import { openExternal } from "./lib/external-link";
@@ -58,9 +59,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        {/* R1-1:Tauri 壳(lib.rs)用此旗标区分"本应用已加载"与"连接失败错误页",
-            决定是否需要重导航到 sidecar 实际端口。必须内联在 <head> 里尽早执行。 */}
-        <script dangerouslySetInnerHTML={{ __html: "window.__RIKKAHUB_APP__=1" }} />
         {/* 【预绘制·读侧】A 族闪动修复:重放上次会话由 AppContent 字体/缩放效果器
             (本文件,搜 "rikkahub.prepaint.v1" 写侧)算出的最终 CSS 值,让首帧根字号与
             字体链就是正确值 —— 根治"settings 快照到达后根字号突变、rem 布局(含侧边栏
@@ -349,6 +347,7 @@ function AppContent() {
           成熟桌面应用的主区域切换均为即时切换 —— React 单次提交内旧页换新页,
           不存在中间帧,是唯一确定性零闪的形态。 */}
       <Outlet />
+      <DesktopMenuListener />
       <WebAuthGate />
       <StartupGate />
       <FontFaceInjector />

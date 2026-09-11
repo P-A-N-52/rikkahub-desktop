@@ -829,7 +829,7 @@
     "reset": "Reset to default",
     "press_keys": "Press a key combination…",
     "click_to_set": "Click to set",
-    "ctrl_wheel": "Ctrl + Wheel",
+    "modifier_wheel": "{{modifier}} + Wheel",
     "conflict_with": "Conflicts with \"{{name}}\" — pick another combination",
     "actions": {
       "newConversation": "New conversation",
@@ -970,6 +970,9 @@
     "serif_stack": "Serif (system stack)",
     "mono_stack": "Monospace (system stack)",
     "loading": "Loading fonts…",
+    "system_loading": "Loading system fonts… Bundled and custom fonts are ready.",
+    "system_failed": "System fonts could not be loaded. Bundled and custom fonts are still available.",
+    "retry": "Retry",
     "added_toast": "Font added: {{name}}",
     "upload_failed": "Font upload failed",
     "delete_confirm": "Delete the custom font \"{{name}}\"?",

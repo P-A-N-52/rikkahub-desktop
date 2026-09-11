@@ -829,7 +829,7 @@
     "reset": "恢复默认",
     "press_keys": "按下快捷键组合…",
     "click_to_set": "点击设置",
-    "ctrl_wheel": "Ctrl + 滚轮",
+    "modifier_wheel": "{{modifier}} + 滚轮",
     "conflict_with": "与「{{name}}」冲突,请换一组组合",
     "actions": {
       "newConversation": "新建会话",
@@ -970,6 +970,9 @@
     "serif_stack": "衬线（系统栈）",
     "mono_stack": "等宽（系统栈）",
     "loading": "加载字体…",
+    "system_loading": "正在加载系统字体，可先选择应用自带或自定义字体。",
+    "system_failed": "系统字体加载失败，应用自带和自定义字体仍可使用。",
+    "retry": "重试",
     "added_toast": "已添加字体：{{name}}",
     "upload_failed": "字体上传失败",
     "delete_confirm": "删除自定义字体「{{name}}」？",

@@ -18,6 +18,7 @@
 import { existsSync } from "node:fs";
 import process from "node:process";
 import type { StoredFile } from "../foundation/types";
+import { stopBunProcess, waitUntil, type ProcessShutdownOptions } from "../foundation/owned-processes";
 import {
   extractStoredFileText,
   extractedTextPath,
@@ -58,7 +59,10 @@ async function* streamChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator
 //   运行不再重试——自动重试会在"必崩文件"上形成无限重生循环;重启或重新上传即重试)。
 const registry = new Map<number, { status: "pending" | "done" | "empty" | "failed"; done?: number; total?: number }>();
 const queue: StoredFile[] = [];
-let activeCount = 0;
+const activeTasks = new Set<Promise<void>>();
+const activeChildren = new Set<Bun.Subprocess>();
+let stopping = false;
+let shutdownPromise: Promise<void> | undefined;
 // 并发上限 2:提取是 CPU 密集活,再多只会互相抢核;多余任务排队保持 pending。
 const MAX_CONCURRENT_EXTRACTIONS = 2;
 // 停滞超时:无进度输出 5 分钟判死。用"停滞"而非绝对时长——万页大书只要每页都在
@@ -68,7 +72,7 @@ const STALL_TIMEOUT_MS = 5 * 60_000;
 /** 后台提取入口(3-4 的 ensureExtractedTextAsync 迁移至此,语义不变:调用即返回,
  *  结果写旁车缓存,本次请求方降级 fallbackDocumentText,下次发送生效)。 */
 export function ensureExtractedTextAsync(entry: StoredFile): void {
-  if (!isExtractableDocument(entry)) return;
+  if (stopping || !isExtractableDocument(entry)) return;
   if (registry.has(entry.id)) return;
   if (existsSync(extractedTextPath(entry.id))) {
     registry.set(entry.id, { status: "done" });
@@ -89,24 +93,39 @@ export function getExtractionStatus(entry: StoredFile): ExtractionStatus {
   }
   if (existsSync(extractedTextPath(entry.id))) return { status: "done", done: null, total: null };
   ensureExtractedTextAsync(entry);
-  return { status: "pending", done: null, total: null };
+  return { status: stopping ? "failed" : "pending", done: null, total: null };
 }
 
 function pump(): void {
-  while (activeCount < MAX_CONCURRENT_EXTRACTIONS && queue.length > 0) {
+  while (!stopping && activeTasks.size < MAX_CONCURRENT_EXTRACTIONS && queue.length > 0) {
     const entry = queue.shift();
     if (!entry) break;
-    activeCount += 1;
-    void runExtractionChild(entry).finally(() => {
-      activeCount -= 1;
+    const task = runExtractionChild(entry).finally(() => {
+      activeTasks.delete(task);
       pump();
     });
+    activeTasks.add(task);
   }
+}
+
+/** Close the queue synchronously, then await both native children and their readers. */
+export function shutdownExtractions(options: ProcessShutdownOptions): Promise<void> {
+  stopping = true;
+  for (const entry of queue.splice(0)) registry.set(entry.id, { status: "failed" });
+  return shutdownPromise ??= (async () => {
+    const results = await Promise.allSettled([
+      ...[...activeChildren].map((child) => stopBunProcess(child, options)),
+      waitUntil(Promise.all([...activeTasks]), options, "Document extraction tasks"),
+    ]);
+    const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, "Document extraction did not stop cleanly");
+  })();
 }
 
 async function runExtractionChild(entry: StoredFile): Promise<void> {
   const t0 = Date.now();
   let result: "ok" | "empty" | null = null;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
   try {
     const child = Bun.spawn({
       cmd: [process.execPath, ...process.argv.slice(1)],
@@ -121,7 +140,8 @@ async function runExtractionChild(entry: StoredFile): Promise<void> {
       stdout: "pipe",
       stderr: "pipe",
     });
-    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    activeChildren.add(child);
+    void child.exited.then(() => activeChildren.delete(child), () => activeChildren.delete(child));
     let killedForStall = false;
     const armStallTimer = () => {
       if (stallTimer) clearTimeout(stallTimer);
@@ -180,6 +200,8 @@ async function runExtractionChild(entry: StoredFile): Promise<void> {
   } catch (err) {
     registry.set(entry.id, { status: "failed" });
     console.warn(`[extract] ${entry.fileName} spawn failed:`, err);
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer);
   }
 }
 

@@ -7,7 +7,7 @@ import { fetchWithTimeout } from "../foundation/net";
 import { id, isRecord, mergeById } from "../foundation/utils";
 import { state } from "../persistence/json-store";
 import { jsonBody, textBody } from "../model-providers";
-import { synthesizeSystemTtsToWav } from "../tools";
+import { synthesizeSystemTtsToWav, systemTtsBackend } from "../tools";
 import { addLog } from "../api/logs";
 
 export const DEFAULT_SYSTEM_TTS_ID = "026a01a2-c3a0-4fd5-8075-80e03bdef200";
@@ -216,11 +216,11 @@ export async function generateSpeechWithTtsProvider(text: string, providerId?: s
     const speed = Number.isFinite(speedOverride) && (speedOverride as number) > 0
       ? (speedOverride as number)
       : Number(provider.speechRate ?? 1);
-    const wavBytes = await synthesizeSystemTtsToWav(text, speed);
+    const wavBytes = await synthesizeSystemTtsToWav(text, speed, provider.voice);
     addLog({
       providerId: provider.id,
       providerName: provider.name,
-      url: "windows:System.Speech",
+      url: systemTtsBackend(),
       ok: true,
       status: 200,
       kind: "provider:tts",

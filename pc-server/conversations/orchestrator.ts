@@ -78,6 +78,7 @@ import { checkoutConversation, releaseConversation } from "./working-set";
 import { conversationExistsInDb } from "./read-queries";
 import { reportError } from "../observability/app-errors";
 import { awaitingApproval, generating } from "./generation-state";
+import { runBackgroundTask, serverWork } from "../foundation/lifecycle";
 import {
   appendTextPart,
   canResumeToolExecution,
@@ -786,7 +787,12 @@ export function resolveEngineForConversation(conversation: Conversation): Engine
   return resolveEngine(ENGINE_REGISTRY, conversation, findAssistant(conversation.assistantId));
 }
 
-export async function generateAnswer(conversation: Conversation, regenerateAtNodeId?: string) {
+export function generateAnswer(conversation: Conversation, regenerateAtNodeId?: string): Promise<void> {
+  if (serverWork.stopping) return Promise.resolve();
+  return serverWork.run(() => generateAnswerInternal(conversation, regenerateAtNodeId));
+}
+
+async function generateAnswerInternal(conversation: Conversation, regenerateAtNodeId?: string) {
   // R2-3:入口自带"先中止旧流"不变式。端点级守卫(send/edit/regenerate 的先 abort)挡不住
   // OCR 续体窗口:两条消息的续体先后异步触发本函数时,后者若直接 generating.set 会顶掉
   // 前者的 controller——前者成无主流,两路流式交错写同一节点(parts 交叉污染)、且无人能停。
@@ -933,7 +939,7 @@ export async function generateAnswer(conversation: Conversation, regenerateAtNod
       }
     });
     const snapshot = cloneConversation(conversation);
-    void runPostGenerationTasks(conversation.id, snapshot, currentMessage.id);
+    runBackgroundTask(() => runPostGenerationTasks(conversation.id, snapshot, currentMessage.id));
   } catch (err) {
     if (!conversationStillExists(conversation.id)) {
       completeConversationGeneration(conversation.id, controller);

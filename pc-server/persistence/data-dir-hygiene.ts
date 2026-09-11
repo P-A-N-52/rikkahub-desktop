@@ -11,6 +11,7 @@
 // - files/ 孤儿附件:只统计提示、不删(GC 需与安卓删除语义对齐,留后续专项);
 // - 备份类收敛 backups/ 子目录:缓做(要改恢复链全部路径,收益只有目录可读性)。
 
+import { setTimeout as delay } from "node:timers/promises";
 import { existsSync, readdirSync, rmSync, statSync, unlinkSync, type Dirent } from "node:fs";
 import { basename, join } from "node:path";
 import { dataDir, filesDir, memoryDir, piAgentDir, updatesCacheDir } from "../foundation/paths";
@@ -150,10 +151,10 @@ function sweepPiSessionsDirOnce(): boolean {
 }
 
 /** 就绪后异步执行的卫生任务总入口(server.ts 调用)。 */
-export async function runDataDirHygiene(): Promise<void> {
+export async function runDataDirHygiene(signal?: AbortSignal): Promise<void> {
   try {
     // 让开启动后的首屏请求高峰
-    await Bun.sleep(3_000);
+    await delay(3_000, undefined, { signal });
     if (sweepPiSessionsDirOnce()) {
       reportError("persistence", "info", "数据目录清理：退役并移除旧版引擎记忆目录", "pi-agent/sessions/(jsonl 时代残留)", "hygiene_pi_sessions_retired");
     }
@@ -171,7 +172,7 @@ export async function runDataDirHygiene(): Promise<void> {
     }
     // 孤儿附件只统计提示(全库扫节点较重,按启动次数间隔执行)
     if (state.launchCount % ORPHAN_STATS_LAUNCH_INTERVAL === 1) {
-      await Bun.sleep(0);
+      await delay(0, undefined, { signal });
       const stats = computeOrphanUploadStats(collectReferencedFileIds());
       if (stats.orphanEntries > 0 || stats.untrackedFiles > 0) {
         const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
@@ -191,6 +192,7 @@ export async function runDataDirHygiene(): Promise<void> {
       }
     }
   } catch (err) {
+    if (signal?.aborted) return;
     reportError("persistence", "warn", "数据目录清理任务失败，不影响运行，下次启动重试", err, "hygiene_failed");
   }
 }

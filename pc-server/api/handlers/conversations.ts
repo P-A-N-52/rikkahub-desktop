@@ -5,6 +5,7 @@ import type { Conversation, ConversationSnapshotEventDto, ConversationSnapshotMe
 import type { ConversationListDto, ConversationNodesPageDto, MessageSearchResultDto, PagedResult } from "../../foundation/types";
 import { applyPlaceholders, id, message, textFromParts } from "../../foundation/utils";
 import { CodedError } from "../../foundation/errors";
+import { runBackgroundTask } from "../../foundation/lifecycle";
 import { state } from "../../persistence/json-store";
 import {
   getConversation,
@@ -230,7 +231,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       if (!conversation.title) conversation.title = "New Conversation";
       persistConversation(conversation);
       broadcastConversation(conversation);
-      void (async () => {
+      runBackgroundTask(async () => {
         // R2-2:续体自持引用——路由级 checkout 在 202 返回时即 release,慢 OCR(可 >60s)
         // 期间实例可能被 sweep 清出:续体写的是孤儿对象,generateAnswer 的 checkout 从活库
         // 装出第二实例,流式写进孤儿、persist 的却是陈旧实例(屏上看得到回答,重启后消失)。
@@ -251,7 +252,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
         } finally {
           releaseConversation(conversation.id);
         }
-      })();
+      });
       return json({ status: "accepted" }, { status: 202 });
     }
     if (sub === "pin" && request.method === "POST") {
@@ -474,7 +475,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       broadcastNodeUpdate(conversation, node);
       broadcastConversation(conversation);
       if (msg.role === "USER") {
-        void (async () => {
+        runBackgroundTask(async () => {
           // R2-2:同 messages POST 续体——自持引用覆盖 OCR 全程,防实例被 sweep 后分叉。
           checkoutConversation(conversation.id);
           try {
@@ -488,7 +489,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
           } finally {
             releaseConversation(conversation.id);
           }
-        })();
+        });
       }
       return json({ status: "updated" }, { status: msg.role === "USER" ? 202 : 200 });
     }
@@ -506,7 +507,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
       conversation.updateAt = Date.now();
       persistConversation(conversation);
       broadcastConversation(conversation);
-      void (async () => {
+      runBackgroundTask(async () => {
         // R2-2:续体自持引用(流式翻译可长于 60s sweep 闲置期),理由同 messages POST 续体。
         checkoutConversation(conversation.id);
         try {
@@ -557,7 +558,7 @@ export async function handleConversationRoutes(request: Request, url: URL, path:
           }
           releaseConversation(conversation.id);
         }
-      })();
+      });
       return json({ status: "accepted", translation: msg.translation }, { status: 202 });
     }
     if (sub === "compress" && request.method === "POST") {

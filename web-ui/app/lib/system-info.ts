@@ -1,14 +1,17 @@
-// 真实操作系统信息。桌面壳内走 Tauri 的 OS 插件(取到 Windows/Linux 真实版本),
-// 浏览器 dev 模式回退到 navigator。集中一处,避免各组件各自判断 Tauri 环境。
+import { arch, platform, version, type Platform } from "@tauri-apps/plugin-os";
+import { isDesktopShell } from "./external-link";
+
+// OS 插件的这三个 API 同步读取壳启动时注入的信息,首帧即可确定原生窗控策略。
+// 浏览器预览回退到 navigator;显示摘要不参与平台或能力判断。
+export type SystemPlatform = Platform | "web";
 
 export interface SystemInfo {
+  platform: SystemPlatform;
   /** 显示用一行摘要,如 "Windows 11 Home China 26200 · x86_64"。 */
   summary: string;
 }
 
-export function isTauriEnvironment(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+export const isTauriEnvironment = isDesktopShell;
 
 function platformLabel(platform: string): string {
   switch (platform) {
@@ -29,42 +32,43 @@ function platformLabel(platform: string): string {
 
 // navigator.userAgentData / userAgent 仅作 dev 浏览器兜底,不追求精确。
 function fallbackInfo(): SystemInfo {
-  if (typeof navigator === "undefined") return { summary: "Web" };
+  if (typeof navigator === "undefined") return { platform: "web", summary: "Web" };
   const ua = navigator.userAgent;
-  let label = "Web";
-  if (/Windows NT 10/.test(ua)) label = "Windows";
-  else if (/Mac OS X/.test(ua)) label = "macOS";
-  else if (/Linux/.test(ua)) label = "Linux";
+  let platform: SystemPlatform = "web";
+  if (/Windows NT/.test(ua)) platform = "windows";
+  else if (/iPhone|iPad|iPod/.test(ua)) platform = "ios";
+  else if (/Android/.test(ua)) platform = "android";
+  else if (/Mac OS X/.test(ua)) platform = "macos";
+  else if (/Linux/.test(ua)) platform = "linux";
+  const label = platform === "web" ? "Web" : platformLabel(platform);
   const arch = /WOW64|Win64|x64/.test(ua) ? "x86_64" : "";
-  return { summary: arch ? `${label} · ${arch}` : label };
+  return { platform, summary: arch ? `${label} · ${arch}` : label };
 }
 
-let cached: SystemInfo | null = null;
-
-/** 是否 Windows 平台(shell 路径等 Windows-only 设置的渲染开关)。
- *  同步快照:summary 以 Windows 开头即视为 Windows;异步首判经 getSystemInfo 预热缓存。 */
-export function isWindowsPlatform(): boolean {
-  return (cached ?? fallbackInfo()).summary.startsWith("Windows");
-}
-
-export async function getSystemInfo(): Promise<SystemInfo> {
-  if (cached) return cached;
-  if (!isTauriEnvironment()) {
-    cached = fallbackInfo();
-    return cached;
-  }
+/** 同步平台快照,供首帧布局及窗口事件入口使用。 */
+export function getSystemInfoSnapshot(): SystemInfo {
+  if (!isTauriEnvironment()) return fallbackInfo();
   try {
-    const os = await import("@tauri-apps/plugin-os");
-    const platform = await os.platform();
-    const version = typeof os.version === "function" ? os.version() : "";
-    const arch = typeof os.arch === "function" ? os.arch() : "";
-    const label = platformLabel(platform);
-    const parts = [label, version, arch].filter((part) => Boolean(part));
-    cached = { summary: parts.join(" ") };
-    return cached;
+    const currentPlatform = platform();
+    const parts = [platformLabel(currentPlatform), version(), arch()].filter(Boolean);
+    return { platform: currentPlatform, summary: parts.join(" ") };
   } catch (err) {
     console.warn("[system-info] Tauri OS plugin failed, falling back", err);
-    cached = fallbackInfo();
-    return cached;
+    return fallbackInfo();
   }
+}
+
+/** 是否 Windows 平台(shell 路径等 Windows-only 设置的渲染开关)。 */
+export function isWindowsPlatform(): boolean {
+  return getSystemInfoSnapshot().platform === "windows";
+}
+
+/** macOS 由原生标题栏处理窗控和拖拽;浏览器不接管页面鼠标事件。 */
+export function usesCustomWindowControls(): boolean {
+  return isTauriEnvironment() && getSystemInfoSnapshot().platform !== "macos";
+}
+
+// 保留关于页等现有异步调用接口。
+export async function getSystemInfo(): Promise<SystemInfo> {
+  return getSystemInfoSnapshot();
 }

@@ -16,8 +16,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { reportError } from "../../observability/app-errors";
+import { spawnSync } from "node:child_process";
 
 export interface ShellConfig {
   shell: string;
@@ -207,98 +206,4 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 
 export function getShellEnv(): NodeJS.ProcessEnv {
   return { ...process.env };
-}
-
-/**
- * Detached child processes must be tracked so they can be killed on parent
- * shutdown signals (SIGHUP/SIGTERM).
- */
-const trackedDetachedChildPids = new Set<number>();
-
-export function trackDetachedChildPid(pid: number): void {
-  trackedDetachedChildPids.add(pid);
-}
-
-export function untrackDetachedChildPid(pid: number): void {
-  trackedDetachedChildPids.delete(pid);
-}
-
-export function killTrackedDetachedChildren(): void {
-  for (const pid of trackedDetachedChildPids) {
-    killProcessTree(pid);
-  }
-  trackedDetachedChildPids.clear();
-}
-
-/** 进程是否仍在存活(同步探测)。kill(pid, 0) 不发信号只验存活性:存活返回 true,
- *  已死抛 ESRCH,权限不足(EPERM,进程在但属他人)按"仍在"算——那种情况我们同样杀不动。 */
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // ESRCH = 进程不存在(已死,理想终局);EPERM 及其余 = 进程在,按存活处理。
-    return (err as NodeJS.ErrnoException)?.code === "ESRCH" ? false : true;
-  }
-}
-
-/**
- * Kill a process and all its children (cross-platform)
- */
-export function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    // Use taskkill on Windows to kill process tree.
-    // A4-②:taskkill 不再裸 fire-and-forget——补 error/exit 监听,失败可见 + 进程仍活时降级。
-    // stdio 仍 ignore、不等待(调用方是 abort/超时/退出钩子,不能阻塞),仅失败路径改变行为。
-    let killer: ReturnType<typeof spawn>;
-    try {
-      killer = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        detached: true,
-        windowsHide: true,
-      });
-    } catch (err) {
-      // spawn 同步抛(如 taskkill 不在 PATH)——降级直接杀主进程。
-      reportError("workspace", "warn", `taskkill 启动失败,降级直接终止进程:${pid}`, err, "process_tree_kill_failed", { pid });
-      killSingleProcess(pid);
-      return;
-    }
-    // spawn 异步失败(ENOENT 等):进程没被杀,降级 + 上报。
-    killer.once("error", (err) => {
-      reportError("workspace", "warn", `taskkill 进程异常,降级直接终止进程:${pid}`, err, "process_tree_kill_failed", { pid });
-      killSingleProcess(pid);
-    });
-    killer.once("exit", (code) => {
-      // taskkill 退出码 0 = 树已杀;128/256(进程不存在)= 目标本就已死,也算成功。其余非零
-      // (如权限不足 5)且进程仍存活 → taskkill 没杀掉,降级直接杀主进程(子进程可能残留,如实上报)。
-      const gone = code === 0 || code === 128 || code === 256;
-      if (gone || !processAlive(pid)) return;
-      reportError("workspace", "warn", `taskkill 未能终止进程树(exit=${code}),降级直接终止主进程:${pid}`, undefined, "process_tree_kill_failed", { pid, exitCode: code ?? -1 });
-      killSingleProcess(pid);
-    });
-  } else {
-    // Use SIGKILL on Unix/Linux/Mac
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch (err) {
-      // 按进程组杀失败(组不存在/已散)——降级只杀子进程本身;组杀抛 ESRCH 说明整组已死,
-      // 仍走降级做幂等兜底(单杀一个死进程只是再抛一次 ESRCH,由 killSingleProcess 内部吞掉)。
-      if ((err as NodeJS.ErrnoException)?.code !== "ESRCH") {
-        reportError("workspace", "warn", `进程组终止失败,降级终止单进程:${pid}`, err, "process_group_kill_failed", { pid });
-      }
-      killSingleProcess(pid);
-    }
-  }
-}
-
-/** 单进程降级 kill(跨平台)。杀一个已死进程抛 ESRCH 属预期,静默吞掉不打扰用户;
- *  其余(权限等)真实失败上报 warn。 */
-function killSingleProcess(pid: number): void {
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ESRCH") {
-      reportError("workspace", "warn", `进程终止失败:${pid}`, err, "process_kill_failed", { pid });
-    }
-  }
 }

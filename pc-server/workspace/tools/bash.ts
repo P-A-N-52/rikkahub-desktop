@@ -12,13 +12,11 @@ import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { waitForChildProcess } from "./child-process";
+import { assertProcessSpawningAllowed, trackOwnedProcess } from "../../foundation/owned-processes";
 import { OutputAccumulator } from "./output-accumulator";
 import {
   getShellConfig,
   getShellEnv,
-  killProcessTree,
-  trackDetachedChildPid,
-  untrackDetachedChildPid,
 } from "./shell";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate";
 import type { WorkspaceToolDefinition } from "./types";
@@ -93,6 +91,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
       }
 
       const commandFromStdin = shellConfig.commandTransport === "stdin";
+      assertProcessSpawningAllowed();
       const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
         cwd,
         detached: process.platform !== "win32",
@@ -104,11 +103,11 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         child.stdin?.on("error", () => {});
         child.stdin?.end(command);
       }
-      if (child.pid) trackDetachedChildPid(child.pid);
+      const owned = trackOwnedProcess(child);
       let timedOut = false;
       let timeoutHandle: NodeJS.Timeout | undefined;
       const onAbort = () => {
-        if (child.pid) killProcessTree(child.pid);
+        owned.kill();
       };
 
       try {
@@ -116,7 +115,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         if (timeoutMs !== undefined) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
-            if (child.pid) killProcessTree(child.pid);
+            owned.kill();
           }, timeoutMs);
         }
         // Stream stdout and stderr.
@@ -138,7 +137,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         }
         return { exitCode };
       } finally {
-        if (child.pid) untrackDetachedChildPid(child.pid);
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (signal) signal.removeEventListener("abort", onAbort);
       }

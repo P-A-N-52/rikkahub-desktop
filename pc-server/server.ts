@@ -15,13 +15,15 @@ import { routeStatic } from "./api/static";
 import { routeApi } from "./api/router";
 import { hasProxyForwardHeaders, isLoopbackAddress, markRequestNetworkContext } from "./api/net-context";
 import { loadModelsDev } from "./inference-engine/providers";
-import { checkpointConversationsDb, flushConvDirtyNow, getConversation, persistConversation } from "./conversations";
+import { beginConversationShutdown, checkpointConversationsDb, flushConvDirtyNow, getConversation, persistConversation } from "./conversations";
 
 import process from "node:process";
 import { installProcessSafetyNet, reportError } from "./observability/app-errors";
 import { bootCleanExit, bootMilestone, bootNote, bootTraceStartup, readPreviousCrashLog } from "./observability/boot-trace";
-import { killTrackedDetachedChildren } from "./workspace/tools/shell";
-import { maybeRunExtractionWorker } from "./files/extraction";
+import { shutdownOwnedProcesses } from "./foundation/owned-processes";
+import { beforeDeadline, createShutdown, desktopParentPid, installShutdownFetchInterceptor, runBackgroundTask, serverWork, watchDesktopParent, type ShutdownResult } from "./foundation/lifecycle";
+import { shutdownSystemTts } from "./tools/platform";
+import { maybeRunExtractionWorker, shutdownExtractions } from "./files/extraction";
 
 // 全面审查 4-2:进程级异常兜底必须最早安装,罩住后续启动期与运行期的一切
 // 定时器/游离 Promise 顶层抛错(SIGINT/SIGTERM 的优雅停机在文件尾另行注册)。
@@ -50,6 +52,19 @@ function emitStartupFatal(code: number, message: string): void {
   bootNote("startupFatal", `[code ${code}] ${message}`);
 }
 
+// The desktop owner contract belongs only to this sidecar, not commands it spawns.
+const expectedDesktopParent = (() => {
+  try {
+    const parent = desktopParentPid();
+    delete process.env.RIKKAHUB_PARENT_PID;
+    return parent;
+  } catch (err) {
+    emitStartupFatal(1, err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+})();
+installShutdownFetchInterceptor();
+
 // 1-5/R1-1:dataDir 单实例互斥必须先于绑端口——若后到实例先绑了端口再发现锁被占,
 // 壳已拿到端口标记并导航,只会看到一扇死窗口。锁是纯文件操作,不拖慢端口标记。
 // bootstrap(状态装载+迁移链)则移到 Bun.serve 之后异步执行,见文件尾。
@@ -69,6 +84,11 @@ const args = new Set(Bun.argv.slice(1));
 const portIndex = Bun.argv.findIndex((arg) => arg === "--port");
 const portEqualsArg = Bun.argv.find((arg) => arg.startsWith("--port="));
 const portValue = portEqualsArg?.split("=")[1] ?? (portIndex >= 0 ? Bun.argv[portIndex + 1] : undefined);
+const strictPort = args.has("--strict-port");
+if (strictPort && (!portValue || !/^\d+$/.test(portValue) || Number(portValue) < 1 || Number(portValue) > 65535)) {
+  emitStartupFatal(1, "--strict-port requires an explicit --port from 1 to 65535.");
+  process.exit(1);
+}
 
 if (process.platform === "linux") {
   const missing: string[] = [];
@@ -147,8 +167,9 @@ function isAllowedOrigin(request: Request): boolean {
 }
 const preferredPort = resolvePreferredPort();
 // Try the preferred port first; on a port-unusable error walk upward. Containers don't walk — a
-// port collision inside a container is unexpected, and silently hopping would hide a real problem.
-const MAX_PORT_ATTEMPTS = RUNNING_IN_CONTAINER ? 1 : 20;
+// port collision inside a container or the desktop development stack must remain explicit.
+const allowPortFallback = !RUNNING_IN_CONTAINER && !strictPort;
+const MAX_PORT_ATTEMPTS = allowPortFallback ? 20 : 1;
 
 // 专题10-①:候选端口序列。非容器部署在顺延耗尽后追加 0(交给操作系统分配随机空闲端口)
 // 兜底——端口是启动期配置,启动失败意味着用户永远进不了设置页改端口(死锁),必须保证应用
@@ -159,7 +180,9 @@ for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt += 1) {
   const p = preferredPort + attempt;
   if (p <= 65535) candidatePorts.push(p);
 }
-if (!RUNNING_IN_CONTAINER) candidatePorts.push(0);
+if (allowPortFallback) candidatePorts.push(0);
+
+const asrClients = new Set<{ close(code?: number, reason?: string): void }>();
 
 const { server, port } = (() => {
   for (const tryPort of candidatePorts) {
@@ -185,10 +208,13 @@ const { server, port } = (() => {
               if (url.pathname.startsWith("/api/") && !isAllowedOrigin(request)) {
                 return error("Forbidden: cross-origin request blocked", 403);
               }
+              if (serverWork.stopping && url.pathname.startsWith("/api/") && url.pathname !== "/api/app/shutdown") {
+                return error("服务端正在退出，请稍后重新启动", 503);
+              }
               // R1-1 启动闸门:端口已绑定但 bootstrap(装载+迁移)还在后台跑。状态端点
               // 始终可达且免鉴权(不含机密;state 未装载时也评估不了鉴权),供前端迁移
               // 进度页轮询。未就绪时其余 /api 一律 503(shutdown 除外——壳可能在迁移中
-              // 退出,flushAllStateBeforeExit 内部有未就绪守卫);静态资源照常放行,
+              // 退出,停机刷盘有未就绪守卫);静态资源照常放行,
               // 前端才有页面可渲染进度。
               if (url.pathname === "/api/startup/status") {
                 return json(getStartupStatus());
@@ -196,10 +222,8 @@ const { server, port } = (() => {
               if (!isStartupReady() && url.pathname.startsWith("/api/") && url.pathname !== "/api/app/shutdown") {
                 return error("服务端正在启动(数据装载/迁移进行中),请稍候重试", 503);
               }
-              // 全面审查 8-2/1-1:优雅停机端点。Windows 上 Tauri 壳 kill=TerminateProcess,
-              // SIGTERM 钩子不运行——壳退出前先 POST 本端点,服务端把全部状态刷盘后才返回
-              // 200,壳收到即可放心硬杀,数据零丢失。仅接受本机回环调用(先于 Web 鉴权:
-              // 壳不持有 token;局域网/远程客户端被 IP 拦住,不能停别人的服务)。
+              // The shell receives success only after work, owned processes and persistence
+              // have completed. Keep the endpoint reachable for concurrent exit requests.
               if (url.pathname === "/api/app/shutdown" && request.method === "POST") {
                 // 批次二 R5-1:本机架 nginx/caddy 反代时,远程请求到达 Bun 的 remote address
                 // 也是 127.0.0.1,裸回环判定会被穿透——任何互联网客户端 POST 本端点即可无鉴权
@@ -209,13 +233,9 @@ const { server, port } = (() => {
                 if (hasProxyForwardHeaders(request) || !isLoopbackAddress(ip)) {
                   return error("Forbidden: shutdown is loopback-only", 403);
                 }
-                await flushAllStateBeforeExit();
-                // 响应发出后再停服自退;100ms 让 200 先落到壳侧。
-                setTimeout(() => {
-                  try { server.stop(true); } catch { /* already stopping */ }
-                  process.exit(0);
-                }, 100);
-                return json({ ok: true });
+                const result = await shutdown();
+                scheduleExit(result);
+                return json({ ok: result.ok }, { status: result.ok ? 200 : 500 });
               }
               // Web 鉴权（阶段 5.2）：仅在配置了访问密码时生效。auth/token 端点先于
               // 鉴权检查处理（它就是换 token 的入口）；其余 /api/* 一律要求有效 token。
@@ -232,8 +252,10 @@ const { server, port } = (() => {
               if (url.pathname.startsWith("/api/")) {
                 // 回环上下文标记:"仅限本机"端点(如 data/export/to-path 向宿主路径写文件)
                 // 在 handler 层经 net-context 查询;判定语义与上方 shutdown 闸同源。
-                markRequestNetworkContext(request, server.requestIP(request)?.address ?? "");
-                return await routeApi(request, url);
+                const remoteAddress = server.requestIP(request)?.address ?? "";
+                const workRequest = new Request(request, { signal: AbortSignal.any([request.signal, serverWork.signal]) });
+                markRequestNetworkContext(workRequest, remoteAddress);
+                return await serverWork.run(() => routeApi(workRequest, url));
               }
               return await routeStatic(url);
             } catch (err) {
@@ -245,7 +267,9 @@ const { server, port } = (() => {
             }
           },
           websocket: {
+            open(ws) { asrClients.add(ws); },
             message(ws, data) {
+              if (serverWork.stopping) { ws.close(1001, "Server shutting down"); return; }
               if ((ws.data as { kind?: string } | undefined)?.kind !== "asr") return;
               if (typeof data === "string") {
                 // 批次二 R5-6:裸 JSON.parse 会让恶意/损坏的文本帧抛进 uncaughtException
@@ -269,6 +293,7 @@ const { server, port } = (() => {
               sendAsrAudio(session, buffer);
             },
             close(ws) {
+              asrClients.delete(ws);
               if ((ws.data as { kind?: string } | undefined)?.kind === "asr") stopAsrRealtimeSession(ws);
             },
           },
@@ -284,7 +309,7 @@ const { server, port } = (() => {
       // "Is port X in use?"),而 code 字段才是稳定契约。
       const errCode = (err as NodeJS.ErrnoException | null)?.code ?? "";
       const portUnusable = /EADDRINUSE|EACCES|EPERM|address already in use|in use|permission denied|access permissions|10013/i.test(`${errCode} ${message}`);
-      if (!portUnusable || tryPort === 0) {
+      if (!portUnusable || tryPort === 0 || strictPort) {
         emitStartupFatal(1, `本地服务无法在端口 ${tryPort === 0 ? "(系统分配)" : tryPort} 启动:${message}`);
         console.error(`[rikkahub-server] Failed to start on port ${tryPort}: ${message}`);
         process.exit(1);
@@ -327,7 +352,7 @@ console.log(`Data directory: ${dataDir}`);
 // exit 只会留下一扇死窗口);错误中心与 stdout 各留痕,FATAL 标记供壳侧日志。
 void (async () => {
   try {
-    await bootstrap();
+    await serverWork.run(bootstrap);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     emitStartupFatal(1, `状态装载/迁移失败:${message}`);
@@ -338,6 +363,7 @@ void (async () => {
   }
   markStartupReady();
   bootMilestone("bootstrap 完成");
+  if (serverWork.stopping) return;
   // R1 取证:上次未干净退出会留下 server.log。启动成功后按判读等级分流(日志问题 2):
   //   abnormal(启动期夭折/运行期记录到异常)→ 错误中心浮 warn,用户应该知道;
   //   external(里程碑全完成、无异常记录 → 外力终止:直接关机/强退/任务管理器)→ 静默留档,
@@ -356,9 +382,9 @@ void (async () => {
   warnIfExposedWithoutAuth(bindHostname);
   // R1-13:数据目录卫生(超龄 corrupt 隔离、过时安装包、化石快照、孤儿附件统计)。
   // 就绪后台执行,内部自捕获,绝不影响运行。
-  void runDataDirHygiene();
+  runBackgroundTask(() => runDataDirHygiene(serverWork.signal));
   // 懒加载 models.dev 模型目录(用于 context window 显示)。fire-and-forget,失败不影响启动。
-  void loadModelsDev();
+  runBackgroundTask(loadModelsDev);
   console.log("Press Ctrl+C to stop RikkaHub PC.");
 
   // Start anonymous analytics (DAU tracking).  Fire-and-forget — a failed ping
@@ -367,62 +393,76 @@ void (async () => {
   startAnalytics();
 })();
 
-let shutdownStarted = false;
-
-/** 全面审查 1-1/8-11/2-0b:关停前的完整刷盘链。信号路径与 /api/app/shutdown 端点共用,
- *  幂等(双触发只跑一次)。顺序:state.json(saveState 清节流定时器并立即起写 +
- *  flushSaveState 循环追到最后一笔尾随写)→ 活库脏行 → 生成中会话全量 reconcile(2-0b)
- *  → WAL checkpoint(TRUNCATE 把 -wal 并入主库并截断)。 */
-async function flushAllStateBeforeExit(): Promise<void> {
-  if (shutdownStarted) return;
-  shutdownStarted = true;
-  // R1-1:未就绪 = state 从未装载、/api 一直 503,没有任何用户变更可刷;此时 saveState
-  // 会对未初始化的 state 抛错。迁移链本身崩溃安全(完成标记后置+逐会话幂等),直接
-  // 放行退出,只释放实例锁。
-  if (!isStartupReady()) {
-    releaseDataDirLock();
-    bootCleanExit(); // R1 取证:未就绪干净退出(启动即被关)也算正常,删 pending 不留假报警。
-    return;
-  }
-  try {
-    saveState();
-    await flushSaveState();
-  } catch (err) {
-    console.warn("[shutdown] state.json 刷盘失败", err);
-  }
-  try {
-    flushConvDirtyNow();
-    // 全面审查 2-0b:生成中的会话再做一次全量 reconcile——流式增量 flush 只补写脏节点,
-    // 结构性变更(新增节点/截断/重排)要靠 persistConversation 的"删旧节点+按序重插"
-    // 才完整落盘。生成中会话通常 0~2 个,同步全量写可承受。
-    for (const convId of generating.keys()) {
-      const conv = getConversation(convId);
-      if (conv) persistConversation(conv);
+const shutdown = createShutdown({
+  stopWork(deadline) {
+    beginConversationShutdown(deadline);
+    serverWork.stop();
+    for (const controller of generating.values()) controller.abort();
+    for (const ws of asrClients) {
+      stopAsrRealtimeSession(ws);
+      ws.close(1001, "Server shutting down");
     }
-    checkpointConversationsDb();
-  } catch (err) {
-    console.warn("[conv-db] 关停刷库失败", err);
-  }
-  // 1-5:全部刷盘完成后释放 dataDir 锁(只删自己的;崩溃残留的陈旧锁由下次启动接管)。
-  releaseDataDirLock();
-  // R1 取证:干净退出收尾——删本次 pending + 上次可能残留的 server.log("下次正常退出则
-  // 日志清除",关机/强退的假报警就此归零)。此后进程才 exit,文件生灭即"是否干净退出"的判据。
-  bootCleanExit();
+  },
+  drainWork: (deadline) => serverWork.drain(deadline),
+  async stopProcesses(deadline) {
+    const results = await Promise.allSettled([
+      shutdownOwnedProcesses({ deadline }),
+      shutdownExtractions({ deadline }),
+      shutdownSystemTts({ deadline }),
+    ]);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Owned process cleanup failed");
+  },
+  async flushState(deadline) {
+    if (!isStartupReady()) return;
+    const options = { requireSuccess: true, deadline };
+    const failures: unknown[] = [];
+    saveState();
+    const jsonSaved = beforeDeadline(flushSaveState({ requireSuccess: true }), deadline, "state.json flush");
+    // Reconcile any generation that failed to settle before the deadline too. In that
+    // case shutdown stays unsuccessful and preserves the lock/crash evidence until exit.
+    try {
+      flushConvDirtyNow(options);
+      for (const convId of generating.keys()) {
+        const conv = getConversation(convId);
+        if (conv) persistConversation(conv, options);
+      }
+      checkpointConversationsDb(options);
+    } catch (err) {
+      failures.push(err);
+    }
+    try { await jsonSaved; } catch (err) { failures.push(err); }
+    if (failures.length) throw new AggregateError(failures, "State could not be saved completely");
+  },
+  onFailure(phase, err) {
+    console.error(`[shutdown] ${phase} failed`, err);
+    bootNote("shutdownFailed", phase);
+  },
+});
+
+let exitScheduled = false;
+function scheduleExit(result: ShutdownResult): void {
+  if (exitScheduled) return;
+  exitScheduled = true;
+  // Allow HTTP acknowledgement to leave before closing active sockets. Failure keeps
+  // pending evidence and the lock; the next process reclaims the now-stale PID lock.
+  setTimeout(() => {
+    server.stop(true);
+    if (result.ok) {
+      releaseDataDirLock();
+      bootCleanExit();
+    }
+    process.exit(result.ok ? 0 : 1);
+  }, 100);
 }
 
-async function shutdown() {
-  server.stop(true);
-  // 工作区 bash 残留子进程清扫(M1-5)：detached 进程组不随宿主退出，不杀会变孤儿。
-  killTrackedDetachedChildren();
-  await flushAllStateBeforeExit();
-  process.exit(0);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => { void shutdown().then(scheduleExit); });
 }
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-// SIGHUP:Windows 关闭终端窗口(libuv 把 CTRL_CLOSE_EVENT 映射为 SIGHUP,~5s 宽限)、
-// Unix 终端断开。dev 形态下"直接关终端"是高频操作,不挂就走硬杀留假崩溃档(日志问题 2)。
-process.on("SIGHUP", shutdown);
+watchDesktopParent(expectedDesktopParent, () => {
+  bootNote("desktopParentLost", "Desktop parent exited; stopping its sidecar");
+  void shutdown().then(scheduleExit);
+});
 
 if (!args.has("--dev") && !args.has("--no-open")) {
   const opener = process.platform === "win32" ? "cmd" : "sh";
@@ -431,4 +471,3 @@ if (!args.has("--dev") && !args.has("--no-open")) {
     : ["-c", `open http://localhost:${port} || xdg-open http://localhost:${port}`];
   Bun.spawn([opener, ...command], { stdout: "ignore", stderr: "ignore" });
 }
-

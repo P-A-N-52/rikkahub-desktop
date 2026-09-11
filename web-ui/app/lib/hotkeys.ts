@@ -8,8 +8,10 @@
  * event.code(字母/数字/功能键/方向键)或 code→符号映射(符号键用 code 而非 key,避免 Shift 改变
  * key 的问题——Shift+5 的 key 是 "%" 但 code 是 "Digit5")。
  *
- * 默认表(DEFAULT_KEYBINDINGS)必须和后端 defaultSettings().keybindings 保持一致。
+ * 默认键表与类型来自前后端共享的纯 TypeScript 模块。
  */
+import { KEYBINDING_ORDER } from "@server/shared/keybindings";
+export { defaultKeybindings, KEYBINDING_ORDER } from "@server/shared/keybindings";
 import type { KeybindingAction, KeybindingEntry } from "~/types/settings";
 
 /** 修饰键固定顺序,录制/比对都按此排序,保证 tokensEqual 可直接逐项比较。 */
@@ -35,31 +37,6 @@ const SPECIAL_CODE_MAP: Record<string, string> = {
   Backspace: "Backspace", Delete: "Delete", Insert: "Insert",
   Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
 };
-
-/** 默认快捷键绑定。和后端 defaultSettings().keybindings 必须一致,改动两边同步。 */
-export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, KeybindingEntry> = {
-  newConversation: { keys: ["Ctrl", "N"], enabled: true },
-  prevConversation: { keys: ["Alt", "Up"], enabled: true },
-  nextConversation: { keys: ["Alt", "Down"], enabled: true },
-  renameConversation: { keys: ["F2"], enabled: true },
-  searchConversations: { keys: ["Ctrl", "Shift", "F"], enabled: true },
-  openSettings: { keys: ["Ctrl", ","], enabled: true },
-  openImageGeneration: { keys: ["Ctrl", "I"], enabled: true },
-  // 滚轮缩放:固定 Ctrl+Wheel,无法录制,只有 enabled 开关。
-  zoomInOut: { enabled: true },
-};
-
-/** 设置页展示顺序。 */
-export const KEYBINDING_ORDER: KeybindingAction[] = [
-  "newConversation",
-  "prevConversation",
-  "nextConversation",
-  "renameConversation",
-  "searchConversations",
-  "openSettings",
-  "openImageGeneration",
-  "zoomInOut",
-];
 
 /** 从 KeyboardEvent.code + .key 提取主键 token;纯修饰键或不可绑定键返回 undefined。 */
 export function codeToToken(code: string): string | undefined {
@@ -124,12 +101,12 @@ export function isValidBinding(tokens: string[]): boolean {
 }
 
 /** 单个 token 的显示文本。 */
-export function formatToken(token: string): string {
+export function formatToken(token: string, platform: string): string {
   switch (token) {
     case "Ctrl": return "Ctrl";
-    case "Alt": return "Alt";
+    case "Alt": return platform === "macos" ? "Option" : "Alt";
     case "Shift": return "Shift";
-    case "Meta": return "Win";
+    case "Meta": return platform === "macos" ? "Cmd" : "Win";
     case "Up": return "↑";
     case "Down": return "↓";
     case "Left": return "←";
@@ -145,9 +122,21 @@ export function formatToken(token: string): string {
 }
 
 /** 完整 binding 的显示文本,如 "Ctrl+N"、"Alt+↑"、"F2"。 */
-export function formatBinding(tokens: string[] | undefined): string {
+export function formatBinding(tokens: string[] | undefined, platform: string): string {
   if (!tokens || tokens.length === 0) return "";
-  return normalizeTokens(tokens).map(formatToken).join("+");
+  return normalizeTokens(tokens).map((token) => formatToken(token, platform)).join("+");
+}
+
+/** macOS Cmd+wheel avoids treating trackpad Ctrl+wheel pinch events as font changes. */
+export function wheelZoomDirection(
+  event: Pick<WheelEvent, "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "deltaX" | "deltaY">,
+  platform: string,
+): 1 | -1 | null {
+  const hasZoomModifier = platform === "macos"
+    ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    : event.ctrlKey;
+  if (!hasZoomModifier || event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return null;
+  return event.deltaY < 0 ? 1 : -1;
 }
 
 /**

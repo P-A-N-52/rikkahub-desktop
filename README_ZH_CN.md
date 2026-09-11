@@ -11,6 +11,8 @@
   [English](README.md) | [繁體中文](README_ZH_TW.md) | 简体中文
 </div>
 
+macOS 开发与 Apple Silicon 本地构建见 [macOS 开发说明](docs/macos.md)。桌面适配按阶段验收，本地构建与正式签名发布分别记录。
+
 ## 🚀 下载
 
 到 [Releases](https://github.com/yuh-G/rikkahub-desktop/releases) 页面下载最新的安装包，

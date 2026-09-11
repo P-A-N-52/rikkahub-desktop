@@ -1,8 +1,7 @@
-// foundation/paths.ts — 路径常量
-// 纪律：只导出路径字符串，不依赖业务逻辑，不引入副作用。
+// foundation/paths.ts — 数据路径与只读资源定位；不依赖业务逻辑，不创建目录。
 
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 // 仓库根（web-ui/、fonts/、icons/、pc-data/ 的父目录）。本文件位于 pc-server/foundation/，
@@ -13,6 +12,71 @@ export const sourceRootDir = resolve(import.meta.dir, "..", "..");
 export const executableDir = dirname(process.execPath);
 export const rootDir = existsSync(join(executableDir, "web-ui")) ? executableDir : sourceRootDir;
 export const dataDir = resolve(process.env.RIKKAHUB_PC_DATA_DIR ?? join(rootDir, "pc-data"));
+
+export interface ResourcePaths {
+  explicit: boolean;
+  staticRoots: string[];
+  fonts: string[];
+  icons: string[];
+}
+
+function requireResource(path: string, directory = false): void {
+  try {
+    const stats = statSync(path);
+    if (directory ? stats.isDirectory() : stats.isFile()) return;
+  } catch (cause) {
+    throw new Error(`Invalid RIKKAHUB_RESOURCE_DIR: required ${directory ? "directory" : "file"} is unavailable: ${path}`, { cause });
+  }
+  throw new Error(`Invalid RIKKAHUB_RESOURCE_DIR: expected ${directory ? "directory" : "file"}: ${path}`);
+}
+
+/** 显式资源根使用唯一打包布局；未指定时保留已有源码/独立可执行文件的查找顺序。 */
+export function resolveResourcePaths(source: string, executable: string, explicit?: string): ResourcePaths {
+  if (explicit !== undefined) {
+    if (!isAbsolute(explicit)) throw new Error("RIKKAHUB_RESOURCE_DIR must be an absolute path");
+    const resourceRoot = resolve(explicit);
+    const staticRoot = join(resourceRoot, "web-ui", "build", "client");
+    requireResource(resourceRoot, true);
+    requireResource(join(staticRoot, "index.html"));
+    requireResource(join(resourceRoot, "fonts"), true);
+    requireResource(join(resourceRoot, "icons"), true);
+    return { explicit: true, staticRoots: [staticRoot], fonts: [join(resourceRoot, "fonts")], icons: [join(resourceRoot, "icons")] };
+  }
+  const legacyRoot = existsSync(join(executable, "web-ui")) ? executable : source;
+  const unique = (paths: string[]) => [...new Set(paths)];
+  return {
+    explicit: false,
+    staticRoots: unique([
+      join(executable, "web-ui", "build", "client"), join(executable, "web-ui", "build"),
+      join(legacyRoot, "web-ui", "build", "client"), join(legacyRoot, "web-ui", "build"), join(legacyRoot, "web-ui", "dist"),
+    ]),
+    fonts: unique([join(executable, "fonts"), join(legacyRoot, "fonts")]),
+    icons: unique([join(executable, "icons"), join(legacyRoot, "icons")]),
+  };
+}
+
+export const resourcePaths = resolveResourcePaths(sourceRootDir, executableDir, process.env.RIKKAHUB_RESOURCE_DIR);
+
+/** 保留独立运行时更新前端后立即生效的行为，不缓存静态目录的存在性。 */
+export function resolveStaticRoot(): string | null {
+  if (resourcePaths.explicit) {
+    const root = resourcePaths.staticRoots[0]!;
+    requireResource(join(root, "index.html"));
+    return root;
+  }
+  return resourcePaths.staticRoots.find((root) => existsSync(join(root, "index.html"))) ?? null;
+}
+
+/** 保留旧布局的候选优先级；必需资源只在显式打包模式下报缺失。 */
+export function resolveResourceFiles(kind: "fonts" | "icons", fileName: string, required = false): string[] {
+  const found = resourcePaths[kind].map((dir) => join(dir, fileName)).filter((file) => existsSync(file));
+  if (resourcePaths.explicit && required) requireResource(found[0] ?? join(resourcePaths[kind][0]!, fileName));
+  return found;
+}
+
+export function resolveResourceFile(kind: "fonts" | "icons", fileName: string, required = false): string | null {
+  return resolveResourceFiles(kind, fileName, required)[0] ?? null;
+}
 
 export const filesDir = join(dataDir, "files");
 export const skillsDir = join(dataDir, "skills");

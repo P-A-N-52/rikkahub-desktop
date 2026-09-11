@@ -34,6 +34,14 @@ sys-locale = "0.3"
 # 之前直接喂 32px 由 Windows 拉伸导致模糊;现在运行时从 256px 源图 Lanczos 缩放到精确尺寸。
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Native SIGTERM for the owned macOS child; libc is already in the locked graph.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+core-foundation = "0.10"
+# Reuse the locked parsers/digest for downloaded DMG verification.
+semver = "1"
+sha2 = "0.10"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
   "Win32_Foundation",

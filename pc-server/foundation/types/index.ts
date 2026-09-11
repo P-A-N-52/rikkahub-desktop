@@ -390,7 +390,7 @@ export type GithubRelease = {
   name?: string;
   body?: string;
   html_url?: string;
-  assets?: { name?: string; browser_download_url?: string; size?: number }[];
+  assets?: { name?: string; browser_download_url?: string; size?: number; digest?: string }[];
 };
 
 export interface MemoryEntry {

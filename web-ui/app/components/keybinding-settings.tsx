@@ -3,7 +3,7 @@
  *
  * 每行:功能名 | 绑定显示/录制按钮 | 重置(仅修改过时) | 启用开关。
  * 录制:点按钮进入编辑态 → 暂停全局快捷键(setHotkeysPaused)→ 按键实时采集 → 合法且无冲突即
- * 保存并退出;Esc / 失焦退出。zoomInOut 固定 Ctrl+滚轮,不可录制,只有开关。
+ * 保存并退出;Esc / 失焦退出。zoomInOut 为平台固定滚轮手势,不可录制,只有开关。
  * 冲突:录制时 findConflict 实时比对其它已启用的绑定,冲突即红字提示并拒绝保存。
  */
 import * as React from "react";
@@ -14,16 +14,17 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { setHotkeysPaused } from "~/lib/hotkey-events";
 import {
-  DEFAULT_KEYBINDINGS,
+  defaultKeybindings,
   KEYBINDING_ORDER,
   eventToTokens,
   findConflict,
-  formatBinding,
   formatToken,
   isValidBinding,
   normalizeTokens,
   tokensEqual,
 } from "~/lib/hotkeys";
+import { isComposingKeyEvent } from "~/lib/input-keyboard";
+import { getSystemInfoSnapshot } from "~/lib/system-info";
 import { cn } from "~/lib/utils";
 import api from "~/services/api";
 import { useSettingsStore } from "~/stores";
@@ -40,18 +41,24 @@ function Kbd({ children }: { children: React.ReactNode }) {
 export function KeybindingSettings() {
   const { t } = useTranslation();
   const keybindings = useSettingsStore((s) => s.settings?.keybindings);
+  const platform = getSystemInfoSnapshot().platform;
+  const defaults = React.useMemo(() => defaultKeybindings(platform), [platform]);
   const [editingAction, setEditingAction] = React.useState<KeybindingAction | null>(null);
   const [pendingKeys, setPendingKeys] = React.useState<string[]>([]);
   const [conflictAction, setConflictAction] = React.useState<KeybindingAction | null>(null);
+  // Safari clicks do not focus buttons; the display/recorder branches reuse one DOM node.
+  const focusRecorder = React.useCallback((element: HTMLButtonElement | null) => {
+    element?.focus({ preventScroll: true });
+  }, []);
 
   // 合并默认 + 用户配置(用户未改的回落默认)。
   const resolved = React.useMemo<Record<KeybindingAction, KeybindingEntry>>(() => {
     const merged = {} as Record<KeybindingAction, KeybindingEntry>;
     for (const action of KEYBINDING_ORDER) {
-      merged[action] = keybindings?.[action] ?? DEFAULT_KEYBINDINGS[action];
+      merged[action] = { ...defaults[action], ...keybindings?.[action] };
     }
     return merged;
-  }, [keybindings]);
+  }, [defaults, keybindings]);
 
   const exitEditing = React.useCallback(() => {
     setHotkeysPaused(false);
@@ -80,7 +87,7 @@ export function KeybindingSettings() {
     void api.post("settings/keybindings", { action, enabled });
   };
   const resetOne = (action: KeybindingAction) => {
-    const def = DEFAULT_KEYBINDINGS[action];
+    const def = defaults[action];
     void api.post("settings/keybindings", { action, keys: def.keys ?? [], enabled: def.enabled });
   };
   const resetAll = () => {
@@ -88,9 +95,9 @@ export function KeybindingSettings() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, action: KeybindingAction) => {
+    if (isComposingKeyEvent(e.nativeEvent)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (e.nativeEvent.isComposing) return;
     if (e.key === "Escape") {
       exitEditing();
       return;
@@ -132,7 +139,10 @@ export function KeybindingSettings() {
           const entry = resolved[action];
           const isEditing = editingAction === action;
           const isZoom = action === "zoomInOut";
-          const isModified = !isZoom && !tokensEqual(entry.keys ?? [], DEFAULT_KEYBINDINGS[action].keys ?? []);
+          const isModified = !isZoom && (
+            entry.enabled !== defaults[action].enabled ||
+            !tokensEqual(entry.keys ?? [], defaults[action].keys ?? [])
+          );
 
           return (
             <div
@@ -146,7 +156,8 @@ export function KeybindingSettings() {
               <div className="flex items-center gap-2">
                 {isEditing ? (
                   <button
-                    autoFocus
+                    type="button"
+                    ref={focusRecorder}
                     onKeyDown={(e) => handleKeyDown(e, action)}
                     onBlur={exitEditing}
                     className={cn(
@@ -155,7 +166,7 @@ export function KeybindingSettings() {
                     )}
                   >
                     {pendingKeys.length > 0 ? (
-                      normalizeTokens(pendingKeys).map((k) => <Kbd key={k}>{formatToken(k)}</Kbd>)
+                      normalizeTokens(pendingKeys).map((k) => <Kbd key={k}>{formatToken(k, platform)}</Kbd>)
                     ) : (
                       <span className="text-muted-foreground">{t("settings:hotkeys.press_keys")}</span>
                     )}
@@ -173,9 +184,9 @@ export function KeybindingSettings() {
                     )}
                   >
                     {isZoom ? (
-                      <span>{t("settings:hotkeys.ctrl_wheel")}</span>
+                      <span>{t("settings:hotkeys.modifier_wheel", { modifier: platform === "macos" ? "Cmd" : "Ctrl" })}</span>
                     ) : entry.keys && entry.keys.length > 0 ? (
-                      normalizeTokens(entry.keys).map((k) => <Kbd key={k}>{formatToken(k)}</Kbd>)
+                      normalizeTokens(entry.keys).map((k) => <Kbd key={k}>{formatToken(k, platform)}</Kbd>)
                     ) : (
                       <span className="text-muted-foreground">{t("settings:hotkeys.click_to_set")}</span>
                     )}

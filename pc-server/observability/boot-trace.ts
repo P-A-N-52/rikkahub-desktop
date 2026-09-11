@@ -134,7 +134,7 @@ export function appendBootTraceIn(dir: string, line: string, pid: number = proce
 /** 一具尸体的判读(文案 + 等级)。等级依据见文件头状态机注释。 */
 function verdictOf(body: string): { text: string; level: CrashVerdictLevel } {
   const lastDone = lastReachedMilestone(body);
-  const hasException = /\] (uncaughtException|unhandledRejection|startupFatal)[: ]/.test(body);
+  const hasException = /\] (uncaughtException|unhandledRejection|startupFatal|shutdownFailed)[: ]/.test(body);
   if (lastDone === "bootstrap 完成" && !hasException) {
     return {
       level: "external",

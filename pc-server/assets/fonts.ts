@@ -2,9 +2,10 @@
 // 纪律：纯搬迁自 server.ts（阶段 5.3b），行为不变。
 
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { BuiltinManifest, FontEntry, FontWeightFile, ManifestEntry } from "../foundation/types";
-import { customFontsDir, executableDir, rootDir } from "../foundation/paths";
+import { customFontsDir, resourcePaths, resolveResourceFile, resolveResourceFiles } from "../foundation/paths";
+import { readSystemFontFamilies } from "./system-fonts";
 
 const FONT_EXTENSIONS = [".woff2", ".woff", ".ttf", ".otf", ".ttc"] as const;
 export const FONT_EXTENSIONS_SET = new Set<string>(FONT_EXTENSIONS);
@@ -27,19 +28,6 @@ const FONT_FORMAT: Record<string, string> = {
 // CJK 单文件可能十几 MB,留 50MB 余量足够;超过几乎一定是误传。
 export const MAX_FONT_BYTES = 50 * 1024 * 1024;
 const FONT_DEFAULT_FALLBACK = "system-ui, sans-serif";
-
-// 真枚举失败时的兜底清单(Windows 锁死系统等情况)。
-const COMMON_FONTS_FALLBACK: FontEntry[] = [
-  "Microsoft YaHei", "DengXian", "Segoe UI", "SimSun", "SimHei", "KaiTi", "FangSong",
-  "Consolas", "Times New Roman", "Arial", "Courier New",
-].map((name) => ({
-  id: `system:${name}`,
-  label: name,
-  cssName: name,
-  family: `"${name}", ${FONT_DEFAULT_FALLBACK}`,
-  source: "system" as const,
-  weights: [] as FontWeightFile[],
-}));
 
 export function fontExtension(name: string): string {
   return name.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
@@ -72,17 +60,18 @@ function firstFamilyName(family: string): string {
   return (m?.[1] ?? m?.[2] ?? m?.[3] ?? family.trim()).trim();
 }
 function readBuiltinFontManifest(): BuiltinManifest {
-  for (const p of [resolve(executableDir, "fonts", "manifest.json"), resolve(rootDir, "fonts", "manifest.json")]) {
-    if (existsSync(p)) {
-      try { return JSON.parse(readFileSync(p, "utf-8")) as BuiltinManifest; }
-      catch { /* 坏 manifest 忽略,降级到自动派生 */ }
+  for (const path of resolveResourceFiles("fonts", "manifest.json", true)) {
+    try { return JSON.parse(readFileSync(path, "utf-8")) as BuiltinManifest; }
+    catch (cause) {
+      if (resourcePaths.explicit) throw new Error(`Invalid bundled font manifest: ${path}`, { cause });
+      // 旧布局继续尝试下一既有目录；都不可用时允许自动派生。
     }
   }
   return {};
 }
 
 // 用 manifest 的 weights 定义构造一个字重族 entry。校验每个文件真实存在,过滤掉缺失的。
-function makeWeightedFamilyEntry(source: "builtin" | "custom", manifestId: string, entry: ManifestEntry, fontDirs: string[]): FontEntry | null {
+function makeWeightedFamilyEntry(source: "builtin" | "custom", manifestId: string, entry: ManifestEntry): FontEntry | null {
   const family = entry.family?.trim();
   if (!family || !Array.isArray(entry.weights) || entry.weights.length === 0) return null;
   const cssName = firstFamilyName(family);
@@ -92,8 +81,8 @@ function makeWeightedFamilyEntry(source: "builtin" | "custom", manifestId: strin
     const fileName = w.file;
     if (!isBareFileName(fileName) || !isFontFile(fileName) || seenFiles.has(fileName.toLowerCase())) continue;
     seenFiles.add(fileName.toLowerCase());
-    // 文件必须真实存在(任一目录),否则跳过——避免 @font-face 指向不存在的文件。
-    const exists = fontDirs.some((d) => existsSync(join(d, fileName)));
+    // 独立运行沿用缺失时跳过；显式包中清单声明的字体缺失则报告打包错误。
+    const exists = resolveResourceFile("fonts", fileName, true) !== null;
     if (!exists) continue;
     weights.push({ fileName, weight: w.weight || 400, style: w.style === "italic" ? "italic" : "normal", format: fontFormat(fileName) });
   }
@@ -118,12 +107,14 @@ export function makeBundledFontEntry(source: "builtin" | "custom", fileName: str
 
 export function listBuiltinFonts(): FontEntry[] {
   const manifest = readBuiltinFontManifest();
-  // 单文件 override 按文件名小写建索引,方便不区分大小写查找。
+  // 单文件 override 按文件名小写建索引；显式包中的清单条目必须随包存在。
   const manifestByLowerFile: Record<string, ManifestEntry> = {};
   for (const [k, v] of Object.entries(manifest)) {
-    if (!v.weights) manifestByLowerFile[k.toLowerCase()] = v;
+    if (!v.weights) {
+      if (isBareFileName(k) && isFontFile(k)) resolveResourceFile("fonts", k, true);
+      manifestByLowerFile[k.toLowerCase()] = v;
+    }
   }
-  const fontDirs = [resolve(executableDir, "fonts"), resolve(rootDir, "fonts")];
   const out: FontEntry[] = [];
   const consumedFiles = new Set<string>();   // 已被某个 manifest 族消费的文件,跳过自动派生
   const seenAutoFiles = new Set<string>();
@@ -131,7 +122,7 @@ export function listBuiltinFonts(): FontEntry[] {
   // 1) 先处理 manifest 里带 weights 的字重族定义(HarmonyOS Sans 等)。
   for (const [manifestId, entry] of Object.entries(manifest)) {
     if (!entry.weights) continue;
-    const built = makeWeightedFamilyEntry("builtin", manifestId, entry, fontDirs);
+    const built = makeWeightedFamilyEntry("builtin", manifestId, entry);
     if (built) {
       out.push(built);
       for (const w of built.weights) consumedFiles.add(w.fileName.toLowerCase());
@@ -139,9 +130,12 @@ export function listBuiltinFonts(): FontEntry[] {
   }
 
   // 2) 扫描目录,对未被 manifest weights 消费的文件,自动派生(或读 manifest 单文件 override)。
-  for (const dir of fontDirs) {
+  for (const dir of resourcePaths.fonts) {
     let entries: string[] = [];
-    try { entries = readdirSync(dir); } catch { continue; }
+    try { entries = readdirSync(dir); } catch (cause) {
+      if (resourcePaths.explicit) throw new Error(`Bundled font directory is unavailable: ${dir}`, { cause });
+      continue;
+    }
     for (const name of entries) {
       if (!isFontFile(name)) continue;
       const key = name.toLowerCase();
@@ -164,69 +158,23 @@ export function listCustomFonts(): FontEntry[] {
   }
 }
 
-// 系统字体枚举结果缓存(平台层一次)。去重(剔除与 builtin 重名的)在 listFontCatalog 做,
-// 因为那依赖 builtin 列表,而 builtin 可能随 manifest 变化。
-let cachedRawSystemFamilies: string[] | null = null;
-function readSystemFontFamilies(): string[] {
-  if (cachedRawSystemFamilies) return cachedRawSystemFamilies;
-  const families = new Set<string>();
-  try {
-    if (process.platform === "linux") {
-      // fc-list 的 family 字段:每行一个或多个族名(逗号分隔)。
-      const proc = Bun.spawnSync(["fc-list", ":", "family"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
-      const out = proc.stdout instanceof Buffer ? proc.stdout.toString("utf8") : String(proc.stdout ?? "");
-      for (const line of out.split(/\r?\n/)) {
-        for (const f of line.split(",")) {
-          const name = f.trim();
-          if (name && !name.includes(":")) families.add(name);
-        }
-      }
-    } else if (process.platform === "win32") {
-      // powershell.exe = Windows PowerShell 5.1,全 Windows 自带,System.Drawing 开箱即用。
-      // InstalledFontCollection 返回干净的族名(无需解析字体二进制 name 表)。
-      const script = "Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }";
-      const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
-      const out = proc.stdout instanceof Buffer ? proc.stdout.toString("utf8") : String(proc.stdout ?? "");
-      for (const line of out.split(/\r?\n/)) {
-        const name = line.trim();
-        if (name) families.add(name);
-      }
-    }
-  } catch {
-    /* 枚举失败 → families 为空 → 走兜底清单 */
-  }
-  cachedRawSystemFamilies = families.size > 0 ? [...families].sort((a, b) => a.localeCompare(b)) : null;
-  // 枚举失败时返回 []（而非 null）：签名是 string[]，null 会让调用方遍历崩溃；
-  // 缓存仍存 null 保持"失败不缓存、下次重试"语义。（strictNullChecks 暴露的真实缺陷）
-  return cachedRawSystemFamilies ?? [];
+// Native enumeration is asynchronous and cached; packaged macOS uses the shell's
+// headless CoreText helper, while standalone/source execution uses system tools.
+export async function listSystemFonts(excludeNames: Set<string>): Promise<FontEntry[]> {
+  const names = await readSystemFontFamilies();
+  return names.filter((name) => !excludeNames.has(name.toLowerCase())).map((name) => ({
+    id: `system:${name}`, label: name, cssName: name,
+    family: `${JSON.stringify(name)}, ${FONT_DEFAULT_FALLBACK}`,
+    source: "system" as const, weights: [],
+  }));
 }
 
-// 系统 FontEntry:剔除与 builtin/custom 同名的(用户:自带与系统重合的用自带的,不重复显示)。
-export function listSystemFonts(excludeNames: Set<string>): FontEntry[] {
-  const raw = readSystemFontFamilies();
-  if (!raw) return COMMON_FONTS_FALLBACK.filter((entry) => !excludeNames.has(entry.cssName.toLowerCase()));
-  return raw
-    .filter((name) => !excludeNames.has(name.toLowerCase()))
-    .map((name) => ({
-      id: `system:${name}`,
-      label: name,
-      cssName: name,
-      family: `"${name}", ${FONT_DEFAULT_FALLBACK}`,
-      source: "system" as const,
-      weights: [] as FontWeightFile[],
-    }));
-}
-
-// 服务字体文件:builtin 从 executableDir/fonts 或 rootDir/fonts 找;custom 从 pc-data/fonts 找。
+// 内置字体使用统一资源入口；自定义字体始终从用户数据目录读取。
 export function resolveFontFile(source: "builtin" | "custom", fileName: string): string | null {
   if (!isBareFileName(fileName) || !isFontFile(fileName)) return null;
   if (source === "custom") {
     const p = join(customFontsDir, fileName);
     return existsSync(p) ? p : null;
   }
-  for (const dir of [resolve(executableDir, "fonts"), resolve(rootDir, "fonts")]) {
-    const p = join(dir, fileName);
-    if (existsSync(p)) return p;
-  }
-  return null;
+  return resolveResourceFile("fonts", fileName);
 }

@@ -1,7 +1,7 @@
 /**
  * 全局快捷键 hook。挂在 root,生命周期内常驻。
  *
- * 职责:keydown 匹配 binding → 触发对应 action;Ctrl+滚轮 → 字号缩放。
+ * 职责:keydown 匹配 binding → 触发对应 action;平台修饰键+滚轮 → 字号缩放。
  * - 纯路由 action(openSettings / openImageGeneration):直接 navigate。
  * - 字号缩放(zoomInOut):直接 POST settings/display。
  * - 需要组件上下文的 action(新建/切换/重命名/搜索):走事件总线,由组件挂监听响应。
@@ -13,7 +13,9 @@ import * as React from "react";
 import { useNavigate } from "react-router";
 
 import { areHotkeysPaused, emitHotkeyAction, type HotkeyBusAction } from "~/lib/hotkey-events";
-import { DEFAULT_KEYBINDINGS, eventToTokens, hasModifier, isTextInputFocused, tokensEqual } from "~/lib/hotkeys";
+import { defaultKeybindings, KEYBINDING_ORDER, eventToTokens, hasModifier, isTextInputFocused, tokensEqual, wheelZoomDirection } from "~/lib/hotkeys";
+import { isComposingKeyEvent } from "~/lib/input-keyboard";
+import { getSystemInfoSnapshot } from "~/lib/system-info";
 import api from "~/services/api";
 import { useSettingsStore } from "~/stores";
 import type { KeybindingAction, KeybindingEntry } from "~/types/settings";
@@ -45,9 +47,10 @@ export function useHotkeys(): void {
   // 合并默认 + 用户配置,得到每个 action 的生效 binding(用户未改的回落到默认)。
   const resolveBindings = React.useCallback(() => {
     const user = keybindingsRef.current ?? {};
+    const defaults = defaultKeybindings(getSystemInfoSnapshot().platform);
     const merged: Partial<Record<KeybindingAction, KeybindingEntry>> = {};
-    for (const action of Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[]) {
-      merged[action] = user[action] ?? DEFAULT_KEYBINDINGS[action];
+    for (const action of KEYBINDING_ORDER) {
+      merged[action] = { ...defaults[action], ...user[action] };
     }
     return merged;
   }, []);
@@ -68,7 +71,7 @@ export function useHotkeys(): void {
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (areHotkeysPaused()) return; // 设置页录制中,放行让录制组件接收
-      if (event.isComposing || event.key === "Process") return;
+      if (isComposingKeyEvent(event)) return;
       const tokens = eventToTokens(event);
       if (tokens.length === 0) return;
 
@@ -88,6 +91,7 @@ export function useHotkeys(): void {
       if (isTextInputFocused() && !hasModifier(tokens)) return;
 
       event.preventDefault();
+      event.stopPropagation();
       if (BUS_ACTIONS.has(matched)) {
         emitHotkeyAction(matched as HotkeyBusAction);
       } else if (matched === "openSettings") {
@@ -100,11 +104,12 @@ export function useHotkeys(): void {
 
     const onWheel = (event: WheelEvent) => {
       if (areHotkeysPaused()) return;
-      if (!event.ctrlKey) return;
+      const direction = wheelZoomDirection(event, getSystemInfoSnapshot().platform);
+      if (direction === null) return;
       const bindings = resolveBindings();
       if (!bindings.zoomInOut?.enabled) return;
       event.preventDefault();
-      adjustFontScale(event.deltaY < 0 ? 1 : -1);
+      adjustFontScale(direction);
     };
 
     window.addEventListener("keydown", onKeyDown, true);

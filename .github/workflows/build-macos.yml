@@ -1,0 +1,104 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RIKKAHUB_ANALYTICS: '0'
+
+jobs:
+  model-catalog:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: ./.github/actions/restore-pi
+      - name: Capture public model inputs once for both architectures
+        run: bun run pc-server/scripts/model-catalog.ts generate
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-model-catalog
+          path: dist/pi-model-catalog/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  native-build:
+    needs: model-catalog
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: ./.github/actions/restore-pi
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-model-catalog
+          path: dist/pi-model-catalog/
+      - name: Restore the exact shared model catalog
+        run: bun run pc-server/scripts/model-catalog.ts restore
+      - name: Install host dependencies
+        run: |
+          bun install --cwd pc-server --frozen-lockfile
+          bun install --cwd web-ui --frozen-lockfile
+      - name: Check backend
+        working-directory: pc-server
+        env:
+          RIKKAHUB_PC_DATA_DIR: ${{ runner.temp }}/rikkahub-macos-tests
+        run: |
+          bun run typecheck
+          bun test
+          bun run smoke:request-chain
+          bun run smoke:backup-roundtrip
+          bun run scripts/check-version-sync.ts
+      - name: Check frontend
+        working-directory: web-ui
+        run: |
+          bun run typecheck
+          bun run test:unit
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web-ui/src-tauri
+          shared-key: macos-${{ matrix.target }}
+      - name: Build app, DMG, ZIP, resource manifest and checksums
+        working-directory: web-ui
+        run: bun run tauri:build:macos --target '${{ matrix.target }}'
+      - name: Check Rust with real resources
+        working-directory: web-ui/src-tauri
+        run: |
+          cargo check --locked --target '${{ matrix.target }}'
+          cargo test --locked --target '${{ matrix.target }}'
+      - name: Verify archived resources and execute native shell helper and sidecar
+        run: bun run pc-server/scripts/verify-macos-build.ts dist/desktop/${{ matrix.target }}/*.manifest.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Rikkahub-mac-${{ matrix.arch }}
+          path: |
+            dist/desktop/${{ matrix.target }}/*.app.zip
+            dist/desktop/${{ matrix.target }}/*.dmg
+            dist/desktop/${{ matrix.target }}/*.manifest.json
+            dist/desktop/${{ matrix.target }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

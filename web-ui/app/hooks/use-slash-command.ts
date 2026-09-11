@@ -8,6 +8,7 @@
 import * as React from "react";
 
 import { filterSlashCommands, slashMenuQuery, type SlashCommandDto } from "~/lib/slash-commands";
+import { isComposingKeyEvent } from "~/lib/input-keyboard";
 
 export interface UseSlashCommandOptions {
   text: string;
@@ -49,8 +50,8 @@ export function useSlashCommand({ text, commands, enabled, onCompleteText }: Use
   const handleMenuKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
       if (!menuOpen) return false;
-      // IME 组合中除 Escape 外不抢按键(组合期间的 Enter/方向键属于输入法)。
-      if (event.nativeEvent.isComposing && event.key !== "Escape") return false;
+      // 候选确认、导航和 Escape 都属于输入法。
+      if (isComposingKeyEvent(event.nativeEvent)) return false;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();

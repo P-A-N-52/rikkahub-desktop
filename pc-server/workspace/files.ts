@@ -1,6 +1,6 @@
 // workspace/files.ts — 文件面板的领域操作（M3-5，方案 §4.4）。
 // 用户驱动的浏览/预览/重命名/删除/系统资源管理器定位；与 AI 工具路径共用同一套
-// 边界断言（assertInsideWorkspace：realpath+带分隔符前缀，软链/盘符兄弟目录逃逸同样被抓）。
+// 边界断言（assertInsideWorkspace：真实路径与目录身份，软链/盘符兄弟目录逃逸同样被抓）。
 // 所有函数以 workspace root 为界；rel 路径来自前端，视作不可信输入。
 
 import { readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -10,6 +10,7 @@ import type { Workspace } from "../foundation/types";
 import { isWindowsReservedName, reservedNameSafeFsPath, sweepWindowsReservedNames } from "../foundation/windows-names";
 import { reportError } from "../observability/app-errors";
 import { assertInsideWorkspace, READ_HARD_LIMIT_BYTES } from "./boundary";
+import { resolvePathIdentity, samePathIdentity } from "./path-identity";
 import { detectSupportedImageMimeTypeFromFile } from "./tools/mime";
 
 export interface WorkspaceFileEntry {
@@ -94,7 +95,7 @@ function assertValidEntryName(name: string): void {
 export function renameWorkspaceEntry(workspace: Workspace, relPath: string, newName: string): void {
   assertValidEntryName(newName);
   const path = resolveInside(workspace, relPath);
-  if (comparable(path) === comparable(workspace.root)) throw new Error("Cannot rename the workspace root");
+  if (samePathIdentity(resolvePathIdentity(path), resolvePathIdentity(workspace.root))) throw new Error("Cannot rename the workspace root");
   const target = join(dirname(path), newName);
   assertInsideWorkspace(target, workspace.root);
   // 源经 NT 安全路径:保留名残留可被"改名成正常名"救活(问题4 自愈路径);目标名已过校验必非保留名。
@@ -103,14 +104,10 @@ export function renameWorkspaceEntry(workspace: Workspace, relPath: string, newN
 
 export function deleteWorkspaceEntry(workspace: Workspace, relPath: string): void {
   const path = resolveInside(workspace, relPath);
-  if (comparable(path) === comparable(workspace.root)) throw new Error("Cannot delete the workspace root");
+  if (samePathIdentity(resolvePathIdentity(path), resolvePathIdentity(workspace.root))) throw new Error("Cannot delete the workspace root");
   // 保留名残留(问题4)必须走 NT 路径删除:Win32 语义下 rmSync 报 ENOENT 被 force 吞掉,
   // 表现为"删除成功但文件还在"的假成功。
   rmSync(reservedNameSafeFsPath(path), { recursive: true, force: true });
-}
-
-function comparable(path: string): string {
-  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 // ---- AGENTS.md(P4,方案 §3.3:项目级指引 = 工作区根下的真实文件,文件即入口) ----

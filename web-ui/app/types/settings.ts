@@ -10,6 +10,8 @@ import type {
   TtsProvider,
 } from "@server/foundation/types";
 import type { Settings as ServerSettings } from "@server/foundation/types/settings";
+import type { KeybindingAction, KeybindingEntry } from "@server/shared/keybindings";
+export type { KeybindingAction, KeybindingEntry } from "@server/shared/keybindings";
 
 // 两端同形:直接单源 re-export(权威在 pc-server/foundation/types)。
 export type {
@@ -267,26 +269,6 @@ export type AsrProviderType = AsrProvider["type"];
 export type AsrProviderProfile = AsrProvider & { [key: string]: unknown };
 export type TtsProviderType = TtsProvider["type"];
 export type TtsProviderProfile = TtsProvider & { [key: string]: unknown };
-
-/**
- * 应用内快捷键的 action 标识。和后端 defaultSettings().keybindings 的 key 一一对应,
- * 改动需同步后端 + 前端默认表(DEFAULT_KEYBINDINGS in lib/hotkeys.ts)。
- */
-export type KeybindingAction =
-  | "newConversation"
-  | "prevConversation"
-  | "nextConversation"
-  | "renameConversation"
-  | "searchConversations"
-  | "openSettings"
-  | "openImageGeneration"
-  | "zoomInOut";
-
-/** 单条快捷键绑定。keys 为 token 数组(如 ["Ctrl","N"]);zoomInOut 例外无 keys(滚轮固定)。 */
-export interface KeybindingEntry {
-  keys?: string[];
-  enabled: boolean;
-}
 
 /**
  * VIEW-REFINED 清单:这些顶层键在服务端是透传存储形状(JsonValue[] / Record<string, JsonValue>

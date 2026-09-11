@@ -59,6 +59,7 @@ export function scheduleThrottledSaveState() {
 
 let activeSaveStatePromise: Promise<void> | null = null;
 let coalescedSaveRequested = false;
+let lastStateSaveError: unknown = null;
 
 async function performStateSave(): Promise<void> {
   lastSaveStateMs = Date.now();
@@ -92,6 +93,7 @@ async function performStateSave(): Promise<void> {
       // fs.promises.rename is also non-blocking. The atomic temp-then-rename pattern
       // protects against torn writes if the process is killed mid-save.
       await fsPromises.rename(tempPath, statePath);
+      lastStateSaveError = null;
       maybeWriteDailyBackup(content);
       sweepObsoleteRecoveryFilesIfArmed();
       return;
@@ -104,6 +106,7 @@ async function performStateSave(): Promise<void> {
       await new Promise<void>((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
     }
   }
+  lastStateSaveError = lastError ?? new Error("state.json could not be saved");
   // 全面审查 1-2:原先这里还有一步"非原子直写 state.json"的兜底——中途被杀即撕裂主文件,
   // 下次启动只能走损坏回退。删除该步:直接写 recovery 旁文件(全新文件,绝不撕裂既有数据),
   // loadState 的损坏回退链会优先采用最新 recovery(见 recoverStateFromBackups)。
@@ -326,6 +329,9 @@ export function saveState(): void {
   const run = async (): Promise<void> => {
     try {
       await performStateSave();
+    } catch (err) {
+      lastStateSaveError = err;
+      console.warn("saveState failed", err);
     } finally {
       if (coalescedSaveRequested) {
         coalescedSaveRequested = false;
@@ -346,12 +352,13 @@ export function saveState(): void {
 /** Used by graceful shutdown paths to ensure the final write completes on disk.
  *  全面审查 1-1:必须循环追引用——coalesced 尾随写在 finally 里把 activeSaveStatePromise
  *  换成新 promise,只 await 一次旧引用会漏掉最后一笔(拿到旧引用即返回)。 */
-export async function flushSaveState(): Promise<void> {
+export async function flushSaveState(options: { requireSuccess?: boolean } = {}): Promise<void> {
   while (activeSaveStatePromise) {
     const current = activeSaveStatePromise;
     try { await current; } catch { /* already logged */ }
     if (activeSaveStatePromise === current) break; // 防御:引用未变说明已结算,避免死循环
   }
+  if (options.requireSuccess && lastStateSaveError) throw lastStateSaveError;
 }
 
 /** 同步 temp+rename 写瘦 state.json。loadState 启动阶段用（不能异步）。 */

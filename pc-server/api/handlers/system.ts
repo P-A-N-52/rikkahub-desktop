@@ -132,12 +132,20 @@ export async function handleSystemRoutes(request: Request, url: URL, path: strin
   }
   // 字体目录:三层来源一起返回,前端拼下拉框 + 注入 @font-face。
   // 系统/自定义字体去重:与 builtin 同名(cssName)的系统字体不返回,避免重复显示。
+  if (path === "fonts/system" && request.method === "GET") {
+    return json({ system: await listSystemFonts(new Set()) });
+  }
   if (path === "fonts/list" && request.method === "GET") {
     const builtin = listBuiltinFonts();
     const custom = listCustomFonts();
+    // UI font-face injection must not wait for platform enumeration. Older callers
+    // can still request the complete catalog by omitting the system=0 flag.
+    if (url.searchParams.get("system") === "0") {
+      return json({ builtin, custom, system: [] });
+    }
     const exclude = new Set<string>();
     for (const entry of [...builtin, ...custom]) exclude.add(entry.cssName.toLowerCase());
-    const system = listSystemFonts(exclude);
+    const system = await listSystemFonts(exclude);
     return json({ builtin, custom, system });
   }
   const fontServe = path.match(/^fonts\/(builtin|custom)\/(.+)$/);

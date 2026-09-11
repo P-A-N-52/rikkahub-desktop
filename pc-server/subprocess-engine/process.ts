@@ -6,15 +6,14 @@
 //
 // 关键决策:
 //  - 用 node:child_process.spawn 而非 Bun.spawn:需要 detached 进程组 + 跨平台杀树
-//    (killProcessTree 复用 workspace/tools/shell.ts 的成熟实现——Windows taskkill /T,
-//    POSIX 负 pid 杀进程组),这是 Bun.spawn 目前给不了的。
+//    (foundation/owned-processes 统一登记、验证身份、杀树并等待进程组消失)。
 //  - stderr 全程摘录成尾部缓冲(默认留最后几 KB),供崩溃时归因展示;不管 stdout——
 //    stdout 是协议帧通道,经 protocol.ts 的行切分器另走,与本模块解耦(本模块只管生死)。
 //  - 取消 = 杀进程树(用户中止/超时),不是发 SIGINT 等它礼貌退出——引擎可能卡在工具里,
 //    礼貌退出不可依赖。取消语义经 AbortSignal 传入,与 pi 引擎 runner 的 signal 契约对齐。
 
 import { spawn } from "node:child_process";
-import { killProcessTree } from "../workspace/tools/shell";
+import { assertProcessSpawningAllowed, trackOwnedProcess } from "../foundation/owned-processes";
 import { classifyExit, classifySpawnError, describeExit, type SubprocessExitInfo } from "./errors";
 
 /** stderr 摘录缓冲上限(字节)。只留尾部,防长日志撑内存。 */
@@ -98,10 +97,11 @@ export function spawnSubprocess(options: SpawnSubprocessOptions): SubprocessHand
 
   let child: ReturnType<typeof spawn>;
   try {
+    assertProcessSpawningAllowed();
     child = spawn(cmd, args, {
       cwd,
       env: env ? { ...process.env, ...env } : process.env,
-      // detached: POSIX 下让子进程自成进程组,杀树时按组杀(killProcessTree 负 pid);
+      // detached: POSIX 下让子进程自成进程组,杀树时按组杀(负 pid);
       // Windows 下 detached 不影响(taskkill /T 按树杀),但保持一致无害。
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
@@ -118,10 +118,11 @@ export function spawnSubprocess(options: SpawnSubprocessOptions): SubprocessHand
     };
   }
 
+  const owned = trackOwnedProcess(child);
   const killInternal = () => {
     if (killed || settled) return;
     killed = true;
-    if (child.pid !== undefined) killProcessTree(child.pid);
+    owned.kill();
   };
 
   const onAbort = () => {

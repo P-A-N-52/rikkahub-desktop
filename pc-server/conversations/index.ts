@@ -16,6 +16,47 @@ export const DEFAULT_ASSISTANT_ID = "0950e2dc-9bd5-4801-afa3-aa887aa36b4e";
 
 let conversationsDb: InstanceType<typeof Database> | null = null;
 
+export interface ConversationFlushOptions {
+  requireSuccess?: boolean;
+  /** Absolute shutdown deadline; applied to every SQLite lock wait. */
+  deadline?: number;
+}
+
+// Full reconcile may fail after generating has already dropped its controller.
+// Keep the intended instance until it is saved, deleted, or explicitly replaced.
+const pendingReconciles = new Map<string, Conversation>();
+let conversationShutdownDeadline: number | undefined;
+
+/** Set before aborting work so generation finally cannot spend a fresh lock budget. */
+export function beginConversationShutdown(deadline: number): void {
+  conversationShutdownDeadline = Math.min(conversationShutdownDeadline ?? deadline, deadline);
+}
+
+function withDatabaseDeadline<T>(
+  db: InstanceType<typeof Database>,
+  options: ConversationFlushOptions,
+  operation: (checkDeadline: () => void) => T,
+): T {
+  const deadline = options.deadline === undefined
+    ? conversationShutdownDeadline
+    : Math.min(options.deadline, conversationShutdownDeadline ?? options.deadline);
+  if (deadline === undefined) return operation(() => {});
+  const previousTimeout = (db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
+  const checkDeadline = () => {
+    const remaining = Math.floor(deadline - Date.now());
+    if (remaining <= 0) throw new Error("Conversation database exceeded the shutdown deadline");
+    db.exec(`PRAGMA busy_timeout = ${Math.min(previousTimeout, remaining)}`);
+  };
+  try {
+    checkDeadline();
+    const result = operation(checkDeadline);
+    checkDeadline();
+    return result;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${previousTimeout}`);
+  }
+}
+
 export function getConversationsDb(): InstanceType<typeof Database> | null {
   return conversationsDb;
 }
@@ -276,7 +317,7 @@ function loadConversationForWorkingSet(convId: string): Conversation | undefined
 
 /** 该会话是否有未落库的脏标记(sweep 判据之一;脏集合毫秒级清空,遍历成本可忽略)。 */
 function hasConvDirtyState(convId: string): boolean {
-  if (dirtyConversationIds.has(convId)) return true;
+  if (dirtyConversationIds.has(convId) || pendingReconciles.has(convId)) return true;
   const prefix = convId + "::";
   for (const key of dirtyNodeKeys) if (key.startsWith(prefix)) return true;
   return false;
@@ -410,23 +451,34 @@ export function upsertMessageNode(convId: string, node: MessageNode, nodeIndex: 
  * 给非流式一次性变更用(改名/置顶/编辑/分叉/导入/流结束)。处理节点增删/重排,显而易见
  * 地正确;一次用户动作调一次,可承受。
  */
-export function persistConversation(conv: Conversation): void {
-  if (!conversationsDb) throw new Error("conversationsDb not open");
-  const db = conversationsDb;
-  const deleteNodes = db.prepare("DELETE FROM pc_message_node WHERE conversation_id = ?");
-  const insertNode = db.prepare(UPSERT_NODE_SQL);
-  const txn = db.transaction(() => {
-    upsertConversationRow(conv);
-    deleteNodes.run(conv.id);
-    deleteConversationFts(db, [conv.id]);
-    for (let i = 0; i < (conv.messages ?? []).length; i += 1) {
-      const node = conv.messages[i];
-      if (!node?.id) continue;
-      insertNode.run(node.id, conv.id, i, JSON.stringify(node.messages ?? []), node.selectIndex ?? 0);
-      replaceNodeFts(db, conv.id, node);
-    }
-  });
-  txn();
+export function persistConversation(conv: Conversation, options: ConversationFlushOptions = {}): void {
+  try {
+    if (!conversationsDb) throw new Error("conversationsDb not open");
+    const db = conversationsDb;
+    withDatabaseDeadline(db, options, (checkDeadline) => {
+      const deleteNodes = db.prepare("DELETE FROM pc_message_node WHERE conversation_id = ?");
+      const insertNode = db.prepare(UPSERT_NODE_SQL);
+      const txn = db.transaction(() => {
+        checkDeadline();
+        upsertConversationRow(conv);
+        checkDeadline();
+        deleteNodes.run(conv.id);
+        deleteConversationFts(db, [conv.id]);
+        for (let i = 0; i < (conv.messages ?? []).length; i += 1) {
+          const node = conv.messages[i];
+          if (!node?.id) continue;
+          checkDeadline();
+          insertNode.run(node.id, conv.id, i, JSON.stringify(node.messages ?? []), node.selectIndex ?? 0);
+          replaceNodeFts(db, conv.id, node);
+        }
+      });
+      txn();
+    });
+    pendingReconciles.delete(conv.id);
+  } catch (error) {
+    pendingReconciles.set(conv.id, conv);
+    throw error;
+  }
 }
 
 /** 删除会话(CASCADE 带走其节点行,依赖 foreign_keys=ON)。 */
@@ -439,6 +491,7 @@ export function deletePcConversations(ids: string[]): void {
     deleteConversationFts(db, ids);
   });
   txn();
+  for (const idValue of ids) pendingReconciles.delete(idValue);
 }
 
 /** 会话总数。迁移校验/自测用。 */
@@ -467,43 +520,59 @@ export function markMessageNodeDirty(convId: string, nodeId: string): void {
   dirtyNodeKeys.add(`${convId}::${nodeId}`);
 }
 
-/**
- * 遍历脏集合逐行 upsert,然后清空。从内存 state 解析 nodeIndex;若会话/节点已被并发删除
- * (如流式中删会话),跳过——避免 upsert 把已删的行又建回来。
- */
-export function flushConvDirty(): void {
-  if (!conversationsDb) return;
+/** A failed write stays dirty; strict shutdown retries it and reports any remaining failure. */
+export function flushConvDirty(options: ConversationFlushOptions = {}): void {
+  if (!conversationsDb) {
+    if (options.requireSuccess) throw new Error("conversationsDb not open");
+    return;
+  }
   lastConvFlushMs = Date.now();
-  const convIds = Array.from(dirtyConversationIds);
-  dirtyConversationIds.clear();
-  const nodeKeys = Array.from(dirtyNodeKeys);
-  dirtyNodeKeys.clear();
-  for (const convId of convIds) {
-    // 脏标记只可能来自 checkout 过的会话,working set 必命中;未命中 = 会话已被删除
-    const conv = peekConversation(convId);
-    if (!conv) continue;
-    try {
-      upsertConversationRow(conv);
-    } catch (err) {
-      console.warn("[conv-db] upsert conversation row failed", convId, err);
+  withDatabaseDeadline(conversationsDb, options, (checkDeadline) => {
+    for (const [convId, intended] of pendingReconciles) {
+      const current = peekConversation(convId);
+      if (current && current !== intended) {
+        // An explicit replacement supersedes the failed old instance.
+        pendingReconciles.delete(convId);
+        continue;
+      }
+      try {
+        checkDeadline();
+        persistConversation(intended, options);
+      } catch (error) {
+        if (options.requireSuccess) throw error;
+        console.warn("[conv-db] pending conversation reconcile failed", convId, error);
+      }
     }
-  }
-  for (const key of nodeKeys) {
-    const sep = key.indexOf("::");
-    if (sep < 0) continue;
-    const convId = key.slice(0, sep);
-    const nodeId = key.slice(sep + 2);
-    const conv = peekConversation(convId);
-    if (!conv) continue; // 删除正在流的会话竞态:会话已不在 working set,不重建行
-    const idx = conv.messages.findIndex((n) => n.id === nodeId);
-    if (idx < 0) continue; // 节点已被删除/替换
-    try {
-      // H-c:流式 flush 跳过 FTS(见 upsertMessageNodeInto 注释),流结束 reconcile 补索引。
-      upsertMessageNode(convId, conv.messages[idx], idx, false);
-    } catch (err) {
-      console.warn("[conv-db] upsert message node failed", convId, nodeId, err);
+    for (const convId of dirtyConversationIds) {
+      const conv = peekConversation(convId);
+      if (!conv) { dirtyConversationIds.delete(convId); continue; }
+      try {
+        checkDeadline();
+        upsertConversationRow(conv);
+        dirtyConversationIds.delete(convId);
+      } catch (error) {
+        if (options.requireSuccess) throw error;
+        console.warn("[conv-db] upsert conversation row failed", convId, error);
+      }
     }
-  }
+    for (const key of dirtyNodeKeys) {
+      const sep = key.indexOf("::");
+      if (sep < 0) { dirtyNodeKeys.delete(key); continue; }
+      const convId = key.slice(0, sep);
+      const nodeId = key.slice(sep + 2);
+      const conv = peekConversation(convId);
+      const idx = conv?.messages.findIndex((node) => node.id === nodeId) ?? -1;
+      if (!conv || idx < 0) { dirtyNodeKeys.delete(key); continue; }
+      try {
+        checkDeadline();
+        upsertMessageNode(convId, conv.messages[idx], idx, false);
+        dirtyNodeKeys.delete(key);
+      } catch (error) {
+        if (options.requireSuccess) throw error;
+        console.warn("[conv-db] upsert message node failed", convId, nodeId, error);
+      }
+    }
+  });
 }
 
 /** 200ms 节流合并(镜像 scheduleThrottledSaveState 的结构,但同步执行——单行 upsert 亚毫秒)。 */
@@ -526,12 +595,12 @@ export function scheduleThrottledConvFlush(): void {
 }
 
 /** 立即 flush 并取消 pending 定时器。关停/流结束/导入前用。 */
-export function flushConvDirtyNow(): void {
+export function flushConvDirtyNow(options: ConversationFlushOptions = {}): void {
   if (pendingConvFlush) {
     clearTimeout(pendingConvFlush);
     pendingConvFlush = null;
   }
-  flushConvDirty();
+  flushConvDirty(options);
 }
 
 /** 清空脏标记集合与 pending 定时器(不 flush)。导入前中止所有流后调用,避免脏集合被 flush 到刚重灌的库。 */
@@ -542,6 +611,7 @@ export function clearConvDirtyState(): void {
   }
   dirtyConversationIds.clear();
   dirtyNodeKeys.clear();
+  pendingReconciles.clear();
 }
 
 /**
@@ -721,11 +791,21 @@ export function resetConversationsDbTo(conversations: Conversation[], workspaces
     }
   });
   txn();
+  pendingReconciles.clear();
 }
 
 /** 关停前做一次 WAL checkpoint,让 -wal 数据回写主库。 */
-export function checkpointConversationsDb(): void {
-  conversationsDb?.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+export function checkpointConversationsDb(options: ConversationFlushOptions = {}): void {
+  if (!conversationsDb) {
+    if (options.requireSuccess) throw new Error("conversationsDb not open");
+    return;
+  }
+  withDatabaseDeadline(conversationsDb, options, () => {
+    const result = conversationsDb!.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number; log: number; checkpointed: number };
+    if (options.requireSuccess && result.busy !== 0) {
+      throw new Error(`Conversation database checkpoint is busy (${result.checkpointed}/${result.log} WAL frames checkpointed)`);
+    }
+  });
 }
 
 /** 按 id 取会话的权威实例(working set 命中或从活库装入)。

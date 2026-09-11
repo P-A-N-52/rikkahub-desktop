@@ -100,6 +100,8 @@ The following organizations sponsor Rikkahub's ongoing development. Our thanks t
 
 ## 🏗️ Build from source
 
+macOS development and local Apple Silicon builds are documented in [docs/macos.md](docs/macos.md). Native desktop integration is being validated in stages; these local builds are separate from signed release support.
+
 Building the installer locally requires the following — **for developers only**:
 
 - [Bun](https://bun.sh/) 1.1+

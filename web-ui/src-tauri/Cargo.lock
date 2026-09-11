@@ -2944,9 +2944,13 @@ dependencies = [
 name = "rikkahub"
 version = "2.0.0-preview-v2"
 dependencies = [
+ "core-foundation",
  "image",
+ "libc",
+ "semver",
  "serde",
  "serde_json",
+ "sha2",
  "sys-locale",
  "tauri",
  "tauri-build",

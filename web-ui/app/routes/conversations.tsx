@@ -2024,7 +2024,9 @@ const ConversationPaneView = React.memo(function ConversationPaneView({
           {focused ? <TtsPlayBar /> : null}
           {/* pi 引擎瞬态状态条(P5):按窗格各自订阅本会话状态,分栏互不串扰。 */}
           <EngineStatusBar conversationId={activeId} />
+          {/* 草稿文本/附件由 store 按 draftKey 保存；切换时卸载旧输入会话以停止录音。 */}
           <ChatInputArea
+            key={draftKey}
             draftKey={draftKey}
             slashCommands={slashCommands}
             onSlashCommand={handleSlashCommand}
