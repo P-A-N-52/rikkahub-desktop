@@ -13,4 +13,4 @@ export function writeSkippedVersion(version: string) {
 }
 
 // 版本号唯一修改入口：`bun run version:bump <x.y.z>`；check-version-sync 同时检查壳配置。
-export const APP_VERSION = "2.0.0-preview-v2";
+export const APP_VERSION = "2.0.0";
