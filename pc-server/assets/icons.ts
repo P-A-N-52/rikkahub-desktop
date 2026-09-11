@@ -1,4 +1,4 @@
-// assets/icons.ts — AI 品牌图标服务（lobehub 图标代理 + 本地缓存 + 兜底 SVG）
+// assets/icons.ts — AI 品牌图标服务（随包资源 + 未知品牌的首字母 SVG）
 // 纪律：纯搬迁自 server.ts（阶段 5.3b），行为不变。
 
 import { resolveResourceFile } from "../foundation/paths";
@@ -15,7 +15,7 @@ function fallbackSvg(name: string) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#E9EAEE"/><text x="32" y="38" font-family="system-ui, sans-serif" font-size="24" font-weight="600" text-anchor="middle" fill="#4E5969">${first}</text></svg>`;
 }
 
-const iconRules: Array<[RegExp, string]> = [
+export const iconRules: ReadonlyArray<readonly [RegExp, string]> = [
   [/rikka|auto/i, "rikkahub.svg"],
   [/(gpt|openai|o\d)/i, "openai.svg"],
   [/(gemini|nano-banana)/i, "gemini-color.svg"],
