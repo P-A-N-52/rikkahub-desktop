@@ -84,7 +84,7 @@ jobs:
           shared-key: macos-${{ matrix.target }}
       - name: Build app, DMG, ZIP, resource manifest and checksums
         working-directory: web-ui
-        run: bun run tauri:build:macos --target '${{ matrix.target }}'
+        run: bun run tauri:build:macos --target '${{ matrix.target }}' --release-repository '${{ github.repository }}'
       - name: Check Rust with real resources
         working-directory: web-ui/src-tauri
         run: |

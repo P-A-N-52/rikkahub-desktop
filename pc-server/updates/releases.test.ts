@@ -99,4 +99,81 @@ describe("release discovery with injected local responses", () => {
     expect((await discoverRelease(repo, target, "2.0.0", f.request)).downloadUrl).toBe(asset(name).browser_download_url);
     expect((await discoverRelease(DEFAULT_RELEASE_REPOSITORY, target, "2.0.0", f.request)).downloadUrl).toBe(`${UPDATE_R2_BASE}/${name}`);
   });
+
+  test("a macOS preview discovers the repository's only prerelease with its exact asset and digest", async () => {
+    const sha256 = "cd".repeat(32);
+    const f = responses(new Error("HTML latest must not run"), Response.json([
+      { ...release, prerelease: true, draft: false, assets: [intel, { ...arm, digest: `sha256:${sha256}` }] },
+    ]));
+    expect(await discoverRelease(repo, mac, version, f.request)).toMatchObject({
+      latest: version, fileName: arm.name, downloadUrl: arm.browser_download_url, sha256, source: "api",
+    });
+    expect(f.calls).toEqual([`https://api.github.com/repos/${repo}/releases?per_page=100&page=1`]);
+  });
+
+  test("macOS previews choose the highest SemVer regardless of publication order, drafts or invalid tags", async () => {
+    const releases = [
+      { tag_name: "v2.0.0-preview.2", prerelease: true },
+      { tag_name: "v99.0.0", draft: true },
+      { tag_name: "v2.0.0-preview.10", prerelease: true },
+      { tag_name: "nightly" }, { tag_name: "v3.0.0-01" }, null,
+      { tag_name: "v1.9.0", prerelease: false },
+    ];
+    const f = responses(new Error("HTML latest must not run"), Response.json(releases));
+    expect((await discoverRelease(repo, mac, "2.0.0-preview.1", f.request)).latest).toBe("2.0.0-preview.10");
+    const stable = responses(new Error("HTML latest must not run"), Response.json([
+      ...releases, { tag_name: "v2.0.0", prerelease: false },
+    ]));
+    expect((await discoverRelease(repo, mac, "2.0.0-preview.1", stable.request)).latest).toBe("2.0.0");
+  });
+
+  test("macOS preview discovery scans subsequent pages before selecting a release", async () => {
+    const calls: string[] = [];
+    const request = async (url: string | URL) => {
+      calls.push(String(url));
+      const page = new URL(url).searchParams.get("page");
+      if (page === "1") return Response.json(Array.from({ length: 100 }, (_, n) => ({ tag_name: `v1.0.0-preview.${n}` })));
+      if (page === "2") return Response.json([release]);
+      throw new Error("Unexpected release request");
+    };
+    expect((await discoverRelease(repo, mac, "2.0.0-preview-v2", request)).fileName).toBe(arm.name);
+    expect(calls).toEqual([1, 2].map((page) => `https://api.github.com/repos/${repo}/releases?per_page=100&page=${page}`));
+  });
+
+  test("macOS preview failure or an empty valid-release set is an error without redirect or guessed DMG", async () => {
+    for (const reply of [
+      new Error("network"), new Response(null, { status: 403 }), new Response("invalid JSON"),
+      Response.json({ message: "not a release list" }), Response.json([]),
+      Response.json([{ tag_name: "v99.0.0", draft: true }, { tag_name: "nightly" }]),
+    ]) {
+      const f = responses(redirect(), reply);
+      await expect(discoverRelease(repo, mac, "2.0.0-preview-v2", f.request)).rejects.toThrow("无法获取 GitHub 发布信息");
+      expect(f.calls).toEqual([`https://api.github.com/repos/${repo}/releases?per_page=100&page=1`]);
+    }
+  });
+
+  test("failure on a later release page does not report a partial result as the newest version", async () => {
+    const request = async (url: string | URL) => new URL(url).searchParams.get("page") === "1"
+      ? Response.json(Array.from({ length: 100 }, () => release)) : new Response(null, { status: 503 });
+    await expect(discoverRelease(repo, mac, "2.0.0-preview-v2", request)).rejects.toThrow("无法获取 GitHub 发布信息");
+  });
+
+  test("a macOS preview never substitutes an Intel or unconfirmed asset", async () => {
+    const f = responses(new Error("HTML latest must not run"), Response.json([{ ...release, assets: [intel] }]));
+    expect(await discoverRelease(repo, mac, "2.0.0-preview-v2", f.request)).toMatchObject({
+      latest: version, fileName: "", downloadUrl: "", size: 0, source: "api",
+    });
+  });
+
+  test("stable macOS, including hyphenated build metadata, and other platforms keep the latest endpoint", async () => {
+    for (const [target, current] of [
+      [mac, "2.0.0"], [mac, "2.0.0+build-preview"],
+      [{ ...mac, platform: "win" as const }, "2.0.0-preview-v2"],
+      [{ ...mac, platform: "linux" as const }, "2.0.0-preview-v2"],
+    ] as const) {
+      const f = responses(redirect(), Response.json(release));
+      expect((await discoverRelease(repo, target, current, f.request)).latest).toBe(version);
+      expect(f.calls).toEqual([`https://github.com/${repo}/releases/latest`, `https://api.github.com/repos/${repo}/releases/latest`]);
+    }
+  });
 });

@@ -24,6 +24,8 @@ bun run tauri:build:macos --target aarch64-apple-darwin \
 
 The repository is compiled into the backend; a runtime environment variable cannot redirect an installed package. A fork does not inherit the upstream Windows mirror. Keep the application identifier, release source and supported installation/upgrade path explicit before distributing a fork, particularly if it will coexist with the upstream application.
 
+The macOS CI workflow explicitly uses its own GitHub repository as the update source. macOS builds whose current version is a SemVer prerelease also consider published prereleases, so a fork's first test release can be discovered. Stable builds keep the stable-release channel.
+
 Downloads use unique `.part` files. A completed artifact must reach EOF, have nonzero content and match the advertised size and optional GitHub SHA-256 digest. Only then is it committed with a completion receipt. Cached installers must match the version, architecture, name, size and SHA-256 recorded in that receipt. Old files without receipts remain on disk but are downloaded again when needed; their existence alone is no longer proof of completion. Canceling or closing the dialog aborts the request and removes its partial download.
 
 The native macOS command accepts only a matching DMG directly inside this application's updates cache. It checks the real directory, rejects symlink escapes and nonregular files, validates the completion receipt and hashes the file before invoking the absolute system `open` command. Hashing runs off the UI thread. Browser clients connected to a macOS backend use the desktop application or release page for installation; they cannot open a DMG on another computer through native IPC.

@@ -24,11 +24,13 @@ globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init
   const url = String(input instanceof Request ? input.url : input);
   const base = `https://github.com/${RELEASE_REPOSITORY}`;
   if (url === `${base}/releases/latest`) return new Response(null, { status: 302, headers: { location: `${base}/releases/tag/v${version}` } });
-  if (url === `https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/latest`) {
-    return Response.json({ tag_name: `v${version}`, name: "HTTP fixture release", assets: mode === "missing" ? [] : [{
+  const apiBase = `https://api.github.com/repos/${RELEASE_REPOSITORY}/releases`;
+  if (url === `${apiBase}/latest` || url === `${apiBase}?per_page=100&page=1`) {
+    const release = { tag_name: `v${version}`, name: "HTTP fixture release", prerelease: true, draft: false, assets: mode === "missing" ? [] : [{
       name, size: payload.length, digest: `sha256:${checksum}`,
       browser_download_url: `${base}/releases/download/v${encodeURIComponent(version)}/${encodeURIComponent(name)}`,
-    }] });
+    }] };
+    return Response.json(url === `${apiBase}/latest` ? release : [release]);
   }
   if (url.startsWith(`${base}/releases/download/`)) return originalFetch(`http://127.0.0.1:${assetServer.port}/installer`, { ...init, proxy: "" });
   throw new Error("Update fixture refused an unexpected external request");

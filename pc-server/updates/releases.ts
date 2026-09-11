@@ -71,6 +71,29 @@ export async function fetchGithubLatestRelease(repo: string, request: ReleaseFet
   return await res.json() as GithubRelease;
 }
 
+/** GitHub's latest endpoint excludes prereleases; preview builds follow semantic order. */
+async function fetchGithubPreviewRelease(repo: string, request: ReleaseFetch): Promise<GithubRelease> {
+  let latest: { release: GithubRelease; version: string } | undefined;
+  const perPage = 100;
+  for (let page = 1; ; page++) {
+    const res = await request(`https://api.github.com/repos/${repo}/releases?per_page=${perPage}&page=${page}`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "RikkaHub-PC" },
+    });
+    if (!res.ok) throw new Error(`GitHub release request failed: ${res.status}`);
+    const releases = await res.json();
+    if (!Array.isArray(releases)) throw new Error("Invalid GitHub release list");
+    for (const release of releases as (GithubRelease & { draft?: boolean })[]) {
+      if (!release || release.draft || typeof release.tag_name !== "string") continue;
+      let version: string;
+      try { version = normalizeReleaseVersion(release.tag_name); } catch { continue; }
+      if (!latest || Bun.semver.order(version, latest.version) > 0) latest = { release, version };
+    }
+    if (releases.length < perPage) break;
+  }
+  if (!latest) throw new Error("No valid published GitHub release");
+  return latest.release;
+}
+
 export async function fetchLatestReleaseFromHtmlRedirect(repo: string, request: ReleaseFetch = fetchWithTimeout) {
   const url = `https://github.com/${repo}/releases/latest`;
   const res = await request(url, { method: "HEAD", redirect: "manual", headers: { "User-Agent": "RikkaHub-PC" } });
@@ -101,6 +124,11 @@ function metadataFromRelease(release: GithubRelease, repo: string, target: Updat
 /** macOS only offers an asset confirmed by the release API, including its architecture. */
 export async function discoverRelease(repo: string, target: UpdateTarget, current: string, request: ReleaseFetch = fetchWithTimeout): Promise<ReleaseMetadata> {
   parseReleaseRepository(repo);
+  if (target.platform === "mac" && normalizeReleaseVersion(current).split("+", 1)[0].includes("-")) {
+    try { return metadataFromRelease(await fetchGithubPreviewRelease(repo, request), repo, target); } catch (cause) {
+      throw new Error("检查更新失败：无法获取 GitHub 发布信息（含预发布版本），请检查发布状态或网络连接", { cause });
+    }
+  }
   let redirect: Awaited<ReturnType<typeof fetchLatestReleaseFromHtmlRedirect>> | undefined;
   try { redirect = await fetchLatestReleaseFromHtmlRedirect(repo, request); } catch { /* API can still be available. */ }
   if (redirect && !isNewerRelease(redirect.tag, current)) {
