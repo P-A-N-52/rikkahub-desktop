@@ -16,6 +16,21 @@ const setup = `
   };
   const title = id => db.query("SELECT title FROM pc_conversation WHERE id = ?").get(id)?.title;
   const strict = () => ({ requireSuccess: true, deadline: Date.now() + 1000 });
+  // SQLite still performs real lock waits. Control only the application's clock
+  // and observe its requested budgets, so runner scheduling cannot fail a deadline assertion.
+  const probeDeadline = started => {
+    const originalNow = Date.now;
+    const originalExec = db.exec;
+    let now = started;
+    const timeouts = [];
+    Date.now = () => now;
+    db.exec = function(sql, ...bindings) {
+      const match = /^PRAGMA busy_timeout = (\\d+)$/.exec(sql);
+      if (match) timeouts.push(Number(match[1]));
+      return originalExec.call(this, sql, ...bindings);
+    };
+    return { timeouts, advanceTo: value => { now = value; }, restore: () => { Date.now = originalNow; db.exec = originalExec; } };
+  };
 `;
 
 async function fixture(source: string): Promise<any> {
@@ -48,17 +63,20 @@ describe("shutdown SQLite persistence", () => {
       db.exec("PRAGMA busy_timeout = 5000");
       let failure = "";
       const start = Date.now();
+      const probe = probeDeadline(start);
       try { flushConvDirtyNow({ requireSuccess: true, deadline: start + 120 }); } catch (error) { failure = error.message; }
-      const elapsed = Date.now() - start;
+      probe.restore();
       const restoredTimeout = db.query("PRAGMA busy_timeout").get().timeout;
       blocker.exec("ROLLBACK"); blocker.close();
       flushConvDirtyNow(strict());
       checkpointConversationsDb(strict());
-      console.log(JSON.stringify({ failed: !!failure, elapsed, restoredTimeout, titles: conversations.map(conv => title(conv.id)), integrity: db.query("PRAGMA integrity_check").get().integrity_check }));
+      console.log(JSON.stringify({ failed: !!failure, timeouts: probe.timeouts, restoredTimeout, titles: conversations.map(conv => title(conv.id)), integrity: db.query("PRAGMA integrity_check").get().integrity_check }));
       db.close();
     `);
     expect(result.failed).toBe(true);
-    expect(result.elapsed).toBeLessThan(500);
+    expect(result.timeouts.length).toBeGreaterThan(1);
+    expect(result.timeouts.slice(0, -1).every((timeout: number) => timeout > 0 && timeout <= 120)).toBe(true);
+    expect(result.timeouts.at(-1)).toBe(5000);
     expect(result.restoredTimeout).toBe(5000);
     expect(result.titles).toEqual(["saved-after-retry", "saved-after-retry", "saved-after-retry"]);
     expect(result.integrity).toBe("ok");
@@ -71,20 +89,33 @@ describe("shutdown SQLite persistence", () => {
       const blocker = new Database(conversationsDbPath);
       blocker.exec("BEGIN IMMEDIATE");
       const started = Date.now();
+      const probe = probeDeadline(started + 25);
       beginConversationShutdown(started + 100);
       let defaultFailed = false;
       try { persistConversation(conv); } catch { defaultFailed = true; }
-      beginConversationShutdown(started + 5000);
-      let explicitFailed = false;
-      try { persistConversation(conv, { deadline: started + 5000 }); } catch { explicitFailed = true; }
-      const elapsed = Date.now() - started;
+      const inheritedTimeouts = [...probe.timeouts];
+      probe.timeouts.length = 0;
+      // Once expired, neither a repeated shutdown request nor per-write options
+      // may revive writes, even after the competing writer releases its lock.
+      probe.advanceTo(started + 101);
       blocker.exec("ROLLBACK"); blocker.close();
-      console.log(JSON.stringify({ defaultFailed, explicitFailed, elapsed, savedTitle: title(conv.id), restoredTimeout: db.query("PRAGMA busy_timeout").get().timeout }));
+      beginConversationShutdown(started + 5000);
+      let repeatedFailed = false;
+      try { persistConversation(conv); } catch (error) { repeatedFailed = error.message.includes("shutdown deadline"); }
+      let explicitFailed = false;
+      try { persistConversation(conv, { deadline: started + 5000 }); } catch (error) { explicitFailed = error.message.includes("shutdown deadline"); }
+      probe.restore();
+      console.log(JSON.stringify({ defaultFailed, repeatedFailed, explicitFailed, inheritedTimeouts, expiredTimeouts: probe.timeouts, savedTitle: title(conv.id), restoredTimeout: db.query("PRAGMA busy_timeout").get().timeout }));
       db.close();
     `);
     expect(result.defaultFailed).toBe(true);
+    expect(result.repeatedFailed).toBe(true);
     expect(result.explicitFailed).toBe(true);
-    expect(result.elapsed).toBeLessThan(450);
+    expect(result.inheritedTimeouts.length).toBeGreaterThan(1);
+    expect(result.inheritedTimeouts.slice(0, -1).every((timeout: number) => timeout === 75)).toBe(true);
+    expect(result.inheritedTimeouts.at(-1)).toBe(5000);
+    // Expired operations can restore the old PRAGMA, but must never grant a new wait budget.
+    expect(result.expiredTimeouts.every((timeout: number) => timeout === 5000)).toBe(true);
     expect(result.savedTitle).toBe("before");
     expect(result.restoredTimeout).toBe(5000);
   });
@@ -142,16 +173,19 @@ describe("shutdown SQLite persistence", () => {
       checkpointConversationsDb();
       db.exec("PRAGMA busy_timeout = 5000");
       const start = Date.now(); let error = "";
+      const probe = probeDeadline(start);
       try { checkpointConversationsDb({ requireSuccess: true, deadline: start + 100 }); } catch (failure) { error = failure.message; }
-      const elapsed = Date.now() - start;
+      probe.restore();
       reader.exec("ROLLBACK"); reader.close();
       checkpointConversationsDb(strict());
       const checked = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
-      console.log(JSON.stringify({ failed: !!error, elapsed, checked, restoredTimeout: db.query("PRAGMA busy_timeout").get().timeout }));
+      console.log(JSON.stringify({ failed: !!error, timeouts: probe.timeouts, checked, restoredTimeout: db.query("PRAGMA busy_timeout").get().timeout }));
       db.close();
     `);
     expect(result.failed).toBe(true);
-    expect(result.elapsed).toBeLessThan(450);
+    expect(result.timeouts.length).toBeGreaterThan(1);
+    expect(result.timeouts.slice(0, -1).every((timeout: number) => timeout > 0 && timeout <= 100)).toBe(true);
+    expect(result.timeouts.at(-1)).toBe(5000);
     expect(result.checked).toEqual({ busy: 0, log: 0, checkpointed: 0 });
     expect(result.restoredTimeout).toBe(5000);
   });
