@@ -1011,7 +1011,3 @@ export function ensureAssistantGenerationNode(conversation: Conversation, modelI
   scheduleThrottledConvFlush();
   return assistantNode;
 }
-
-// Tolerate both layouts: when run via `bun run server.ts`, argv[0..1] are bun + script;
-// when run as a `bun build --compile` exe, argv[0] is the exe itself. `slice(1)` strips
-// the leading process binary in both cases, leaving just user flags.

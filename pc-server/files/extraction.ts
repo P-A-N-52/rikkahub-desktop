@@ -8,8 +8,9 @@
 //   4. 逐页进度——子进程 stdout 逐行上报 EXTRACT_PROGRESS,前端进度圆圈轮询消费。
 //
 // 单 exe 自孵化:cmd = [process.execPath, ...process.argv.slice(1)] 原样复刻本进程的
-// 启动命令(dev 下是 `bun server.ts`,编译单 exe 下就是 exe 自身),用环境变量
-// RIKKAHUB_EXTRACT_WORKER=1 让入口在绑端口/抢数据目录锁【之前】拐进 worker 分支。
+// 启动命令(dev 下是 `bun server.ts …`,编译单 exe 下 argv[1] 是 bunfs 虚拟入口路径、
+// exe 会照常跑自己嵌入的入口,该路径只当普通参数落进 args Set,不影响旗标判定),用
+// 环境变量 RIKKAHUB_EXTRACT_WORKER=1 让入口在绑端口/抢数据目录锁【之前】拐进 worker 分支。
 // Bun 的 process.argv 不含 --watch 等运行时旗标,不会复刻出常驻的 watch 子进程。
 //
 // 纪律:本模块只管"怎么跑提取",解析器本体在 files/index.ts;不修改业务状态。

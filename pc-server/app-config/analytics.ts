@@ -14,16 +14,22 @@ import { APP_VERSION } from "../updates/index";
 //   RIKKAHUB_ANALYTICS=1/0 显式指定,优先级最高(调试/紧急关停);
 //   否则编译出来的 exe(bun build --compile 产物,用户真实安装)默认上报;
 //   源码 `bun run server.ts`(开发/冒烟/CI)默认不上报。
-// 判据:编译 exe 的 argv 不含入口脚本路径(argv[0]=exe 自身,见 orchestrator 注释);
-// bun run 时 argv[1] 是脚本路径 server.ts。
 export function analyticsEnabled(): boolean {
   const explicit = process.env.RIKKAHUB_ANALYTICS;
   if (explicit === "1") return true;
   if (explicit === "0") return false;
-  // argv[1] 存在且像脚本路径(非 --flag)→ bun run 源码态,不上报。
-  const scriptArg = process.argv[1];
-  const isSourceRun = typeof scriptArg === "string" && scriptArg !== "" && !scriptArg.startsWith("-");
-  return !isSourceRun;
+  return runningAsStandaloneExecutable();
+}
+
+// 单文件 exe 判定。**不能用 argv 判**:初版门控假设"编译 exe 的 argv 不含入口脚本
+// 路径",实测反了——standalone 下 argv[0] 被硬编码成 "bun"、argv[1] 恰恰是 bunfs 虚拟
+// 入口路径(B:/~BUN/root/<name>),用户参数从 argv[2] 起。于是两态都被判成源码态,
+// 2.0.0-preview 整个版本零上报(看板上该版本采用曲线彻底缺失,发现于 2026-09-11)。
+// 现在用官方 API,并保留一道 bunfs 入口前缀兜底:该属性 Bun 1.4.0 才有,旧 bun 上是
+// undefined——若某天在旧运行时上编译,兜底能防止再次静默变哑(哑掉无任何报错信号)。
+function runningAsStandaloneExecutable(): boolean {
+  if (typeof Bun.isStandaloneExecutable === "boolean") return Bun.isStandaloneExecutable;
+  return /^(?:[A-Za-z]:[\\/]~BUN[\\/]|\/\$bunfs\/)/.test(Bun.main ?? "");
 }
 
 const ANALYTICS_ENDPOINT = "https://rikkahub-desktop.pages.dev/ping";
