@@ -27,7 +27,14 @@
     "disabled": "Disabled",
     "empty_mode": "No mode injections available",
     "empty_lorebook": "No lorebooks available",
-    "empty_quickmessages": "No quick messages available"
+    "empty_quickmessages": "No quick messages available",
+    "tab_skills": "Skills",
+    "manage": "Manage",
+    "empty_skills": "No Skills available",
+    "empty_hint": "Choose Manage to add or import items, then return to select them.",
+    "skills_loading": "Loading Skills…",
+    "skills_load_failed": "Failed to load Skills",
+    "retry": "Retry"
   },
   "reasoning": {
     "title": "Reasoning",

@@ -27,7 +27,14 @@
     "disabled": "已禁用",
     "empty_mode": "暂无提示词注入",
     "empty_lorebook": "暂无 Lorebook",
-    "empty_quickmessages": "暂无快捷消息"
+    "empty_quickmessages": "暂无快捷消息",
+    "tab_skills": "Skills",
+    "manage": "管理",
+    "empty_skills": "暂无 Skills",
+    "empty_hint": "点击“管理”添加或导入，再回来选择。",
+    "skills_loading": "正在加载 Skills…",
+    "skills_load_failed": "加载 Skills 失败",
+    "retry": "重试"
   },
   "reasoning": {
     "title": "推理",
