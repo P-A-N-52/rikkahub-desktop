@@ -27,7 +27,7 @@ describe("desktop build target contract", () => {
   test("CI can build only the app without signing", () => {
     expect(parseDesktopBuildArgs(["--target", "aarch64-apple-darwin", "--bundles", "app", "--no-sign"])).toEqual({
       target: "aarch64-apple-darwin", bundles: "app", sidecarOnly: false, noSign: true,
-      releaseRepository: "yuh-G/rikkahub-desktop", signing: { mode: "none" },
+      releaseRepository: "P-A-N-52/rikkahub-desktop", signing: { mode: "none" },
     });
   });
 

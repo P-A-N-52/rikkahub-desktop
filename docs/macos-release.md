@@ -13,7 +13,7 @@ The build and updater share the asset naming rules:
 
 The updater selects the exact current architecture and normalized SemVer. It does not choose the first DMG, guess a missing macOS download URL or extract a Linux archive. When GitHub's API cannot confirm the asset, the dialog links to the release page. SemVer prereleases sort before the corresponding stable release; build metadata does not change precedence. The full version remains in asset names and the About page; the two Apple bundle version fields use its numeric core.
 
-The default release repository remains `yuh-G/rikkahub-desktop`. An independently distributed fork must explicitly set its own source while building:
+This fork defaults to `P-A-N-52/rikkahub-desktop` for update checks and downloads. CI and the manual release-packaging workflow use the repository running the workflow by default. Another distributor can explicitly select its own source while building:
 
 ```bash
 # Replace this example owner/repository with the intended release repository.

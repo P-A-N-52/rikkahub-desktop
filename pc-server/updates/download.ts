@@ -3,7 +3,7 @@ import { createReadStream, lstatSync, mkdirSync, readFileSync, realpathSync, ren
 import { open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readWithIdleTimeout } from "../foundation/net";
-import { DEFAULT_RELEASE_REPOSITORY } from "../shared/release-source";
+import { UPSTREAM_RELEASE_REPOSITORY } from "../shared/release-source";
 import { macInstallerName, normalizeReleaseVersion, UPDATE_R2_BASE, type UpdateTarget } from "./releases";
 
 export interface UpdateDownload {
@@ -42,7 +42,7 @@ export function validateUpdateDownload(download: UpdateDownload): void {
   const url = new URL(download.url);
   if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash) throw new Error("Invalid update URL");
   const mirror = new URL(UPDATE_R2_BASE);
-  if (target.platform === "win" && download.releaseRepo.toLowerCase() === DEFAULT_RELEASE_REPOSITORY.toLowerCase()
+  if (target.platform === "win" && download.releaseRepo.toLowerCase() === UPSTREAM_RELEASE_REPOSITORY.toLowerCase()
     && url.origin === mirror.origin && decodeURIComponent(url.pathname) === `/${fileName}`) return;
   const parts = decodeURIComponent(url.pathname).split("/");
   if (url.origin !== "https://github.com" || `${parts[1]}/${parts[2]}`.toLowerCase() !== download.releaseRepo.toLowerCase()

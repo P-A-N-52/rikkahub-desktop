@@ -1,7 +1,7 @@
 import type { GithubRelease } from "../foundation/types";
 import { fetchWithTimeout } from "../foundation/net";
 import { desktopOutputNames } from "../shared/desktop-targets";
-import { DEFAULT_RELEASE_REPOSITORY, parseReleaseRepository } from "../shared/release-source";
+import { DEFAULT_RELEASE_REPOSITORY, UPSTREAM_RELEASE_REPOSITORY, parseReleaseRepository } from "../shared/release-source";
 
 declare const __RIKKAHUB_RELEASE_REPOSITORY__: string | undefined;
 
@@ -115,7 +115,7 @@ function metadataFromRelease(release: GithubRelease, repo: string, target: Updat
   return {
     latest, title: release.name ?? release.tag_name ?? "", notes: release.body ?? "",
     htmlUrl: `https://github.com/${repo}/releases/tag/${encodeURIComponent(release.tag_name ?? latest)}`,
-    downloadUrl: fileName && target.platform === "win" && repo.toLowerCase() === DEFAULT_RELEASE_REPOSITORY.toLowerCase()
+    downloadUrl: fileName && target.platform === "win" && repo.toLowerCase() === UPSTREAM_RELEASE_REPOSITORY.toLowerCase()
       ? `${UPDATE_R2_BASE}/${encodeURIComponent(fileName)}` : asset?.browser_download_url ?? "",
     fileName, size: asset?.size ?? 0, ...(digest ? { sha256: digest } : {}), source: "api",
   };
@@ -141,7 +141,7 @@ export async function discoverRelease(repo: string, target: UpdateTarget, curren
     : target.platform === "linux" ? `Rikkahub_${redirect.tag}_linux_x64.tar.gz` : `Rikkahub_${redirect.tag}_x64-setup.exe`;
   return {
     latest: redirect.tag, title: `v${redirect.tag}`, notes: "", htmlUrl: redirect.htmlUrl,
-    downloadUrl: !fileName ? "" : target.platform === "win" && repo.toLowerCase() === DEFAULT_RELEASE_REPOSITORY.toLowerCase()
+    downloadUrl: !fileName ? "" : target.platform === "win" && repo.toLowerCase() === UPSTREAM_RELEASE_REPOSITORY.toLowerCase()
       ? `${UPDATE_R2_BASE}/${encodeURIComponent(fileName)}`
       : `https://github.com/${repo}/releases/download/v${redirect.tag}/${encodeURIComponent(fileName)}`,
     fileName, size: 0, source: "redirect",

@@ -1,4 +1,7 @@
-export const DEFAULT_RELEASE_REPOSITORY = "yuh-G/rikkahub-desktop";
+export const DEFAULT_RELEASE_REPOSITORY = "P-A-N-52/rikkahub-desktop";
+
+// The legacy Windows mirror belongs to upstream, independent of this fork's default.
+export const UPSTREAM_RELEASE_REPOSITORY = "yuh-G/rikkahub-desktop";
 
 /** An explicit GitHub owner/repository, never a URL, local path, or Git ref. */
 export function parseReleaseRepository(value: string): string {

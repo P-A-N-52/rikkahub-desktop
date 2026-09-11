@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_RELEASE_REPOSITORY } from "../shared/release-source";
 import { completionPath, downloadInstaller, probeCompletedInstaller, validateUpdateDownload, type UpdateDownload } from "./download";
 import { UPDATE_R2_BASE } from "./releases";
 
@@ -52,12 +51,25 @@ describe("update download boundaries", () => {
   });
   test("only upstream Windows builds use the exact R2 mirror object", () => {
     const fileName = "Rikkahub_2.1.0_x64-setup.exe";
-    const win = { ...download, version: "2.1.0", releaseRepo: DEFAULT_RELEASE_REPOSITORY,
+    const win = { ...download, version: "2.1.0", releaseRepo: "yuh-G/rikkahub-desktop",
       target: { ...download.target, platform: "win" as const, architecture: "x64" }, fileName, url: `${UPDATE_R2_BASE}/${fileName}` };
     expect(() => validateUpdateDownload(win)).not.toThrow();
+    expect(() => validateUpdateDownload({ ...win, releaseRepo: "YUH-G/RIKKAHUB-DESKTOP" })).not.toThrow();
     expect(() => validateUpdateDownload({ ...win, releaseRepo: "fixture/rikkahub" })).toThrow();
     expect(() => validateUpdateDownload({ ...win, url: `${UPDATE_R2_BASE}/other.exe` })).toThrow();
     expect(() => validateUpdateDownload({ ...win, url: win.url.replace(new URL(UPDATE_R2_BASE).host, "other.r2.dev") })).toThrow();
+  });
+  test("this fork accepts its GitHub asset and rejects upstream downloads", () => {
+    const fileName = "Rikkahub_2.1.0_x64-setup.exe";
+    const win = { ...download, version: "2.1.0", releaseRepo: "P-A-N-52/rikkahub-desktop",
+      target: { ...download.target, platform: "win" as const, architecture: "x64" }, fileName,
+      url: `https://github.com/P-A-N-52/rikkahub-desktop/releases/download/v2.1.0/${fileName}` };
+    expect(() => validateUpdateDownload(win)).not.toThrow();
+    expect(() => validateUpdateDownload({ ...win, url: `${UPDATE_R2_BASE}/${fileName}` })).toThrow("outside the configured release repository");
+    expect(() => validateUpdateDownload({ ...win, url: win.url.replace("P-A-N-52", "yuh-G") })).toThrow("outside the configured release repository");
+    const mac = { ...download, releaseRepo: "P-A-N-52/rikkahub-desktop", url: download.url.replace("fixture/rikkahub", "P-A-N-52/rikkahub-desktop") };
+    expect(() => validateUpdateDownload(mac)).not.toThrow();
+    expect(() => validateUpdateDownload({ ...mac, url: mac.url.replace("P-A-N-52", "yuh-G") })).toThrow("outside the configured release repository");
   });
 });
 

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_RELEASE_REPOSITORY } from "../shared/release-source";
-import { discoverRelease, isNewerRelease, macInstallerName, normalizeReleaseVersion, pickReleaseAsset, UPDATE_R2_BASE, type UpdateTarget } from "./releases";
+import { discoverRelease, isNewerRelease, macInstallerName, normalizeReleaseVersion, pickReleaseAsset, RELEASE_REPOSITORY, UPDATE_R2_BASE, type UpdateTarget } from "./releases";
 
 const repo = "fixture/rikkahub";
 const mac: UpdateTarget = { platform: "mac", architecture: "arm64", containerized: false };
@@ -91,13 +90,32 @@ describe("release discovery with injected local responses", () => {
     const f = responses(new Response(null, { status: 302, headers: { location: `/Fixture/RikkaHub/releases/tag/v${version}` } }), new Response(null, { status: 403 }));
     expect(await discoverRelease("FIXTURE/rikkahub", mac, "2.0.0", f.request)).toMatchObject({ latest: version, source: "redirect", fileName: "" });
   });
-  test("Windows fork releases never use the upstream R2 mirror", async () => {
+  test.each([
+    ["P-A-N-52/rikkahub-desktop", false],
+    ["yuh-G/rikkahub-desktop", true],
+    ["YUH-G/RIKKAHUB-DESKTOP", true],
+  ] as const)("Windows downloads from %s use only that repository's source", async (repository, upstreamMirror) => {
     const name = "Rikkahub_2.1.0_x64-setup.exe";
-    const data = { tag_name: "v2.1.0", assets: [asset(name)] };
-    const f = responses(new Error("redirect"), Response.json(data));
+    const githubUrl = `https://github.com/${repository}/releases/download/v2.1.0/${name}`;
+    const data = { tag_name: "v2.1.0", assets: [{ name, size: 12, browser_download_url: githubUrl }] };
     const target = { ...mac, platform: "win" as const, architecture: "x64" };
-    expect((await discoverRelease(repo, target, "2.0.0", f.request)).downloadUrl).toBe(asset(name).browser_download_url);
-    expect((await discoverRelease(DEFAULT_RELEASE_REPOSITORY, target, "2.0.0", f.request)).downloadUrl).toBe(`${UPDATE_R2_BASE}/${name}`);
+    for (const apiAvailable of [true, false]) {
+      const head = new Response(null, { status: 302, headers: { location: `/${repository}/releases/tag/v2.1.0` } });
+      const f = responses(head, apiAvailable ? Response.json(data) : new Response(null, { status: 403 }));
+      expect((await discoverRelease(repository, target, "2.0.0", f.request)).downloadUrl)
+        .toBe(upstreamMirror ? `${UPDATE_R2_BASE}/${name}` : githubUrl);
+      expect(f.calls).toEqual([`https://github.com/${repository}/releases/latest`, `https://api.github.com/repos/${repository}/releases/latest`]);
+    }
+  });
+
+  test("the default macOS update check and asset stay in this fork", async () => {
+    expect(RELEASE_REPOSITORY).toBe("P-A-N-52/rikkahub-desktop");
+    const downloadUrl = `https://github.com/P-A-N-52/rikkahub-desktop/releases/download/v${version}/${encodeURIComponent(arm.name)}`;
+    const f = responses(new Error("HTML latest must not run"), Response.json([
+      { ...release, assets: [{ ...arm, browser_download_url: downloadUrl }] },
+    ]));
+    expect(await discoverRelease(RELEASE_REPOSITORY, mac, "2.0.0-preview-v2", f.request)).toMatchObject({ downloadUrl, fileName: arm.name });
+    expect(f.calls).toEqual(["https://api.github.com/repos/P-A-N-52/rikkahub-desktop/releases?per_page=100&page=1"]);
   });
 
   test("a macOS preview discovers the repository's only prerelease with its exact asset and digest", async () => {

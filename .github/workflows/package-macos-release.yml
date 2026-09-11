@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       release_repository:
-        description: 'Explicit GitHub owner/repository used by this build for updates'
-        required: true
-        default: yuh-G/rikkahub-desktop
+        description: 'Optional update repository override (defaults to this repository)'
+        required: false
 
 permissions:
   contents: read
@@ -122,7 +121,7 @@ jobs:
         working-directory: web-ui
         env:
           SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
-          RELEASE_REPOSITORY: ${{ inputs.release_repository }}
+          RELEASE_REPOSITORY: ${{ inputs.release_repository || github.repository }}
         run: |
           test -n "$SIGNING_IDENTITY"
           bun run tauri:build:macos --target '${{ matrix.target }}' --release-repository "$RELEASE_REPOSITORY" --signing-identity "$SIGNING_IDENTITY" --notarize-profile rikkahub-release --notarize-keychain "$RUNNER_TEMP/rikkahub-release.keychain-db"
