@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18n from "~/i18n";
+import { getSystemInfoSnapshot, isTauriEnvironment } from "~/lib/system-info";
 import api from "~/services/api";
 import { useSettingsStore } from "~/stores/app-store";
 import type { DisplaySetting } from "~/types";
@@ -359,6 +361,15 @@ export function ThemeProvider({
     return () => {
       mediaQuery.removeEventListener("change", onSystemThemeChange);
     };
+  }, [theme]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment() || getSystemInfoSnapshot().platform !== "macos") return;
+    // 先订阅上面的媒体查询，再修改 macOS 外观；system 必须清除覆盖，
+    // 不能写入解析后的明暗值，否则 WKWebView 的系统主题监听也会被锁定。
+    void getCurrentWindow().setTheme(theme === "system" ? null : theme).catch((error) => {
+      console.warn("[theme] Failed to sync the macOS window appearance", error);
+    });
   }, [theme]);
 
   useEffect(() => {
